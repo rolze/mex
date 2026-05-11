@@ -1,6 +1,6 @@
 use crate::db::MediaFile;
-use ratatui::layout::{Rect, Size};
-use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
+use ratatui::layout::Rect;
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
 use std::path::PathBuf;
 
 pub struct App {
@@ -12,14 +12,12 @@ pub struct App {
     pub scroll_offset: usize,
     pub filter: String,
     pub preview_open: bool,
-    pub list_height: usize,  // updated each frame
-    pub list_area: Rect,     // updated each frame
-    pub preview_area: Rect,  // updated each frame
+    pub list_height: usize,     // updated each frame
+    pub list_area: Rect,        // updated each frame
     // Image display
     pub image_pool: Vec<PathBuf>,
     pub image_picker: Picker,
-    pub current_image: Option<StatefulProtocol>,
-    pub current_image_size: Size,
+    pub image_state: ThreadProtocol, // async resize/encode state
 }
 
 impl App {
@@ -29,6 +27,7 @@ impl App {
         files: Vec<MediaFile>,
         image_pool: Vec<PathBuf>,
         image_picker: Picker,
+        image_state: ThreadProtocol,
     ) -> Self {
         let filtered = files.clone();
         Self {
@@ -42,11 +41,9 @@ impl App {
             preview_open: false,
             list_height: 20,
             list_area: Rect::default(),
-            preview_area: Rect::default(),
             image_pool,
             image_picker,
-            current_image: None,
-            current_image_size: Size::default(),
+            image_state,
         }
     }
 
@@ -147,7 +144,7 @@ impl App {
         };
         self.selected = 0;
         self.scroll_offset = 0;
-        self.current_image = None;
+        self.image_state.empty_protocol();
         self.preview_open = false;
     }
 
@@ -156,43 +153,36 @@ impl App {
         if self.preview_open {
             self.refresh_image();
         } else {
-            self.current_image = None;
+            self.image_state.empty_protocol();
         }
     }
 
-    /// Pick a random image from the pool (based on selection index) and encode it.
-    /// Called when the preview pane opens or the selection changes while preview is open.
+    /// Load a (pool-random) image and hand it to the async thread for resize+encode.
+    /// Returns immediately — the background thread does the heavy work.
     pub fn refresh_image(&mut self) {
         if self.image_pool.is_empty() {
+            self.image_state.empty_protocol();
             return;
         }
-        let path = &self.image_pool[self.selected % self.image_pool.len()].clone();
-        let size = if self.preview_area.width > 4 && self.preview_area.height > 4 {
-            Size::new(
-                self.preview_area.width.saturating_sub(2),
-                self.preview_area.height.saturating_sub(2),
-            )
-        } else {
-            Size::new(40, 20)
-        };
-        match image::ImageReader::open(path).and_then(|r| r.decode().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))) {
+        let path = self.image_pool[self.selected % self.image_pool.len()].clone();
+        match image::ImageReader::open(&path)
+            .and_then(|r| r.decode().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
+        {
             Ok(dyn_img) => {
-                self.current_image = Some(self.image_picker.new_resize_protocol(dyn_img));
-                self.current_image_size = size;
+                let proto: StatefulProtocol = self.image_picker.new_resize_protocol(dyn_img);
+                self.image_state.replace_protocol(proto);
             }
             Err(_) => {
-                self.current_image = None;
+                self.image_state.empty_protocol();
             }
         }
     }
-
 
     pub fn selected_file(&self) -> Option<&MediaFile> {
         self.filtered.get(self.selected)
     }
 
     /// Select the file at a terminal row coordinate (from a mouse click).
-    /// `row` is the absolute terminal row. Returns true if the click was inside the list.
     pub fn select_at_row(&mut self, row: u16) -> bool {
         let inner_top = self.list_area.y + 1;
         let inner_bottom = self.list_area.y + self.list_area.height.saturating_sub(1);
