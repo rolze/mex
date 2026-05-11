@@ -12,10 +12,10 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui_image::picker::Picker;
 use std::{io, path::Path};
 
 fn find_db() -> Option<String> {
-    // Look for .mex.db relative to the crate directory or cwd
     for candidate in &[".mex.db", "../.mex.db", "../../.mex.db"] {
         if Path::new(candidate).exists() {
             return Some(candidate.to_string());
@@ -37,16 +37,47 @@ fn load_target_root(db_path: &str) -> String {
     String::new()
 }
 
+/// Collect image files from mex-media-root/ (next to the DB or cwd).
+fn find_image_pool() -> Vec<std::path::PathBuf> {
+    let candidates = ["mex-media-root", "../mex-media-root", "../../mex-media-root"];
+    let image_exts = ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
+    for dir in &candidates {
+        let p = Path::new(dir);
+        if p.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(p) {
+                let mut pool: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        p.extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| image_exts.contains(&e.to_lowercase().as_str()))
+                            .unwrap_or(false)
+                    })
+                    .collect();
+                pool.sort();
+                if !pool.is_empty() {
+                    return pool;
+                }
+            }
+        }
+    }
+    vec![]
+}
+
 fn main() -> Result<()> {
     let db_path = find_db().context(
         "Could not find .mex.db. Run mex from the repository root or the mex/ sub-directory.",
     )?;
 
     let target_root = load_target_root(&db_path);
-
     let files = db::load_files(&db_path, "").context("Failed to load files from DB")?;
+    let image_pool = find_image_pool();
 
-    let mut app = app::App::new(db_path, target_root, files);
+    // Query terminal for graphics protocol support (before entering alt screen).
+    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+
+    let mut app = app::App::new(db_path, target_root, files, image_pool, picker);
 
     // Terminal setup
     enable_raw_mode()?;
@@ -84,7 +115,7 @@ fn run_loop(
                     (_, KeyCode::Esc) => {
                         if app.preview_open {
                             app.preview_open = false;
-                            app.chafa_lines.clear();
+                            app.current_image = None;
                         } else {
                             app.clear_filter();
                         }
@@ -106,17 +137,15 @@ fn run_loop(
                     // Filter: backspace
                     (_, KeyCode::Backspace) => app.pop_filter_char(),
 
-                    // Filter: printable characters (skip navigation keys already handled)
+                    // Filter: printable characters
                     (_, KeyCode::Char(c)) => app.push_filter_char(c),
 
                     _ => {}
                 },
 
                 Event::Mouse(mouse) => match mouse.kind {
-                    // Wheel scrolls move the selection one step at a time
                     MouseEventKind::ScrollDown => app.move_down(),
                     MouseEventKind::ScrollUp => app.move_up(),
-                    // Click to select the row under the cursor
                     MouseEventKind::Down(_) => {
                         app.select_at_row(mouse.row);
                     }
