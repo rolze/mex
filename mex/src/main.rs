@@ -4,7 +4,10 @@ mod ui;
 
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers,
+        MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -74,8 +77,8 @@ fn run_loop(
         terminal.draw(|f| ui::draw(f, app))?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                match (key.modifiers, key.code) {
+            match event::read()? {
+                Event::Key(key) => match (key.modifiers, key.code) {
                     // Quit
                     (_, KeyCode::Char('q')) => break,
                     (_, KeyCode::Esc) => {
@@ -107,7 +110,20 @@ fn run_loop(
                     (_, KeyCode::Char(c)) => app.push_filter_char(c),
 
                     _ => {}
-                }
+                },
+
+                Event::Mouse(mouse) => match mouse.kind {
+                    // Wheel scrolls move the selection one step at a time
+                    MouseEventKind::ScrollDown => app.move_down(),
+                    MouseEventKind::ScrollUp => app.move_up(),
+                    // Click to select the row under the cursor
+                    MouseEventKind::Down(_) => {
+                        app.select_at_row(mouse.row);
+                    }
+                    _ => {}
+                },
+
+                _ => {}
             }
         }
     }
