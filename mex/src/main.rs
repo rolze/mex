@@ -94,6 +94,8 @@ fn run_loop(
                     (_, KeyCode::Char('G')) => app.jump_bottom(),
                     (KeyModifiers::CONTROL, KeyCode::Char('d')) => app.half_page_down(),
                     (KeyModifiers::CONTROL, KeyCode::Char('u')) => app.half_page_up(),
+                    (_, KeyCode::PageDown) => app.page_down(),
+                    (_, KeyCode::PageUp) => app.page_up(),
 
                     // Preview toggle
                     (_, KeyCode::Enter) | (_, KeyCode::Char(' ')) => app.toggle_preview(),
