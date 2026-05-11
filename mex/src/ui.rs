@@ -35,6 +35,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let list_area = main_chunks[0];
     app.list_height = list_area.height.saturating_sub(2) as usize; // subtract border
+    app.list_area = list_area;
 
     draw_list(frame, app, list_area);
 

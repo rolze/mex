@@ -1,4 +1,5 @@
 use crate::db::MediaFile;
+use ratatui::layout::Rect;
 
 pub struct App {
     pub db_path: String,
@@ -11,6 +12,7 @@ pub struct App {
     pub preview_open: bool,
     pub chafa_lines: Vec<String>,
     pub list_height: usize, // updated each frame
+    pub list_area: Rect,    // bounding box of the list widget, updated each frame
 }
 
 impl App {
@@ -27,6 +29,7 @@ impl App {
             preview_open: false,
             chafa_lines: vec![],
             list_height: 20,
+            list_area: Rect::default(),
         }
     }
 
@@ -151,5 +154,20 @@ impl App {
 
     pub fn selected_file(&self) -> Option<&MediaFile> {
         self.filtered.get(self.selected)
+    }
+
+    /// Select the file at a terminal row coordinate (from a mouse click).
+    /// `row` is the absolute terminal row. Returns true if the click was inside the list.
+    pub fn select_at_row(&mut self, row: u16) -> bool {
+        let inner_top = self.list_area.y + 1; // +1 for top border
+        let inner_bottom = self.list_area.y + self.list_area.height.saturating_sub(1);
+        if row < inner_top || row >= inner_bottom {
+            return false;
+        }
+        let idx = self.scroll_offset + (row - inner_top) as usize;
+        if idx < self.filtered.len() {
+            self.selected = idx;
+        }
+        true
     }
 }
