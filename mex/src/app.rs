@@ -21,6 +21,10 @@ pub struct App {
     pub image_pool: Vec<PathBuf>,
     pub image_picker: Picker,
     pub image_state: ThreadProtocol,
+    /// Path of the image currently loaded into image_state (or in-flight).
+    /// The encoded protocol is kept alive even when preview is closed so
+    /// reopening the same file is instant (no re-encode needed).
+    pub current_image_path: Option<PathBuf>,
     pub image_cache: HashMap<PathBuf, DynamicImage>,
     pub is_loading: bool,       // true while bg encode is in flight
     pub spinner_frame: usize,   // advances each tick for animation
@@ -50,6 +54,7 @@ impl App {
             image_pool,
             image_picker,
             image_state,
+            current_image_path: None,
             image_cache: HashMap::new(),
             is_loading: false,
             spinner_frame: 0,
@@ -153,7 +158,9 @@ impl App {
         };
         self.selected = 0;
         self.scroll_offset = 0;
+        // Discard protocol — new filter means a new image will be shown.
         self.image_state.empty_protocol();
+        self.current_image_path = None;
         self.is_loading = false;
         self.preview_open = false;
     }
@@ -162,36 +169,41 @@ impl App {
         self.preview_open = !self.preview_open;
         if self.preview_open {
             self.refresh_image();
-        } else {
-            self.image_state.empty_protocol();
-            self.is_loading = false;
         }
+        // On close: keep image_state alive so reopening is instant (no re-encode).
     }
 
-    /// Load image for current selection (from cache if available) and send it to the
-    /// background encoder thread. Returns immediately — UI never blocks.
+    /// Load image for current selection and send to the background encoder thread.
+    /// Skips everything if the same image is already loaded/in-flight (instant reopen).
     pub fn refresh_image(&mut self) {
         if self.image_pool.is_empty() {
             self.image_state.empty_protocol();
+            self.current_image_path = None;
             self.is_loading = false;
             return;
         }
         let path = self.image_pool[self.selected % self.image_pool.len()].clone();
 
-        // Cache hit: no disk I/O needed, clone the decoded pixels and re-encode.
+        // Already loaded (or in-flight) for this path — nothing to do.
+        // StatefulImage will handle terminal-resize re-encodes automatically.
+        if self.current_image_path.as_ref() == Some(&path) {
+            return;
+        }
+
+        // Cache hit: clone decoded pixels, hand to bg thread for encode. No disk I/O.
         if let Some(cached) = self.image_cache.get(&path) {
             let proto: StatefulProtocol = self.image_picker.new_resize_protocol(cached.clone());
             self.image_state.replace_protocol(proto);
+            self.current_image_path = Some(path);
             self.is_loading = true;
             return;
         }
 
-        // Cache miss: read from disk, then cache and encode.
+        // Cache miss: read from disk, cache, then encode.
         match image::ImageReader::open(&path)
             .and_then(|r| r.decode().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
         {
             Ok(dyn_img) => {
-                // Evict oldest entries if cache is full (simple strategy: remove arbitrary keys).
                 if self.image_cache.len() >= CACHE_MAX {
                     let victims: Vec<PathBuf> = self.image_cache.keys()
                         .filter(|k| *k != &path)
@@ -201,13 +213,14 @@ impl App {
                     for k in victims { self.image_cache.remove(&k); }
                 }
                 self.image_cache.insert(path.clone(), dyn_img.clone());
-
                 let proto: StatefulProtocol = self.image_picker.new_resize_protocol(dyn_img);
                 self.image_state.replace_protocol(proto);
+                self.current_image_path = Some(path);
                 self.is_loading = true;
             }
             Err(_) => {
                 self.image_state.empty_protocol();
+                self.current_image_path = None;
                 self.is_loading = false;
             }
         }

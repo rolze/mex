@@ -145,8 +145,8 @@ fn run_loop(
                     (_, KeyCode::Char('q')) => break,
                     (_, KeyCode::Esc) => {
                         if app.preview_open {
+                            // Just hide the pane; keep protocol alive for instant reopen.
                             app.preview_open = false;
-                            app.image_state.empty_protocol();
                         } else {
                             app.clear_filter();
                         }
