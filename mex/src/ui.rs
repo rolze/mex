@@ -53,6 +53,17 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
         format!(" mex — {} / {} ", count, app.all_files.len())
     };
 
+    // Fixed column widths (folder is always a short year prefix)
+    let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
+    const FOLDER_COL: usize = 6;  // e.g. "2022/ "
+    const TAGS_COL: usize = 30;
+    const GAP: usize = 1;
+    let filename_col = inner_width
+        .saturating_sub(FOLDER_COL)
+        .saturating_sub(TAGS_COL)
+        .saturating_sub(GAP * 2)
+        .max(10);
+
     let items: Vec<ListItem> = app
         .filtered
         .iter()
@@ -60,41 +71,37 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
         .skip(app.scroll_offset)
         .take(area.height.saturating_sub(2) as usize)
         .map(|(i, f)| {
+            let selected = i == app.selected;
+
             let folder = folder_of(&f.target_path);
-            let filename = f
-                .target_path
-                .rsplit('/')
-                .next()
-                .unwrap_or(&f.target_path);
+            let folder_cell = truncate_front(folder, FOLDER_COL - 1); // -1 for "/"
+            let folder_str = format!("{:<width$}/", folder_cell, width = FOLDER_COL - 1);
 
-            let tags_str = if f.tags.is_empty() {
-                String::new()
+            let filename = f.target_path.rsplit('/').next().unwrap_or(&f.target_path);
+            let filename_cell = truncate_front(filename, filename_col);
+            let filename_str = format!("{:<width$}", filename_cell, width = filename_col);
+
+            let tags_raw = if f.tags.is_empty() {
+                "—".to_string()
             } else {
-                format!(" [{}]", f.tags.join(", "))
+                f.tags.join(", ")
             };
+            let tags_cell = truncate_end(&tags_raw, TAGS_COL);
+            let tags_str = format!("{:<width$}", tags_cell, width = TAGS_COL);
 
-            let style = if i == app.selected {
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
+            let base_style = if selected {
+                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
 
             let line = Line::from(vec![
-                Span::styled(format!("{}/", folder), Style::default().fg(Color::DarkGray)),
-                Span::styled(filename.to_string(), style.fg(if i == app.selected { Color::Black } else { Color::White })),
-                Span::styled(
-                    format!("  {}", f.derived_date),
-                    style.fg(if i == app.selected { Color::Black } else { Color::Yellow }),
-                ),
-                Span::styled(
-                    tags_str,
-                    style.fg(if i == app.selected { Color::Black } else { Color::Green }),
-                ),
+                Span::styled(folder_str, base_style.fg(if selected { Color::Black } else { Color::DarkGray })),
+                Span::styled(filename_str, base_style.fg(if selected { Color::Black } else { Color::White })),
+                Span::raw(" "),
+                Span::styled(tags_str, base_style.fg(if selected { Color::Black } else { Color::Green })),
             ]);
-            ListItem::new(line).style(style)
+            ListItem::new(line).style(base_style)
         })
         .collect();
 
@@ -111,6 +118,29 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
         );
 
     frame.render_stateful_widget(list, area, &mut state);
+}
+
+/// Truncate `s` to `max_chars`, keeping the tail and prepending "…" if needed.
+fn truncate_front(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        s.to_string()
+    } else {
+        let keep = max_chars.saturating_sub(1); // 1 char for "…"
+        let start = chars.len() - keep;
+        format!("…{}", chars[start..].iter().collect::<String>())
+    }
+}
+
+/// Truncate `s` to `max_chars`, cutting the tail and appending "…" if needed.
+fn truncate_end(s: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max_chars {
+        s.to_string()
+    } else {
+        let keep = max_chars.saturating_sub(1);
+        format!("{}…", chars[..keep].iter().collect::<String>())
+    }
 }
 
 fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
@@ -163,7 +193,7 @@ fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
 fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
     let filter_text = if app.filter.is_empty() {
         Span::styled(
-            "Type to filter…  |  Enter: preview  |  q: quit",
+            "Type to filter…  |  Enter: preview  |  PgUp/PgDn: page  |  q: quit",
             Style::default().fg(Color::DarkGray),
         )
     } else {

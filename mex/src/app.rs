@@ -68,6 +68,18 @@ impl App {
         self.ensure_visible();
     }
 
+    pub fn page_down(&mut self) {
+        let step = self.list_height.max(1);
+        self.selected = (self.selected + step).min(self.filtered.len().saturating_sub(1));
+        self.ensure_visible();
+    }
+
+    pub fn page_up(&mut self) {
+        let step = self.list_height.max(1);
+        self.selected = self.selected.saturating_sub(step);
+        self.ensure_visible();
+    }
+
     fn ensure_visible(&mut self) {
         if self.selected < self.scroll_offset {
             self.scroll_offset = self.selected;
