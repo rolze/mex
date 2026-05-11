@@ -1,0 +1,14 @@
+[package]
+name = "mex"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "mex"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.27"
+crossterm = "0.27"
+rusqlite = { version = "0.31", features = ["bundled"] }
+anyhow = "1"

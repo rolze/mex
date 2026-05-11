@@ -1,0 +1,61 @@
+use anyhow::Result;
+use rusqlite::{Connection, params};
+
+#[derive(Clone, Debug)]
+pub struct MediaFile {
+    pub id: String,
+    pub target_path: String,
+    pub derived_date: String,
+    pub ext: String,
+    pub tags: Vec<String>,
+}
+
+pub fn load_files(db_path: &str, filter: &str) -> Result<Vec<MediaFile>> {
+    let conn = Connection::open(db_path)?;
+
+    let like_pat = format!("%{}%", filter.to_lowercase());
+
+    let sql = "SELECT m.id, m.target_path, COALESCE(m.derived_date,''), m.ext,
+                      COALESCE(GROUP_CONCAT(t.name, ', '),'')
+               FROM media m
+               LEFT JOIN media_tags mt ON mt.media_id = m.id
+               LEFT JOIN tags t ON t.id = mt.tag_id
+               WHERE m.target_path IS NOT NULL
+               GROUP BY m.id
+               HAVING lower(m.target_path) LIKE ?1
+                   OR lower(COALESCE(GROUP_CONCAT(t.name, ', '),'')) LIKE ?1
+               ORDER BY m.target_path
+               LIMIT 2000";
+
+    let mut stmt = conn.prepare(sql)?;
+
+    let rows = stmt.query_map(params![like_pat], |row| {
+        let tags_str: String = row.get(4)?;
+        Ok(MediaFile {
+            id: row.get(0)?,
+            target_path: row.get(1)?,
+            derived_date: row.get(2)?,
+            ext: row.get(3)?,
+            tags: if tags_str.is_empty() {
+                vec![]
+            } else {
+                tags_str.split(", ").map(|s| s.to_string()).collect()
+            },
+        })
+    })?;
+
+    let mut files = Vec::new();
+    for r in rows {
+        files.push(r?);
+    }
+    Ok(files)
+}
+
+/// Derive the folder portion from a target_path like "2022/2022-04-18-foo.jpeg"
+pub fn folder_of(path: &str) -> &str {
+    if let Some(pos) = path.rfind('/') {
+        &path[..pos]
+    } else {
+        "."
+    }
+}
