@@ -130,9 +130,12 @@ fn run_loop(
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
 
+        // Advance spinner animation regardless of events.
+        app.tick();
+
         // Apply any completed image encodes without blocking.
         while let Ok(Ok(response)) = rx_result.try_recv() {
-            app.image_state.update_resized_protocol(response);
+            app.on_encode_done(response);
         }
 
         if event::poll(std::time::Duration::from_millis(16))? {
