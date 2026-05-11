@@ -13,7 +13,7 @@ use crossterm::{
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
 use ratatui_image::{
-    picker::Picker,
+    picker::{Picker, ProtocolType},
     thread::{ResizeRequest, ResizeResponse, ThreadProtocol},
     errors::Errors,
 };
@@ -83,7 +83,25 @@ fn main() -> Result<()> {
     let image_pool = find_image_pool();
 
     // Query terminal for graphics protocol/font-size (before entering alt screen).
-    let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+
+    // Allow manual override via MEX_PROTOCOL=kitty|sixel|iterm2|halfblocks.
+    if let Ok(proto_env) = std::env::var("MEX_PROTOCOL") {
+        let requested = match proto_env.to_lowercase().as_str() {
+            "kitty"      => Some(ProtocolType::Kitty),
+            "sixel"      => Some(ProtocolType::Sixel),
+            "iterm2"     => Some(ProtocolType::Iterm2),
+            "halfblocks" => Some(ProtocolType::Halfblocks),
+            other => {
+                eprintln!("mex: unknown MEX_PROTOCOL={other:?}; using auto-detected protocol");
+                None
+            }
+        };
+        if let Some(pt) = requested {
+            picker.set_protocol_type(pt);
+        }
+    }
+
     let protocol_name = format!("{:?}", picker.protocol_type()).to_lowercase();
 
     // Channel: main -> worker (encode requests)
