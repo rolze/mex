@@ -1,5 +1,7 @@
 use crate::db::MediaFile;
-use ratatui::layout::Rect;
+use ratatui::layout::{Rect, Size};
+use ratatui_image::{picker::Picker, protocol::StatefulProtocol};
+use std::path::PathBuf;
 
 pub struct App {
     pub db_path: String,
@@ -10,13 +12,24 @@ pub struct App {
     pub scroll_offset: usize,
     pub filter: String,
     pub preview_open: bool,
-    pub chafa_lines: Vec<String>,
-    pub list_height: usize, // updated each frame
-    pub list_area: Rect,    // bounding box of the list widget, updated each frame
+    pub list_height: usize,  // updated each frame
+    pub list_area: Rect,     // updated each frame
+    pub preview_area: Rect,  // updated each frame
+    // Image display
+    pub image_pool: Vec<PathBuf>,
+    pub image_picker: Picker,
+    pub current_image: Option<StatefulProtocol>,
+    pub current_image_size: Size,
 }
 
 impl App {
-    pub fn new(db_path: String, target_root: String, files: Vec<MediaFile>) -> Self {
+    pub fn new(
+        db_path: String,
+        target_root: String,
+        files: Vec<MediaFile>,
+        image_pool: Vec<PathBuf>,
+        image_picker: Picker,
+    ) -> Self {
         let filtered = files.clone();
         Self {
             db_path,
@@ -27,9 +40,13 @@ impl App {
             scroll_offset: 0,
             filter: String::new(),
             preview_open: false,
-            chafa_lines: vec![],
             list_height: 20,
             list_area: Rect::default(),
+            preview_area: Rect::default(),
+            image_pool,
+            image_picker,
+            current_image: None,
+            current_image_size: Size::default(),
         }
     }
 
@@ -37,6 +54,7 @@ impl App {
         if self.selected + 1 < self.filtered.len() {
             self.selected += 1;
             self.ensure_visible();
+            if self.preview_open { self.refresh_image(); }
         }
     }
 
@@ -44,18 +62,21 @@ impl App {
         if self.selected > 0 {
             self.selected -= 1;
             self.ensure_visible();
+            if self.preview_open { self.refresh_image(); }
         }
     }
 
     pub fn jump_top(&mut self) {
         self.selected = 0;
         self.scroll_offset = 0;
+        if self.preview_open { self.refresh_image(); }
     }
 
     pub fn jump_bottom(&mut self) {
         if !self.filtered.is_empty() {
             self.selected = self.filtered.len() - 1;
             self.ensure_visible();
+            if self.preview_open { self.refresh_image(); }
         }
     }
 
@@ -63,24 +84,28 @@ impl App {
         let step = self.list_height / 2;
         self.selected = (self.selected + step).min(self.filtered.len().saturating_sub(1));
         self.ensure_visible();
+        if self.preview_open { self.refresh_image(); }
     }
 
     pub fn half_page_up(&mut self) {
         let step = self.list_height / 2;
         self.selected = self.selected.saturating_sub(step);
         self.ensure_visible();
+        if self.preview_open { self.refresh_image(); }
     }
 
     pub fn page_down(&mut self) {
         let step = self.list_height.max(1);
         self.selected = (self.selected + step).min(self.filtered.len().saturating_sub(1));
         self.ensure_visible();
+        if self.preview_open { self.refresh_image(); }
     }
 
     pub fn page_up(&mut self) {
         let step = self.list_height.max(1);
         self.selected = self.selected.saturating_sub(step);
         self.ensure_visible();
+        if self.preview_open { self.refresh_image(); }
     }
 
     fn ensure_visible(&mut self) {
@@ -122,35 +147,45 @@ impl App {
         };
         self.selected = 0;
         self.scroll_offset = 0;
-        self.chafa_lines.clear();
+        self.current_image = None;
         self.preview_open = false;
     }
 
     pub fn toggle_preview(&mut self) {
         self.preview_open = !self.preview_open;
         if self.preview_open {
-            self.refresh_preview();
+            self.refresh_image();
         } else {
-            self.chafa_lines.clear();
+            self.current_image = None;
         }
     }
 
-    pub fn refresh_preview(&mut self) {
-        self.chafa_lines.clear();
-        if let Some(file) = self.filtered.get(self.selected) {
-            let abs = format!("{}/{}", self.target_root.trim_end_matches('/'), file.target_path);
-            if std::path::Path::new(&abs).exists() {
-                // Try chafa
-                if let Ok(out) = std::process::Command::new("chafa")
-                    .args(["--size", "40x20", "--colors", "256", &abs])
-                    .output()
-                {
-                    let text = String::from_utf8_lossy(&out.stdout);
-                    self.chafa_lines = text.lines().map(|l| l.to_string()).collect();
-                }
+    /// Pick a random image from the pool (based on selection index) and encode it.
+    /// Called when the preview pane opens or the selection changes while preview is open.
+    pub fn refresh_image(&mut self) {
+        if self.image_pool.is_empty() {
+            return;
+        }
+        let path = &self.image_pool[self.selected % self.image_pool.len()].clone();
+        let size = if self.preview_area.width > 4 && self.preview_area.height > 4 {
+            Size::new(
+                self.preview_area.width.saturating_sub(2),
+                self.preview_area.height.saturating_sub(2),
+            )
+        } else {
+            Size::new(40, 20)
+        };
+        match image::ImageReader::open(path).and_then(|r| r.decode().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))) {
+            Ok(dyn_img) => {
+                self.current_image = Some(self.image_picker.new_resize_protocol(dyn_img));
+                self.current_image_size = size;
+            }
+            Err(_) => {
+                self.current_image = None;
             }
         }
     }
+
 
     pub fn selected_file(&self) -> Option<&MediaFile> {
         self.filtered.get(self.selected)
@@ -159,7 +194,7 @@ impl App {
     /// Select the file at a terminal row coordinate (from a mouse click).
     /// `row` is the absolute terminal row. Returns true if the click was inside the list.
     pub fn select_at_row(&mut self, row: u16) -> bool {
-        let inner_top = self.list_area.y + 1; // +1 for top border
+        let inner_top = self.list_area.y + 1;
         let inner_bottom = self.list_area.y + self.list_area.height.saturating_sub(1);
         if row < inner_top || row >= inner_bottom {
             return false;
@@ -167,6 +202,7 @@ impl App {
         let idx = self.scroll_offset + (row - inner_top) as usize;
         if idx < self.filtered.len() {
             self.selected = idx;
+            if self.preview_open { self.refresh_image(); }
         }
         true
     }

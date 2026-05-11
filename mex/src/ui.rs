@@ -7,6 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
+use ratatui_image::StatefulImage;
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.size();
@@ -34,13 +35,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     };
 
     let list_area = main_chunks[0];
-    app.list_height = list_area.height.saturating_sub(2) as usize; // subtract border
+    app.list_height = list_area.height.saturating_sub(2) as usize;
     app.list_area = list_area;
 
     draw_list(frame, app, list_area);
 
     if app.preview_open {
-        draw_preview(frame, app, main_chunks[1]);
+        let preview_area = main_chunks[1];
+        app.preview_area = preview_area;
+        draw_preview(frame, app, preview_area);
     }
 
     draw_filter(frame, app, filter_area);
@@ -144,51 +147,59 @@ fn truncate_end(s: &str, max_chars: usize) -> String {
     }
 }
 
-fn draw_preview(frame: &mut Frame, app: &App, area: Rect) {
-    let content = if let Some(file) = app.selected_file() {
-        let mut lines: Vec<Line> = vec![
+fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
+    let block = Block::default().borders(Borders::ALL).title(" Preview ");
+
+    // Split: metadata at top (5 lines) + image below
+    let inner = block.inner(area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(5), Constraint::Min(1)])
+        .split(inner);
+
+    frame.render_widget(block, area);
+
+    // Metadata
+    if let Some(file) = app.selected_file() {
+        let meta = Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("File:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("File: ", Style::default().fg(Color::DarkGray)),
                 Span::raw(&file.target_path),
             ]),
             Line::from(vec![
-                Span::styled("Date:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Date: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(&file.derived_date, Style::default().fg(Color::Yellow)),
             ]),
             Line::from(vec![
-                Span::styled("Ext:   ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Ext:  ", Style::default().fg(Color::DarkGray)),
                 Span::raw(&file.ext),
             ]),
             Line::from(vec![
-                Span::styled("Tags:  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Tags: ", Style::default().fg(Color::DarkGray)),
                 Span::styled(
                     if file.tags.is_empty() { "—".to_string() } else { file.tags.join(", ") },
                     Style::default().fg(Color::Green),
                 ),
             ]),
-            Line::raw(""),
-        ];
+        ])
+        .wrap(Wrap { trim: true });
+        frame.render_widget(meta, chunks[0]);
+    }
 
-        if app.chafa_lines.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "(image not available — file not on this system)",
-                Style::default().fg(Color::DarkGray),
-            )));
+    // Image
+    let image_area = chunks[1];
+    if image_area.width > 2 && image_area.height > 2 {
+        if let Some(proto) = app.current_image.as_mut() {
+            let img_widget = StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();
+            frame.render_stateful_widget(img_widget, image_area, proto);
         } else {
-            for l in &app.chafa_lines {
-                lines.push(Line::raw(l.clone()));
-            }
+            let hint = Paragraph::new(Span::styled(
+                "Press Enter/Space to load preview",
+                Style::default().fg(Color::DarkGray),
+            ));
+            frame.render_widget(hint, image_area);
         }
-        lines
-    } else {
-        vec![Line::raw("No selection")]
-    };
-
-    let para = Paragraph::new(content)
-        .block(Block::default().borders(Borders::ALL).title(" Preview "))
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(para, area);
+    }
 }
 
 fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
