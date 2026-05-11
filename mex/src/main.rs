@@ -84,6 +84,7 @@ fn main() -> Result<()> {
 
     // Query terminal for graphics protocol/font-size (before entering alt screen).
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
+    let protocol_name = format!("{:?}", picker.protocol_type()).to_lowercase();
 
     // Channel: main -> worker (encode requests)
     let (tx_worker, rx_worker) = mpsc::channel::<ResizeRequest>();
@@ -99,7 +100,7 @@ fn main() -> Result<()> {
 
     let image_state = ThreadProtocol::new(tx_worker, None);
 
-    let mut app = app::App::new(db_path, target_root, files, image_pool, picker, image_state);
+    let mut app = app::App::new(db_path, target_root, files, image_pool, picker, image_state, protocol_name);
 
     // Terminal setup
     enable_raw_mode()?;
