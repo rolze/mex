@@ -1,13 +1,15 @@
 use crate::app::App;
 use crate::db::folder_of;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 use ratatui_image::{StatefulImage, thread::ThreadProtocol};
+
+const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.size();
@@ -190,6 +192,28 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     if image_area.width > 2 && image_area.height > 2 {
         let img_widget = StatefulImage::<ThreadProtocol>::default();
         frame.render_stateful_widget(img_widget, image_area, &mut app.image_state);
+
+        // Spinner overlay while encoding is in flight.
+        if app.is_loading {
+            let spin_char = SPINNER[app.spinner_frame % SPINNER.len()];
+            let label = format!(" {} loading… ", spin_char);
+            let label_width = label.chars().count() as u16;
+            // Centre the spinner in the image area.
+            let sx = image_area.x + image_area.width.saturating_sub(label_width) / 2;
+            let sy = image_area.y + image_area.height / 2;
+            if sx + label_width <= image_area.x + image_area.width && sy < image_area.y + image_area.height {
+                let spinner_area = Rect::new(sx, sy, label_width, 1);
+                let spinner_widget = Paragraph::new(Span::styled(
+                    label,
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ))
+                .alignment(Alignment::Center);
+                frame.render_widget(spinner_widget, spinner_area);
+            }
+        }
     }
 }
 

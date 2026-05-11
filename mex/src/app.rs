@@ -1,7 +1,10 @@
 use crate::db::MediaFile;
+use image::DynamicImage;
 use ratatui::layout::Rect;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
+
+const CACHE_MAX: usize = 30;
 
 pub struct App {
     pub db_path: String,
@@ -17,7 +20,10 @@ pub struct App {
     // Image display
     pub image_pool: Vec<PathBuf>,
     pub image_picker: Picker,
-    pub image_state: ThreadProtocol, // async resize/encode state
+    pub image_state: ThreadProtocol,
+    pub image_cache: HashMap<PathBuf, DynamicImage>,
+    pub is_loading: bool,       // true while bg encode is in flight
+    pub spinner_frame: usize,   // advances each tick for animation
 }
 
 impl App {
@@ -44,6 +50,9 @@ impl App {
             image_pool,
             image_picker,
             image_state,
+            image_cache: HashMap::new(),
+            is_loading: false,
+            spinner_frame: 0,
         }
     }
 
@@ -145,6 +154,7 @@ impl App {
         self.selected = 0;
         self.scroll_offset = 0;
         self.image_state.empty_protocol();
+        self.is_loading = false;
         self.preview_open = false;
     }
 
@@ -154,35 +164,71 @@ impl App {
             self.refresh_image();
         } else {
             self.image_state.empty_protocol();
+            self.is_loading = false;
         }
     }
 
-    /// Load a (pool-random) image and hand it to the async thread for resize+encode.
-    /// Returns immediately — the background thread does the heavy work.
+    /// Load image for current selection (from cache if available) and send it to the
+    /// background encoder thread. Returns immediately — UI never blocks.
     pub fn refresh_image(&mut self) {
         if self.image_pool.is_empty() {
             self.image_state.empty_protocol();
+            self.is_loading = false;
             return;
         }
         let path = self.image_pool[self.selected % self.image_pool.len()].clone();
+
+        // Cache hit: no disk I/O needed, clone the decoded pixels and re-encode.
+        if let Some(cached) = self.image_cache.get(&path) {
+            let proto: StatefulProtocol = self.image_picker.new_resize_protocol(cached.clone());
+            self.image_state.replace_protocol(proto);
+            self.is_loading = true;
+            return;
+        }
+
+        // Cache miss: read from disk, then cache and encode.
         match image::ImageReader::open(&path)
             .and_then(|r| r.decode().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
         {
             Ok(dyn_img) => {
+                // Evict oldest entries if cache is full (simple strategy: remove arbitrary keys).
+                if self.image_cache.len() >= CACHE_MAX {
+                    let victims: Vec<PathBuf> = self.image_cache.keys()
+                        .filter(|k| *k != &path)
+                        .take(CACHE_MAX / 3)
+                        .cloned()
+                        .collect();
+                    for k in victims { self.image_cache.remove(&k); }
+                }
+                self.image_cache.insert(path.clone(), dyn_img.clone());
+
                 let proto: StatefulProtocol = self.image_picker.new_resize_protocol(dyn_img);
                 self.image_state.replace_protocol(proto);
+                self.is_loading = true;
             }
             Err(_) => {
                 self.image_state.empty_protocol();
+                self.is_loading = false;
             }
         }
+    }
+
+    /// Called when the background thread finishes encoding an image.
+    pub fn on_encode_done(&mut self, response: ratatui_image::thread::ResizeResponse) {
+        if self.image_state.update_resized_protocol(response) {
+            self.is_loading = false;
+        }
+    }
+
+    /// Advance spinner animation — call once per event-loop tick.
+    pub fn tick(&mut self) {
+        self.spinner_frame = self.spinner_frame.wrapping_add(1);
     }
 
     pub fn selected_file(&self) -> Option<&MediaFile> {
         self.filtered.get(self.selected)
     }
 
-    /// Select the file at a terminal row coordinate (from a mouse click).
     pub fn select_at_row(&mut self, row: u16) -> bool {
         let inner_top = self.list_area.y + 1;
         let inner_bottom = self.list_area.y + self.list_area.height.saturating_sub(1);
