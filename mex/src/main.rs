@@ -12,8 +12,17 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
-use ratatui_image::picker::Picker;
-use std::{io, path::Path};
+use ratatui_image::{
+    picker::Picker,
+    thread::{ResizeRequest, ResizeResponse, ThreadProtocol},
+    errors::Errors,
+};
+use std::{
+    io,
+    path::Path,
+    sync::mpsc::{self, Receiver},
+    thread,
+};
 
 fn find_db() -> Option<String> {
     for candidate in &[".mex.db", "../.mex.db", "../../.mex.db"] {
@@ -37,7 +46,6 @@ fn load_target_root(db_path: &str) -> String {
     String::new()
 }
 
-/// Collect image files from mex-media-root/ (next to the DB or cwd).
 fn find_image_pool() -> Vec<std::path::PathBuf> {
     let candidates = ["mex-media-root", "../mex-media-root", "../../mex-media-root"];
     let image_exts = ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
@@ -74,10 +82,24 @@ fn main() -> Result<()> {
     let files = db::load_files(&db_path, "").context("Failed to load files from DB")?;
     let image_pool = find_image_pool();
 
-    // Query terminal for graphics protocol support (before entering alt screen).
+    // Query terminal for graphics protocol/font-size (before entering alt screen).
     let picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
 
-    let mut app = app::App::new(db_path, target_root, files, image_pool, picker);
+    // Channel: main -> worker (encode requests)
+    let (tx_worker, rx_worker) = mpsc::channel::<ResizeRequest>();
+    // Channel: worker -> main (encoded results)
+    let (tx_result, rx_result) = mpsc::channel::<Result<ResizeResponse, Errors>>();
+
+    // Background encoder thread — receives StatefulProtocol, resizes+encodes, sends back.
+    thread::spawn(move || {
+        while let Ok(request) = rx_worker.recv() {
+            let _ = tx_result.send(request.resize_encode());
+        }
+    });
+
+    let image_state = ThreadProtocol::new(tx_worker, None);
+
+    let mut app = app::App::new(db_path, target_root, files, image_pool, picker, image_state);
 
     // Terminal setup
     enable_raw_mode()?;
@@ -86,7 +108,7 @@ fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(&mut terminal, &mut app);
+    let result = run_loop(&mut terminal, &mut app, rx_result);
 
     // Restore terminal
     disable_raw_mode()?;
@@ -103,11 +125,17 @@ fn main() -> Result<()> {
 fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut app::App,
+    rx_result: Receiver<Result<ResizeResponse, Errors>>,
 ) -> Result<()> {
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
 
-        if event::poll(std::time::Duration::from_millis(50))? {
+        // Apply any completed image encodes without blocking.
+        while let Ok(Ok(response)) = rx_result.try_recv() {
+            app.image_state.update_resized_protocol(response);
+        }
+
+        if event::poll(std::time::Duration::from_millis(16))? {
             match event::read()? {
                 Event::Key(key) => match (key.modifiers, key.code) {
                     // Quit
@@ -115,7 +143,7 @@ fn run_loop(
                     (_, KeyCode::Esc) => {
                         if app.preview_open {
                             app.preview_open = false;
-                            app.current_image = None;
+                            app.image_state.empty_protocol();
                         } else {
                             app.clear_filter();
                         }

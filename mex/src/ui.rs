@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
-use ratatui_image::StatefulImage;
+use ratatui_image::{StatefulImage, thread::ThreadProtocol};
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.size();
@@ -42,7 +42,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     if app.preview_open {
         let preview_area = main_chunks[1];
-        app.preview_area = preview_area;
         draw_preview(frame, app, preview_area);
     }
 
@@ -189,16 +188,8 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     // Image
     let image_area = chunks[1];
     if image_area.width > 2 && image_area.height > 2 {
-        if let Some(proto) = app.current_image.as_mut() {
-            let img_widget = StatefulImage::<ratatui_image::protocol::StatefulProtocol>::default();
-            frame.render_stateful_widget(img_widget, image_area, proto);
-        } else {
-            let hint = Paragraph::new(Span::styled(
-                "Press Enter/Space to load preview",
-                Style::default().fg(Color::DarkGray),
-            ));
-            frame.render_widget(hint, image_area);
-        }
+        let img_widget = StatefulImage::<ThreadProtocol>::default();
+        frame.render_stateful_widget(img_widget, image_area, &mut app.image_state);
     }
 }
 
