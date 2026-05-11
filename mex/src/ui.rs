@@ -149,7 +149,9 @@ fn truncate_end(s: &str, max_chars: usize) -> String {
 }
 
 fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Preview ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" Preview [{}] ", app.image_protocol_name));
 
     // Split: metadata at top (5 lines) + image below
     let inner = block.inner(area);
