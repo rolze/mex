@@ -178,52 +178,58 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
         .borders(Borders::ALL)
         .title(format!(" Preview [{}] ", app.image_protocol_name));
 
-    // Split: metadata at top (5 lines) + image below
+    // Split: metadata at top (3 lines) + image below
     let inner = block.inner(area);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(7), Constraint::Min(1)])
+        .constraints([Constraint::Length(3), Constraint::Min(1)])
         .split(inner);
 
     frame.render_widget(block, area);
 
-    // Metadata
+    // Metadata — two columns: left (File, Date) | right (Tags, Slug, Caption)
     if let Some(file) = app.selected_file() {
-        let mut lines = vec![
+        let meta_area = chunks[0];
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(meta_area);
+
+        let left = Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("File: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("File  ", Style::default().fg(Color::DarkGray)),
                 Span::raw(&file.target_path),
             ]),
             Line::from(vec![
-                Span::styled("Date: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Date  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(&file.derived_date, Style::default().fg(Color::Yellow)),
             ]),
+        ])
+        .wrap(Wrap { trim: true });
+        frame.render_widget(left, cols[0]);
+
+        let tags_str = if file.tags.is_empty() { "—".to_string() } else { file.tags.join(", ") };
+        let slug_str = if !file.derived_slug.is_empty() { file.derived_slug.as_str() }
+                       else { "—" };
+        let caption_str = if !file.caption_slug.is_empty() { file.caption_slug.as_str() }
+                          else { "—" };
+
+        let right = Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("Ext:  ", Style::default().fg(Color::DarkGray)),
-                Span::raw(&file.ext),
+                Span::styled("Tags  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(tags_str, Style::default().fg(Color::Green)),
             ]),
             Line::from(vec![
-                Span::styled("Tags: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    if file.tags.is_empty() { "—".to_string() } else { file.tags.join(", ") },
-                    Style::default().fg(Color::Green),
-                ),
+                Span::styled("Slug  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(slug_str, Style::default().fg(Color::Cyan)),
             ]),
-        ];
-        if !file.derived_slug.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("Slug: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(&file.derived_slug, Style::default().fg(Color::Cyan)),
-            ]));
-        }
-        if !file.caption_slug.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("Capt: ", Style::default().fg(Color::DarkGray)),
-                Span::styled(&file.caption_slug, Style::default().fg(Color::Cyan)),
-            ]));
-        }
-        let meta = Paragraph::new(lines).wrap(Wrap { trim: true });
-        frame.render_widget(meta, chunks[0]);
+            Line::from(vec![
+                Span::styled("Capt  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(caption_str, Style::default().fg(Color::Cyan)),
+            ]),
+        ])
+        .wrap(Wrap { trim: true });
+        frame.render_widget(right, cols[1]);
     }
 
     // Image
