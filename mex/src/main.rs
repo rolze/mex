@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod db;
 mod ui;
 
@@ -33,44 +34,35 @@ fn find_db() -> Option<String> {
     None
 }
 
-fn load_target_root(db_path: &str) -> String {
-    if let Ok(conn) = rusqlite::Connection::open(db_path) {
-        if let Ok(val) = conn.query_row(
-            "SELECT value FROM config WHERE key = 'target_root'",
-            [],
-            |row| row.get::<_, String>(0),
-        ) {
-            return val;
-        }
-    }
-    String::new()
-}
+/// Resolve and validate target_root from local config. If missing or pointing
+/// to a non-existent directory, prompt the user to enter a new path.
+/// Returns the validated target_root or exits if the user cancels.
+fn resolve_target_root() -> String {
+    let mut cfg = config::load_config();
 
-fn find_image_pool() -> Vec<std::path::PathBuf> {
-    let candidates = ["mex-media-root", "../mex-media-root", "../../mex-media-root"];
-    let image_exts = ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
-    for dir in &candidates {
-        let p = Path::new(dir);
-        if p.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(p) {
-                let mut pool: Vec<_> = entries
-                    .filter_map(|e| e.ok())
-                    .map(|e| e.path())
-                    .filter(|p| {
-                        p.extension()
-                            .and_then(|e| e.to_str())
-                            .map(|e| image_exts.contains(&e.to_lowercase().as_str()))
-                            .unwrap_or(false)
-                    })
-                    .collect();
-                pool.sort();
-                if !pool.is_empty() {
-                    return pool;
+    loop {
+        match config::validate_target_root(&cfg.target_root) {
+            Ok(()) => {
+                eprintln!("mex: media root: {}", cfg.target_root);
+                return cfg.target_root;
+            }
+            Err(reason) => {
+                let new_root = config::prompt_target_root(&cfg.target_root, &reason);
+                match new_root {
+                    Some(path) => {
+                        cfg.target_root = path;
+                        if let Err(e) = config::save_config(&cfg) {
+                            eprintln!("mex: warning — could not save config: {e}");
+                        }
+                    }
+                    None => {
+                        eprintln!("mex: no media root configured; exiting.");
+                        std::process::exit(1);
+                    }
                 }
             }
         }
     }
-    vec![]
 }
 
 fn main() -> Result<()> {
@@ -78,9 +70,8 @@ fn main() -> Result<()> {
         "Could not find .mex.db. Run mex from the repository root or the mex/ sub-directory.",
     )?;
 
-    let target_root = load_target_root(&db_path);
-    let files = db::load_files(&db_path, "").context("Failed to load files from DB")?;
-    let image_pool = find_image_pool();
+    let target_root = resolve_target_root();
+    let files = db::load_files(&db_path).context("Failed to load files from DB")?;
 
     // Query terminal for graphics protocol/font-size (before entering alt screen).
     let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
@@ -118,7 +109,7 @@ fn main() -> Result<()> {
 
     let image_state = ThreadProtocol::new(tx_worker, None);
 
-    let mut app = app::App::new(db_path, target_root, files, image_pool, picker, image_state, protocol_name);
+    let mut app = app::App::new(db_path, target_root, files, picker, image_state, protocol_name);
 
     // Terminal setup
     enable_raw_mode()?;
@@ -149,6 +140,8 @@ fn run_loop(
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
 
+        if app.quit { break; }
+
         // Advance spinner animation regardless of events.
         app.tick();
 
@@ -160,35 +153,57 @@ fn run_loop(
         if event::poll(std::time::Duration::from_millis(16))? {
             match event::read()? {
                 Event::Key(key) => match (key.modifiers, key.code) {
-                    // Quit
-                    (_, KeyCode::Char('q')) => break,
+                    // Esc: cancel command mode → close preview → clear filter
                     (_, KeyCode::Esc) => {
-                        if app.preview_open {
-                            // Just hide the pane; keep protocol alive for instant reopen.
+                        if app.command.is_some() {
+                            app.cancel_command();
+                        } else if app.preview_open {
                             app.preview_open = false;
                         } else {
                             app.clear_filter();
                         }
                     }
 
-                    // Navigation
-                    (_, KeyCode::Down) | (_, KeyCode::Char('j')) => app.move_down(),
-                    (_, KeyCode::Up) | (_, KeyCode::Char('k')) => app.move_up(),
-                    (_, KeyCode::Char('g')) => app.jump_top(),
-                    (_, KeyCode::Char('G')) => app.jump_bottom(),
+                    // Navigation — arrow/page/ctrl keys only; no letter bindings
+                    (_, KeyCode::Down)  => app.move_down(),
+                    (_, KeyCode::Up)    => app.move_up(),
+                    (_, KeyCode::Home)  => app.jump_top(),
+                    (_, KeyCode::End)   => app.jump_bottom(),
                     (KeyModifiers::CONTROL, KeyCode::Char('d')) => app.half_page_down(),
                     (KeyModifiers::CONTROL, KeyCode::Char('u')) => app.half_page_up(),
                     (_, KeyCode::PageDown) => app.page_down(),
-                    (_, KeyCode::PageUp) => app.page_up(),
+                    (_, KeyCode::PageUp)   => app.page_up(),
 
-                    // Preview toggle
-                    (_, KeyCode::Enter) | (_, KeyCode::Char(' ')) => app.toggle_preview(),
+                    // Preview toggle (only when not in command mode)
+                    (_, KeyCode::Enter) => {
+                        if app.command.is_some() {
+                            app.execute_command();
+                        } else {
+                            app.toggle_preview();
+                        }
+                    }
+                    (_, KeyCode::Char(' ')) if app.command.is_none() => app.toggle_preview(),
 
-                    // Filter: backspace
-                    (_, KeyCode::Backspace) => app.pop_filter_char(),
+                    // Backspace: pop from command buffer or filter
+                    (_, KeyCode::Backspace) => {
+                        if app.command.is_some() {
+                            app.pop_command_char();
+                        } else {
+                            app.pop_filter_char();
+                        }
+                    }
 
-                    // Filter: printable characters
-                    (_, KeyCode::Char(c)) => app.push_filter_char(c),
+                    // ':' enters command mode
+                    (_, KeyCode::Char(':')) => app.enter_command_mode(),
+
+                    // All other printable chars → command buffer or filter
+                    (_, KeyCode::Char(c)) => {
+                        if app.command.is_some() {
+                            app.push_command_char(c);
+                        } else {
+                            app.push_filter_char(c);
+                        }
+                    }
 
                     _ => {}
                 },

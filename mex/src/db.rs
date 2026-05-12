@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 
 #[derive(Clone, Debug)]
 pub struct MediaFile {
@@ -10,10 +10,8 @@ pub struct MediaFile {
     pub tags: Vec<String>,
 }
 
-pub fn load_files(db_path: &str, filter: &str) -> Result<Vec<MediaFile>> {
+pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
     let conn = Connection::open(db_path)?;
-
-    let like_pat = format!("%{}%", filter.to_lowercase());
 
     let sql = "SELECT m.id, m.target_path, COALESCE(m.derived_date,''), m.ext,
                       COALESCE(GROUP_CONCAT(t.name, ', '),'')
@@ -22,14 +20,11 @@ pub fn load_files(db_path: &str, filter: &str) -> Result<Vec<MediaFile>> {
                LEFT JOIN tags t ON t.id = mt.tag_id
                WHERE m.target_path IS NOT NULL
                GROUP BY m.id
-               HAVING lower(m.target_path) LIKE ?1
-                   OR lower(COALESCE(GROUP_CONCAT(t.name, ', '),'')) LIKE ?1
-               ORDER BY m.target_path
-               LIMIT 2000";
+               ORDER BY m.target_path";
 
     let mut stmt = conn.prepare(sql)?;
 
-    let rows = stmt.query_map(params![like_pat], |row| {
+    let rows = stmt.query_map([], |row| {
         let tags_str: String = row.get(4)?;
         Ok(MediaFile {
             id: row.get(0)?,

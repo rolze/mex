@@ -1,0 +1,100 @@
+use anyhow::{Context, Result};
+use std::io::{self, Write};
+use std::path::PathBuf;
+
+/// Per-installation mex configuration.
+/// Stored in `~/.config/mex/config.toml` (key = value, one per line).
+/// Never written to `.mex.db` — the media DB is shared across devices.
+pub struct Config {
+    pub target_root: String,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { target_root: String::new() }
+    }
+}
+
+fn config_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".config").join("mex").join("config.toml")
+}
+
+/// Read the local config file. Returns `Config::default()` if the file does
+/// not exist yet (first-run scenario).
+pub fn load_config() -> Config {
+    let path = config_path();
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return Config::default(),
+    };
+    let mut cfg = Config::default();
+    for line in text.lines() {
+        if let Some((key, val)) = line.split_once('=') {
+            let key = key.trim();
+            let val = val.trim();
+            if key == "target_root" {
+                cfg.target_root = val.to_string();
+            }
+        }
+    }
+    cfg
+}
+
+/// Persist the config to `~/.config/mex/config.toml`, creating parent
+/// directories as needed.
+pub fn save_config(cfg: &Config) -> Result<()> {
+    let path = config_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("could not create config dir {}", parent.display()))?;
+    }
+    let content = format!("target_root = {}\n", cfg.target_root);
+    std::fs::write(&path, content)
+        .with_context(|| format!("could not write config file {}", path.display()))
+}
+
+/// Interactive prompt asking the user to enter (or confirm) the media root
+/// path. Runs *before* the alternate screen / raw mode — plain terminal I/O.
+///
+/// Returns `Some(path)` on success, `None` if the user cancels (empty input
+/// when no current value exists).
+pub fn prompt_target_root(current: &str, reason: &str) -> Option<String> {
+    eprintln!("mex: {reason}");
+    if !current.is_empty() {
+        eprintln!("  current: {current}");
+        eprint!("  new path (Enter to keep current, Ctrl-C to quit): ");
+    } else {
+        eprint!("  media root path: ");
+    }
+    io::stderr().flush().ok();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok()?;
+    let trimmed = input.trim().to_string();
+
+    if trimmed.is_empty() && !current.is_empty() {
+        Some(current.to_string()) // keep existing
+    } else if trimmed.is_empty() {
+        None // nothing provided
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Check whether `target_root` is usable (non-empty, exists, is a directory,
+/// is readable). Returns `Ok(())` on success or an error message string.
+pub fn validate_target_root(root: &str) -> Result<(), String> {
+    if root.is_empty() {
+        return Err("media root is not configured".into());
+    }
+    let p = std::path::Path::new(root);
+    if !p.exists() {
+        return Err(format!("path does not exist: {root}"));
+    }
+    if !p.is_dir() {
+        return Err(format!("path is not a directory: {root}"));
+    }
+    std::fs::read_dir(p).map_err(|e| format!("cannot read directory {root}: {e}"))?;
+    Ok(())
+}
