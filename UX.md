@@ -6,17 +6,22 @@
 
 | Key | Action |
 |-----|--------|
-| `↑` / `k` | Move selection up one row |
-| `↓` / `j` | Move selection down one row |
+| `↑` | Move selection up one row |
+| `↓` | Move selection down one row |
 | `PgUp` | Move selection up one full page |
 | `PgDn` | Move selection down one full page |
 | `Ctrl-u` | Move selection up half a page |
 | `Ctrl-d` | Move selection down half a page |
-| `g` | Jump to first item |
-| `G` | Jump to last item |
+| `Home` | Jump to first item |
+| `End` | Jump to last item |
 | `Enter` / `Space` | Toggle right-pane preview for selected item |
-| `Esc` | Close preview (if open), otherwise clear filter |
-| `q` | Quit |
+| `Esc` | Cancel command mode → close preview → clear filter (in that priority order) |
+| `:` | Enter command mode — type a command and press Enter (e.g. `:q` to quit) |
+| `Backspace` | Delete last character (from command buffer or filter) |
+| Any other key | Appended to the live search filter instantly |
+
+> No letter keys are bound to navigation actions — all letters go directly into search.
+> Use `:` + Enter for commands.
 
 ### Mouse
 

@@ -220,20 +220,34 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
-    let filter_text = if app.filter.is_empty() {
-        Span::styled(
-            "Type to filter…  |  Enter: preview  |  PgUp/PgDn: page  |  q: quit",
-            Style::default().fg(Color::DarkGray),
+    let (title, filter_text) = if let Some(ref cmd) = app.command {
+        (
+            " Command ",
+            Span::styled(
+                format!(":{cmd}_"),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        )
+    } else if app.filter.is_empty() {
+        (
+            " Filter ",
+            Span::styled(
+                "Type to filter…  |  Enter: preview  |  :: command  |  PgUp/PgDn: page",
+                Style::default().fg(Color::DarkGray),
+            ),
         )
     } else {
-        Span::styled(
-            format!("/{}_", app.filter),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        (
+            " Filter ",
+            Span::styled(
+                format!("/{}_", app.filter),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ),
         )
     };
 
     let para = Paragraph::new(Line::from(filter_text))
-        .block(Block::default().borders(Borders::ALL).title(" Filter "));
+        .block(Block::default().borders(Borders::ALL).title(title));
 
     frame.render_widget(para, area);
 }

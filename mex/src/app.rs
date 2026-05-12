@@ -5,6 +5,7 @@ use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadPr
 use std::{collections::HashMap, path::PathBuf};
 
 const CACHE_MAX: usize = 30;
+const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
 
 pub struct App {
     pub db_path: String,
@@ -14,11 +15,12 @@ pub struct App {
     pub selected: usize,
     pub scroll_offset: usize,
     pub filter: String,
+    /// Active command being typed (`:q`, etc.). `None` = search/normal mode.
+    pub command: Option<String>,
     pub preview_open: bool,
     pub list_height: usize,     // updated each frame
     pub list_area: Rect,        // updated each frame
     // Image display
-    pub image_pool: Vec<PathBuf>,
     pub image_picker: Picker,
     pub image_state: ThreadProtocol,
     pub image_protocol_name: String,  // e.g. "halfblocks", "kitty", "sixel"
@@ -31,6 +33,8 @@ pub struct App {
     pub spinner_frame: usize,   // advances each tick for animation
     /// Number of times a new encode was dispatched (cache misses). Only used for tests.
     pub encode_dispatch_count: usize,
+    /// Set to true by execute_command when the user requests quit.
+    pub quit: bool,
 }
 
 impl App {
@@ -38,7 +42,6 @@ impl App {
         db_path: String,
         target_root: String,
         files: Vec<MediaFile>,
-        image_pool: Vec<PathBuf>,
         image_picker: Picker,
         image_state: ThreadProtocol,
         image_protocol_name: String,
@@ -52,10 +55,10 @@ impl App {
             selected: 0,
             scroll_offset: 0,
             filter: String::new(),
+            command: None,
             preview_open: false,
             list_height: 20,
             list_area: Rect::default(),
-            image_pool,
             image_picker,
             image_state,
             image_protocol_name,
@@ -64,6 +67,7 @@ impl App {
             is_loading: false,
             spinner_frame: 0,
             encode_dispatch_count: 0,
+            quit: false,
         }
     }
 
@@ -148,6 +152,42 @@ impl App {
         self.apply_filter();
     }
 
+    // ── Command mode ────────────────────────────────────────────────────────
+
+    /// Enter `:` command mode. Typing a command string and pressing Enter
+    /// executes it. All letters are otherwise reserved for live search.
+    pub fn enter_command_mode(&mut self) {
+        self.command = Some(String::new());
+    }
+
+    pub fn push_command_char(&mut self, c: char) {
+        if let Some(ref mut cmd) = self.command {
+            cmd.push(c);
+        }
+    }
+
+    /// Pop last char from command buffer; cancel command mode if buffer is empty.
+    pub fn pop_command_char(&mut self) {
+        match self.command {
+            Some(ref mut cmd) if !cmd.is_empty() => { cmd.pop(); }
+            _ => self.command = None,
+        }
+    }
+
+    pub fn cancel_command(&mut self) {
+        self.command = None;
+    }
+
+    /// Execute the current command. Sets `self.quit` for `:q` / `:quit`.
+    /// Clears command mode regardless of outcome.
+    pub fn execute_command(&mut self) {
+        let cmd = self.command.take().unwrap_or_default();
+        match cmd.trim() {
+            "q" | "quit" => self.quit = true,
+            _ => {} // unknown command — silently ignore for now
+        }
+    }
+
     fn apply_filter(&mut self) {
         let needle = self.filter.to_lowercase();
         self.filtered = if needle.is_empty() {
@@ -181,17 +221,34 @@ impl App {
 
     /// Load image for current selection and send to the background encoder thread.
     /// Skips everything if the same image is already loaded/in-flight (instant reopen).
+    /// Non-image files (audio, video) or missing files gracefully clear the preview.
     pub fn refresh_image(&mut self) {
-        if self.image_pool.is_empty() {
+        // Build absolute path from target_root + selected file's target_path.
+        let path = match self.filtered.get(self.selected) {
+            Some(f) if !self.target_root.is_empty() => {
+                PathBuf::from(&self.target_root).join(&f.target_path)
+            }
+            _ => {
+                self.image_state.empty_protocol();
+                self.current_image_path = None;
+                self.is_loading = false;
+                return;
+            }
+        };
+
+        // Skip non-image files rather than attempting (and failing) to decode them.
+        let is_image = path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| IMAGE_EXTS.contains(&e.to_lowercase().as_str()))
+            .unwrap_or(false);
+        if !is_image || !path.exists() {
             self.image_state.empty_protocol();
             self.current_image_path = None;
             self.is_loading = false;
             return;
         }
-        let path = self.image_pool[self.selected % self.image_pool.len()].clone();
 
         // Already loaded (or in-flight) for this path — nothing to do.
-        // StatefulImage will handle terminal-resize re-encodes automatically.
         if self.current_image_path.as_ref() == Some(&path) {
             return;
         }
@@ -275,38 +332,89 @@ mod tests {
     use std::sync::mpsc;
     use std::time::Instant;
 
-    fn make_test_app_with_rows(pool: Vec<PathBuf>, rows: usize) -> App {
-        let (tx, _rx) = mpsc::channel();
+    /// Absolute path to the directory containing test images.
+    /// Prefers the local `mex-media-root` if present; falls back to
+    /// generating tiny synthetic images in a temp directory so tests
+    /// always pass even without real media files checked out.
+    fn test_media_root() -> String {
+        for prefix in &["mex-media-root", "../mex-media-root"] {
+            let p = PathBuf::from(prefix);
+            if p.is_dir() {
+                return p.canonicalize()
+                    .unwrap_or(p)
+                    .to_string_lossy()
+                    .into_owned();
+            }
+        }
+        create_synthetic_test_images()
+    }
+
+    fn create_synthetic_test_images() -> String {
+        use image::{DynamicImage, RgbImage};
+        let dir = std::env::temp_dir().join("mex_test_media_root");
+        std::fs::create_dir_all(&dir).expect("create test media dir");
+        for (name, fmt) in &[
+            ("rolze.jpg", image::ImageFormat::Jpeg),
+            ("bg.png", image::ImageFormat::Png),
+        ] {
+            let p = dir.join(name);
+            if !p.exists() {
+                let img = DynamicImage::ImageRgb8(RgbImage::new(8, 8));
+                img.save_with_format(&p, *fmt).expect("write synthetic test image");
+            }
+        }
+        dir.to_string_lossy().into_owned()
+    }
+
+    /// Build a test App where each entry in `image_names` becomes one
+    /// MediaFile with that name as `target_path` (relative to test_media_root).
+    fn make_test_app(image_names: &[&str]) -> App {        let (tx, _rx) = mpsc::channel();
         let image_state = ThreadProtocol::new(tx, None);
         let picker = Picker::halfblocks();
-        let files: Vec<crate::db::MediaFile> = (0..rows)
-            .map(|i| crate::db::MediaFile {
+        let root = test_media_root();
+        let files: Vec<crate::db::MediaFile> = image_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| crate::db::MediaFile {
                 id: i.to_string(),
-                target_path: format!("2024/file-{i}.jpg"),
+                target_path: name.to_string(),
                 derived_date: "2024-01-01".into(),
-                ext: "jpg".into(),
+                ext: name.rsplit('.').next().unwrap_or("").into(),
                 tags: vec![],
             })
             .collect();
-        App::new("test.db".into(), "/tmp".into(), files, pool, picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), root, files, picker, image_state, "halfblocks".into())
     }
 
-    /// Build a minimal App for testing. Uses a throwaway mpsc pair for the
-    /// encoder channel — no background thread is started (not needed for
-    /// logic / dispatch-count tests).
-    fn make_test_app(pool: Vec<PathBuf>) -> App {
-        make_test_app_with_rows(pool, 0)
-    }
-
-    fn test_image(name: &str) -> PathBuf {
-        // Works from both `mex/` and the repo root.
-        for prefix in &["mex-media-root", "../mex-media-root"] {
-            let p = PathBuf::from(prefix).join(name);
-            if p.exists() {
-                return p;
-            }
+    /// Build a test App with extra non-image rows appended for navigation tests.
+    #[allow(dead_code)]
+    fn make_test_app_with_extra_rows(image_names: &[&str], extra: usize) -> App {
+        let (tx, _rx) = mpsc::channel();
+        let image_state = ThreadProtocol::new(tx, None);
+        let picker = Picker::halfblocks();
+        let root = test_media_root();
+        let mut files: Vec<crate::db::MediaFile> = image_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| crate::db::MediaFile {
+                id: i.to_string(),
+                target_path: name.to_string(),
+                derived_date: "2024-01-01".into(),
+                ext: name.rsplit('.').next().unwrap_or("").into(),
+                tags: vec![],
+            })
+            .collect();
+        // Extra placeholder rows (non-existent paths — preview will clear gracefully).
+        for i in 0..extra {
+            files.push(crate::db::MediaFile {
+                id: format!("extra-{i}"),
+                target_path: format!("nonexistent-{i}.jpg"),
+                derived_date: "2024-01-01".into(),
+                ext: "jpg".into(),
+                tags: vec![],
+            });
         }
-        panic!("test image not found: {name}");
+        App::new("test.db".into(), root, files, picker, image_state, "halfblocks".into())
     }
 
     // ── Dispatch-count tests ────────────────────────────────────────────────
@@ -314,19 +422,17 @@ mod tests {
     /// First call to refresh_image should dispatch exactly one encode.
     #[test]
     fn first_open_dispatches_once() {
-        let pool = vec![test_image("rolze.jpg")];
-        let mut app = make_test_app(pool);
+        let mut app = make_test_app(&["rolze.jpg"]);
         assert_eq!(app.encode_dispatch_count, 0);
         app.refresh_image();
         assert_eq!(app.encode_dispatch_count, 1, "first open must dispatch an encode");
     }
 
-    /// Calling refresh_image again with the same path (same selected index)
-    /// must NOT dispatch a second encode (the cached path short-circuits).
+    /// Calling refresh_image again with the same path must NOT dispatch a
+    /// second encode (the cached path short-circuits).
     #[test]
     fn same_path_no_second_dispatch() {
-        let pool = vec![test_image("rolze.jpg")];
-        let mut app = make_test_app(pool);
+        let mut app = make_test_app(&["rolze.jpg"]);
         app.refresh_image();
         let count_after_first = app.encode_dispatch_count;
         app.refresh_image(); // same path, same selection
@@ -337,11 +443,10 @@ mod tests {
     }
 
     /// Closing and reopening the preview on the same item must not dispatch
-    /// a new encode (the ThreadProtocol is kept alive).
+    /// a new encode (ThreadProtocol is kept alive).
     #[test]
     fn close_reopen_no_redispatch() {
-        let pool = vec![test_image("bg.png")];
-        let mut app = make_test_app(pool);
+        let mut app = make_test_app(&["bg.png"]);
         app.toggle_preview(); // open
         let after_open = app.encode_dispatch_count;
         assert_eq!(after_open, 1, "opening must dispatch one encode");
@@ -354,57 +459,41 @@ mod tests {
         );
     }
 
-    /// Navigating to a different row and back must re-dispatch (different
-    /// images in the pool at each index).
+    /// Navigating to a different row and back must re-dispatch.
     #[test]
     fn navigate_away_and_back_dispatches() {
-        let pool = vec![
-            test_image("rolze.jpg"),
-            test_image("bg.png"),
-        ];
-        let mut app = make_test_app_with_rows(pool, 3); // need >1 row to navigate
+        let mut app = make_test_app(&["rolze.jpg", "bg.png", "rolze.jpg"]);
         app.toggle_preview();
         let after_first = app.encode_dispatch_count; // 1
-        // Navigate to row 1 (different image)
-        app.move_down();
+        app.move_down(); // → bg.png
         let after_second = app.encode_dispatch_count; // 2
         assert!(after_second > after_first, "different image must dispatch");
-        // Navigate back to row 0
-        app.move_up();
-        let after_return = app.encode_dispatch_count; // 3 — different path than current
-        assert!(after_return > after_second, "navigating back must dispatch (different from current)");
+        app.move_up(); // → rolze.jpg (different current_image_path than bg.png)
+        let after_return = app.encode_dispatch_count; // 3
+        assert!(after_return > after_second, "navigating back must dispatch");
     }
 
-    /// DynamicImage is cached after first disk read; a second navigate-away
-    /// and back should still dispatch (new encode needed), but NOT re-read
-    /// the disk (image_cache contains it).
+    /// DynamicImage is cached after first disk read; navigating away and back
+    /// re-dispatches (new encode) but does not re-read from disk.
     #[test]
     fn dynimage_is_cached_after_first_load() {
-        let pool = vec![
-            test_image("rolze.jpg"),
-            test_image("bg.png"),
-        ];
-        let mut app = make_test_app_with_rows(pool, 3);
+        let mut app = make_test_app(&["rolze.jpg", "bg.png", "rolze.jpg"]);
         app.toggle_preview();
         assert_eq!(app.image_cache.len(), 1, "first open must populate DynamicImage cache");
         app.move_down();
         assert_eq!(app.image_cache.len(), 2);
-        app.move_up(); // back to rolze.jpg
-        // Cache still has both entries
+        app.move_up();
         assert_eq!(app.image_cache.len(), 2, "cache must not evict prematurely");
     }
 
     // ── Timing tests ────────────────────────────────────────────────────────
 
-    /// refresh_image() must return quickly when the same path is already
-    /// loaded (the early-return path). Threshold: 1 ms.
     #[test]
     fn same_path_refresh_is_sub_millisecond() {
-        let pool = vec![test_image("rolze.jpg")];
-        let mut app = make_test_app(pool);
-        app.refresh_image(); // first call — loads disk + creates proto
+        let mut app = make_test_app(&["rolze.jpg"]);
+        app.refresh_image();
         let t0 = Instant::now();
-        app.refresh_image(); // second call — should early-return
+        app.refresh_image();
         let elapsed = t0.elapsed();
         assert!(
             elapsed.as_millis() < 1,
@@ -413,27 +502,17 @@ mod tests {
         );
     }
 
-    /// DynamicImage cache hit must be significantly faster than a cold disk
-    /// read. We measure the cold decode + encode-dispatch time and check the
-    /// hot path is at least 10× faster.
     #[test]
     fn cache_hit_faster_than_cold_read() {
-        let path = test_image("rolze.jpg");
-        let pool = vec![path.clone(), test_image("bg.png")];
-        let mut app = make_test_app(pool);
+        let mut app = make_test_app(&["rolze.jpg", "bg.png"]);
 
-        // Cold read for rolze.jpg (row 0)
         let t_cold = Instant::now();
-        app.refresh_image();
+        app.refresh_image(); // cold read
         let cold_duration = t_cold.elapsed();
 
-        // Navigate away to bg.png (row 1)
-        app.move_down();
-
-        // Navigate back — DynamicImage for rolze.jpg is cached.
-        app.move_up();
-        // Force current_image_path mismatch by resetting it so cache hit is exercised
-        // (simulate navigating away and back without same-path short-circuit).
+        app.move_down(); // navigate away
+        app.move_up();   // back to rolze.jpg
+        // Reset path to force cache-hit path (not same-path short-circuit).
         app.current_image_path = None;
         let t_hot = Instant::now();
         app.refresh_image(); // cache hit — no disk I/O
@@ -443,27 +522,48 @@ mod tests {
             "cold={cold_duration:?}  hot={hot_duration:?}  ratio={}",
             cold_duration.as_micros().max(1) / hot_duration.as_micros().max(1)
         );
-
-        // The hot path must be faster. If both are sub-µs (extremely fast
-        // disk / OS cache) the ratio may be ≤ 10 — we only assert hot < cold
-        // to avoid flakiness on fast systems.
         assert!(
             hot_duration <= cold_duration + std::time::Duration::from_millis(5),
             "DynamicImage cache-hit ({hot_duration:?}) must not be slower than cold read ({cold_duration:?})"
         );
     }
 
+    // ── Path construction ───────────────────────────────────────────────────
+
+    /// refresh_image must build the path as target_root / target_path and
+    /// load the image when the file exists.
+    #[test]
+    fn refresh_image_uses_target_root_plus_target_path() {
+        let mut app = make_test_app(&["rolze.jpg"]);
+        app.refresh_image();
+        let expected = PathBuf::from(test_media_root()).join("rolze.jpg");
+        assert_eq!(
+            app.current_image_path.as_ref(),
+            Some(&expected),
+            "current_image_path must equal target_root/target_path"
+        );
+    }
+
+    /// Non-image extensions must NOT dispatch an encode.
+    #[test]
+    fn non_image_file_does_not_dispatch() {
+        let mut app = make_test_app(&["rolze.jpg"]);
+        // Override the file's ext to a non-image type to simulate an audio file.
+        app.all_files[0].target_path = "some_audio.mp3".into();
+        app.filtered[0].target_path = "some_audio.mp3".into();
+        app.refresh_image();
+        assert_eq!(app.encode_dispatch_count, 0, "non-image file must not dispatch encode");
+        assert!(app.current_image_path.is_none());
+    }
+
     // ── apply_filter / filter reset ─────────────────────────────────────────
 
-    /// apply_filter must clear current_image_path so the next preview open
-    /// loads a fresh image.
     #[test]
     fn filter_clears_image_state() {
-        let pool = vec![test_image("rolze.jpg")];
-        let mut app = make_test_app(pool);
+        let mut app = make_test_app(&["rolze.jpg"]);
         app.toggle_preview();
         assert!(app.current_image_path.is_some());
-        app.push_filter_char('x'); // triggers apply_filter
+        app.push_filter_char('x');
         assert!(app.current_image_path.is_none(), "filter must clear current_image_path");
         assert!(!app.preview_open, "filter must close preview");
     }
