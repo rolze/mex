@@ -8,13 +8,16 @@ pub struct MediaFile {
     pub derived_date: String,
     pub ext: String,
     pub tags: Vec<String>,
+    pub derived_slug: String,
+    pub caption_slug: String,
 }
 
 pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
     let conn = Connection::open(db_path)?;
 
     let sql = "SELECT m.id, m.target_path, COALESCE(m.derived_date,''), m.ext,
-                      COALESCE(GROUP_CONCAT(t.name, ', '),'')
+                      COALESCE(GROUP_CONCAT(t.name, ', '),''),
+                      COALESCE(m.derived_slug,''), COALESCE(m.caption_slug,'')
                FROM media m
                LEFT JOIN media_tags mt ON mt.media_id = m.id
                LEFT JOIN tags t ON t.id = mt.tag_id
@@ -36,6 +39,8 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
             } else {
                 tags_str.split(", ").map(|s| s.to_string()).collect()
             },
+            derived_slug: row.get(5)?,
+            caption_slug: row.get(6)?,
         })
     })?;
 

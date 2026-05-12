@@ -381,6 +381,8 @@ mod tests {
                 derived_date: "2024-01-01".into(),
                 ext: name.rsplit('.').next().unwrap_or("").into(),
                 tags: vec![],
+                derived_slug: String::new(),
+                caption_slug: String::new(),
             })
             .collect();
         App::new("test.db".into(), root, files, picker, image_state, "halfblocks".into())
@@ -402,6 +404,8 @@ mod tests {
                 derived_date: "2024-01-01".into(),
                 ext: name.rsplit('.').next().unwrap_or("").into(),
                 tags: vec![],
+                derived_slug: String::new(),
+                caption_slug: String::new(),
             })
             .collect();
         // Extra placeholder rows (non-existent paths — preview will clear gracefully).
@@ -412,6 +416,8 @@ mod tests {
                 derived_date: "2024-01-01".into(),
                 ext: "jpg".into(),
                 tags: vec![],
+                derived_slug: String::new(),
+                caption_slug: String::new(),
             });
         }
         App::new("test.db".into(), root, files, picker, image_state, "halfblocks".into())

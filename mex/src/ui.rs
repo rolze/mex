@@ -51,11 +51,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
-    let count = app.filtered.len();
+    let total = app.all_files.len();
+    let filtered = app.filtered.len();
+    let pos = if filtered == 0 { 0 } else { app.selected + 1 };
+
     let title = if app.filter.is_empty() {
-        format!(" mex — {} files ", count)
+        format!(" mex — {} / {} ", pos, total)
     } else {
-        format!(" mex — {} / {} ", count, app.all_files.len())
+        format!(" mex — {} / {} / {} ", pos, filtered, total)
     };
 
     // Fixed column widths (folder is always a short year prefix)
@@ -82,30 +85,52 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let folder_cell = truncate_front(folder, FOLDER_COL - 1); // -1 for "/"
             let folder_str = format!("{:<width$}/", folder_cell, width = FOLDER_COL - 1);
 
-            let filename = f.target_path.rsplit('/').next().unwrap_or(&f.target_path);
-            let filename_cell = truncate_front(filename, filename_col);
-            let filename_str = format!("{:<width$}", filename_cell, width = filename_col);
-
-            let tags_raw = if f.tags.is_empty() {
-                "—".to_string()
-            } else {
-                f.tags.join(", ")
-            };
-            let tags_cell = truncate_end(&tags_raw, TAGS_COL);
-            let tags_str = format!("{:<width$}", tags_cell, width = TAGS_COL);
-
             let base_style = if selected {
                 Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
 
-            let line = Line::from(vec![
+            let filename = f.target_path.rsplit('/').next().unwrap_or(&f.target_path);
+            let filename_cell = truncate_front(filename, filename_col);
+            // Pad to fixed width
+            let filename_padded = format!("{:<width$}", filename_cell, width = filename_col);
+
+            // Highlight the first non-empty of (derived_slug, caption_slug) inside the filename.
+            let highlight: &str = if !f.derived_slug.is_empty() { &f.derived_slug }
+                                  else if !f.caption_slug.is_empty() { &f.caption_slug }
+                                  else { "" };
+
+            let base_fg = if selected { Color::Black } else { Color::White };
+            let filename_spans: Vec<Span> = if !highlight.is_empty() {
+                if let Some(pos) = filename_padded.find(highlight) {
+                    let (before, rest) = filename_padded.split_at(pos);
+                    let (matched, after) = rest.split_at(highlight.len().min(rest.len()));
+                    let hi_fg = if selected { Color::Black } else { Color::Cyan };
+                    vec![
+                        Span::styled(before.to_string(), base_style.fg(base_fg)),
+                        Span::styled(matched.to_string(), base_style.fg(hi_fg).add_modifier(Modifier::BOLD)),
+                        Span::styled(after.to_string(), base_style.fg(base_fg)),
+                    ]
+                } else {
+                    vec![Span::styled(filename_padded, base_style.fg(base_fg))]
+                }
+            } else {
+                vec![Span::styled(filename_padded, base_style.fg(base_fg))]
+            };
+
+            let tags_raw = if f.tags.is_empty() { "—".to_string() } else { f.tags.join(", ") };
+            let tags_cell = truncate_end(&tags_raw, TAGS_COL);
+            let tags_str = format!("{:<width$}", tags_cell, width = TAGS_COL);
+
+            let mut spans = vec![
                 Span::styled(folder_str, base_style.fg(if selected { Color::Black } else { Color::DarkGray })),
-                Span::styled(filename_str, base_style.fg(if selected { Color::Black } else { Color::White })),
-                Span::raw(" "),
-                Span::styled(tags_str, base_style.fg(if selected { Color::Black } else { Color::Green })),
-            ]);
+            ];
+            spans.extend(filename_spans);
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(tags_str, base_style.fg(if selected { Color::Black } else { Color::Green })));
+
+            let line = Line::from(spans);
             ListItem::new(line).style(base_style)
         })
         .collect();
@@ -157,14 +182,14 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(5), Constraint::Min(1)])
+        .constraints([Constraint::Length(7), Constraint::Min(1)])
         .split(inner);
 
     frame.render_widget(block, area);
 
     // Metadata
     if let Some(file) = app.selected_file() {
-        let meta = Paragraph::new(vec![
+        let mut lines = vec![
             Line::from(vec![
                 Span::styled("File: ", Style::default().fg(Color::DarkGray)),
                 Span::raw(&file.target_path),
@@ -184,8 +209,20 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(Color::Green),
                 ),
             ]),
-        ])
-        .wrap(Wrap { trim: true });
+        ];
+        if !file.derived_slug.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Slug: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&file.derived_slug, Style::default().fg(Color::Cyan)),
+            ]));
+        }
+        if !file.caption_slug.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("Capt: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(&file.caption_slug, Style::default().fg(Color::Cyan)),
+            ]));
+        }
+        let meta = Paragraph::new(lines).wrap(Wrap { trim: true });
         frame.render_widget(meta, chunks[0]);
     }
 
