@@ -57,6 +57,16 @@ pub struct App {
     pub shift_last_landed: Option<(usize, bool)>,
     /// Index into the filtered command-name suggestion list for Up/Down cycling.
     pub command_suggestion_idx: usize,
+    /// All unique tag types present in the library, sorted case-insensitively.
+    pub all_tag_types: Vec<String>,
+    /// Confirmed tag-type filters — OR logic: file must have at least one tag of these types.
+    pub tag_type_filters: Vec<String>,
+    /// True while the user is typing an `@type` token.
+    pub tag_type_typing: bool,
+    /// Characters typed after `@` for the type currently being entered.
+    pub tag_type_input: String,
+    /// Index into the filtered type-suggestion list for Up/Down cycling.
+    pub type_suggestion_idx: usize,
     /// One-shot status message shown in the filter bar after a command executes.
     /// Cleared on the next keypress.
     pub status_message: Option<String>,
@@ -73,12 +83,19 @@ impl App {
     ) -> Self {
         let filtered = files.clone();
         let mut tag_set: BTreeSet<String> = BTreeSet::new();
+        let mut type_set: BTreeSet<String> = BTreeSet::new();
         for f in &files {
             for tag in &f.tags {
                 tag_set.insert(tag.clone());
             }
+            for ty in &f.tag_types {
+                if !ty.is_empty() {
+                    type_set.insert(ty.clone());
+                }
+            }
         }
         let all_tags: Vec<String> = tag_set.into_iter().collect();
+        let all_tag_types: Vec<String> = type_set.into_iter().collect();
         Self {
             db_path,
             target_root,
@@ -107,6 +124,11 @@ impl App {
             selection: HashSet::new(),
             shift_last_landed: None,
             command_suggestion_idx: 0,
+            all_tag_types,
+            tag_type_filters: Vec::new(),
+            tag_type_typing: false,
+            tag_type_input: String::new(),
+            type_suggestion_idx: 0,
             status_message: None,
         }
     }
@@ -182,12 +204,31 @@ impl App {
     pub fn push_filter_char(&mut self, c: char) {
         self.status_message = None;
         if c == '#' {
+            // Abandon @-typing if active.
+            if self.tag_type_typing {
+                self.tag_type_typing = false;
+                self.tag_type_input.clear();
+                self.type_suggestion_idx = 0;
+            }
             self.tag_typing = true;
             self.tag_input.clear();
             self.suggestion_idx = 0;
+        } else if c == '@' {
+            // Abandon #-typing if active.
+            if self.tag_typing {
+                self.tag_typing = false;
+                self.tag_input.clear();
+                self.suggestion_idx = 0;
+            }
+            self.tag_type_typing = true;
+            self.tag_type_input.clear();
+            self.type_suggestion_idx = 0;
         } else if self.tag_typing {
             self.tag_input.push(c);
             self.suggestion_idx = 0;
+        } else if self.tag_type_typing {
+            self.tag_type_input.push(c);
+            self.type_suggestion_idx = 0;
         } else {
             self.filter_text.push(c);
         }
@@ -202,8 +243,17 @@ impl App {
                 self.tag_input.pop();
             }
             self.suggestion_idx = 0;
+        } else if self.tag_type_typing {
+            if self.tag_type_input.is_empty() {
+                self.tag_type_typing = false;
+            } else {
+                self.tag_type_input.pop();
+            }
+            self.type_suggestion_idx = 0;
         } else if self.filter_text.is_empty() && !self.tag_filters.is_empty() {
             self.tag_filters.pop();
+        } else if self.filter_text.is_empty() && !self.tag_type_filters.is_empty() {
+            self.tag_type_filters.pop();
         } else {
             self.filter_text.pop();
         }
@@ -216,6 +266,10 @@ impl App {
         self.tag_typing = false;
         self.tag_input.clear();
         self.suggestion_idx = 0;
+        self.tag_type_filters.clear();
+        self.tag_type_typing = false;
+        self.tag_type_input.clear();
+        self.type_suggestion_idx = 0;
         self.apply_filter();
     }
 
@@ -253,9 +307,14 @@ impl App {
 
     /// Complete the current tag input to the highlighted suggestion.
     /// In command mode, completes the command name.
+    /// In type-typing mode, completes the tag type.
     pub fn tab_complete(&mut self) {
         if self.command.is_some() {
             self.tab_complete_command();
+        } else if self.tag_type_typing {
+            if let Some(suggestion) = self.current_type_suggestion() {
+                self.tag_type_input = suggestion;
+            }
         } else if self.tag_typing {
             if let Some(suggestion) = self.current_suggestion() {
                 self.tag_input = suggestion;
@@ -279,9 +338,61 @@ impl App {
         }
     }
 
-    /// Returns true when any filter is active (text, confirmed tags, or tag being typed).
+    /// Returns true when any filter is active (text, confirmed tags/types, or tag/type being typed).
     pub fn is_filter_active(&self) -> bool {
-        !self.filter_text.is_empty() || !self.tag_filters.is_empty() || self.tag_typing
+        !self.filter_text.is_empty()
+            || !self.tag_filters.is_empty()
+            || self.tag_typing
+            || !self.tag_type_filters.is_empty()
+            || self.tag_type_typing
+    }
+
+    // ── Tag-type suggestion / autocomplete ──────────────────────────────────
+
+    /// Returns all tag types whose name starts with `tag_type_input` (case-insensitive).
+    pub fn filtered_type_suggestions(&self) -> Vec<&String> {
+        let lower = self.tag_type_input.to_lowercase();
+        self.all_tag_types
+            .iter()
+            .filter(|t| t.to_lowercase().starts_with(&lower))
+            .collect()
+    }
+
+    /// The currently highlighted type suggestion, or `None` when there are no matches.
+    pub fn current_type_suggestion(&self) -> Option<String> {
+        let suggestions = self.filtered_type_suggestions();
+        suggestions.get(self.type_suggestion_idx).map(|s| (*s).clone())
+    }
+
+    /// Confirm the current type filter: push the highlighted suggestion (or raw input)
+    /// into `tag_type_filters`, then exit type-typing mode.
+    pub fn confirm_type_filter(&mut self) {
+        let ty = self.current_type_suggestion()
+            .unwrap_or_else(|| self.tag_type_input.trim().to_lowercase());
+        let ty = ty.trim().to_string();
+        if !ty.is_empty() && !self.tag_type_filters.iter().any(|t| t.eq_ignore_ascii_case(&ty)) {
+            self.tag_type_filters.push(ty);
+        }
+        self.tag_type_typing = false;
+        self.tag_type_input.clear();
+        self.type_suggestion_idx = 0;
+        self.apply_filter();
+    }
+
+    /// Cycle type suggestion highlight downward (wraps around).
+    pub fn cycle_type_suggestion_down(&mut self) {
+        let count = self.filtered_type_suggestions().len();
+        if count > 0 {
+            self.type_suggestion_idx = (self.type_suggestion_idx + 1) % count;
+        }
+    }
+
+    /// Cycle type suggestion highlight upward (wraps around).
+    pub fn cycle_type_suggestion_up(&mut self) {
+        let count = self.filtered_type_suggestions().len();
+        if count > 0 {
+            self.type_suggestion_idx = (self.type_suggestion_idx + count - 1) % count;
+        }
     }
 
     // ── Command mode ────────────────────────────────────────────────────────
@@ -458,21 +569,28 @@ impl App {
     /// Reload `all_files` from the DB and re-apply the current filter.
     pub fn reload(&mut self) -> anyhow::Result<()> {
         self.all_files = crate::db::load_files(&self.db_path)?;
-        // Rebuild the tag set from the fresh data.
+        // Rebuild the tag and type sets from the fresh data.
         let mut tag_set: BTreeSet<String> = BTreeSet::new();
+        let mut type_set: BTreeSet<String> = BTreeSet::new();
         for f in &self.all_files {
             for tag in &f.tags {
                 tag_set.insert(tag.clone());
             }
+            for ty in &f.tag_types {
+                if !ty.is_empty() {
+                    type_set.insert(ty.clone());
+                }
+            }
         }
         self.all_tags = tag_set.into_iter().collect();
+        self.all_tag_types = type_set.into_iter().collect();
         self.apply_filter();
         Ok(())
     }
 
     pub(crate) fn apply_filter(&mut self) {
         let text_needle = self.filter_text.to_lowercase();
-        self.filtered = if text_needle.is_empty() && self.tag_filters.is_empty() {
+        self.filtered = if text_needle.is_empty() && self.tag_filters.is_empty() && self.tag_type_filters.is_empty() {
             self.all_files.clone()
         } else {
             self.all_files
@@ -480,11 +598,15 @@ impl App {
                 .filter(|f| {
                     let text_match = text_needle.is_empty()
                         || f.target_path.to_lowercase().contains(&text_needle);
+                    let type_match = self.tag_type_filters.is_empty()
+                        || self.tag_type_filters.iter().any(|ty| {
+                            f.tag_types.iter().any(|ft| ft.eq_ignore_ascii_case(ty))
+                        });
                     let tag_match = self.tag_filters.is_empty()
                         || self.tag_filters.iter().any(|t| {
                             f.tags.iter().any(|ft| ft.eq_ignore_ascii_case(t))
                         });
-                    text_match && tag_match
+                    text_match && type_match && tag_match
                 })
                 .cloned()
                 .collect()
@@ -613,6 +735,21 @@ impl App {
     /// Clear all selected files.
     pub fn clear_selection(&mut self) {
         self.selection.clear();
+        self.shift_last_landed = None;
+    }
+
+    /// Select all files in the current (filtered) result set.
+    /// If every file is already selected, deselects all instead.
+    pub fn select_all_or_none(&mut self) {
+        let n = self.filtered.len();
+        if n == 0 {
+            return;
+        }
+        if (0..n).all(|i| self.selection.contains(&i)) {
+            self.selection.clear();
+        } else {
+            self.selection.extend(0..n);
+        }
         self.shift_last_landed = None;
     }
 
