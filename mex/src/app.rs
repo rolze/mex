@@ -561,9 +561,9 @@ impl App {
         if let Some(tag_arg) = trimmed.strip_prefix("tag") {
             let tag_arg = tag_arg.trim();
             let (name, ty) = if let Some(at_pos) = tag_arg.find('@') {
-                (&tag_arg[..at_pos], tag_arg[at_pos + 1..].trim())
+                (&tag_arg[..at_pos], Some(tag_arg[at_pos + 1..].trim()))
             } else {
-                (tag_arg, "event")
+                (tag_arg, None)
             };
             let name = name.trim();
             if name.is_empty() {
@@ -649,8 +649,9 @@ impl App {
     // ── tag ──────────────────────────────────────────────────────────────────
 
     /// Apply `:tag <name>[@<type>]` to the selection set (or cursor file if
-    /// nothing is explicitly selected). Defaults to type `"event"` when omitted.
-    pub fn tag_selected(&mut self, tag_name: &str, tag_type: &str) {
+    /// nothing is explicitly selected). When `tag_type` is `None`, reuses the
+    /// existing tag's type; creates as `"event"` if the tag is new.
+    pub fn tag_selected(&mut self, tag_name: &str, tag_type: Option<&str>) {
         let ids: Vec<String> = if self.selection.is_empty() {
             self.filtered
                 .get(self.selected)
@@ -673,7 +674,7 @@ impl App {
             Err(e) => {
                 self.status_message = Some(format!("tag: {e}"));
             }
-            Ok(()) => {
+            Ok(effective_type) => {
                 let count = ids.len();
                 if let Err(e) = self.reload() {
                     self.status_message = Some(format!("tag: reload failed: {e}"));
@@ -681,7 +682,7 @@ impl App {
                 }
                 self.status_message = Some(format!(
                     "tagged {count} file(s) with {}@{}",
-                    tag_name, tag_type
+                    tag_name, effective_type
                 ));
             }
         }
@@ -1902,7 +1903,7 @@ mod tests {
     #[test]
     fn assign_tag_creates_new_tag_and_attaches() {
         let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", "event").unwrap();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name='holiday'", [], |r| r.get(0)).unwrap();
@@ -1914,8 +1915,8 @@ mod tests {
     #[test]
     fn assign_tag_reuses_existing_same_type() {
         let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", "event").unwrap();
-        crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", "event").unwrap();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", Some("event")).unwrap();
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         let tag_count: i64 = conn.query_row("SELECT COUNT(*) FROM tags WHERE name='holiday'", [], |r| r.get(0)).unwrap();
@@ -1928,8 +1929,8 @@ mod tests {
     #[test]
     fn assign_tag_errors_on_type_mismatch() {
         let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", "event").unwrap();
-        let result = crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", "person");
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        let result = crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", Some("person"));
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("already exists as type"), "unexpected error: {msg}");
@@ -1938,8 +1939,8 @@ mod tests {
     #[test]
     fn assign_tag_duplicate_on_same_file_is_noop() {
         let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", "event").unwrap();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", "event").unwrap();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0)).unwrap();
@@ -1949,11 +1950,27 @@ mod tests {
     #[test]
     fn assign_tag_defaults_to_event_type() {
         let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "trip", "event").unwrap();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "trip", None).unwrap();
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
         let ty: String = conn.query_row("SELECT type FROM tags WHERE name='trip'", [], |r| r.get(0)).unwrap();
         assert_eq!(ty, "event");
+    }
+
+    #[test]
+    fn assign_tag_omit_type_reuses_existing_any_type() {
+        let (_dir, db_path) = make_tag_db();
+        // Create tag with type "person"
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "alice", Some("person")).unwrap();
+        // Assign same tag without specifying type — must not error
+        let result = crate::db::assign_tag(&db_path, &["m2".to_string()], "alice", None);
+        assert!(result.is_ok(), "omitting @type should reuse existing tag, got: {:?}", result);
+        let effective = result.unwrap();
+        assert_eq!(effective, "person");
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let link_count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0)).unwrap();
+        assert_eq!(link_count, 2);
     }
 
     #[test]
