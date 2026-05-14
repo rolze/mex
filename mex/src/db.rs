@@ -78,21 +78,23 @@ pub fn folder_of(path: &str) -> &str {
 
 /// Attach a tag (name + type) to each media file in `media_ids`.
 ///
-/// - If the tag name does not exist it is created with the given type.
-/// - If the tag name already exists with the **same** type (case-insensitive),
-///   it is reused.
-/// - If the tag name already exists with a **different** type, an error is
-///   returned and no changes are made.
-/// - Files that already carry the tag are silently skipped (INSERT OR IGNORE).
+/// `tag_type`:
+/// - `Some(ty)` — explicit type: reuse if existing type matches (case-insensitive),
+///   error if it differs, create with `ty` if new.
+/// - `None` — type omitted: reuse the tag regardless of its existing type,
+///   or create it as `"event"` if it does not yet exist.
+///
+/// Files that already carry the tag are silently skipped (INSERT OR IGNORE).
+///
+/// Returns the effective tag type that was used (for status messages).
 pub fn assign_tag(
     db_path: &str,
     media_ids: &[String],
     tag_name: &str,
-    tag_type: &str,
-) -> Result<()> {
+    tag_type: Option<&str>,
+) -> Result<String> {
     let conn = Connection::open(db_path)?;
 
-    // Look up or create the tag.
     let existing: Option<(i64, String)> = conn
         .query_row(
             "SELECT id, type FROM tags WHERE name = ?1 COLLATE NOCASE",
@@ -101,23 +103,26 @@ pub fn assign_tag(
         )
         .optional()?;
 
-    let tag_id = match existing {
+    let (tag_id, effective_type) = match existing {
         Some((id, existing_type)) => {
-            if !existing_type.eq_ignore_ascii_case(tag_type) {
-                return Err(anyhow::anyhow!(
-                    "tag '{}' already exists as type '{}'",
-                    tag_name,
-                    existing_type
-                ));
+            if let Some(requested) = tag_type {
+                if !existing_type.eq_ignore_ascii_case(requested) {
+                    return Err(anyhow::anyhow!(
+                        "tag '{}' already exists as type '{}'",
+                        tag_name,
+                        existing_type
+                    ));
+                }
             }
-            id
+            (id, existing_type)
         }
         None => {
+            let ty = tag_type.unwrap_or("event");
             conn.execute(
                 "INSERT INTO tags (name, type) VALUES (?1, ?2)",
-                rusqlite::params![tag_name, tag_type],
+                rusqlite::params![tag_name, ty],
             )?;
-            conn.last_insert_rowid()
+            (conn.last_insert_rowid(), ty.to_string())
         }
     };
 
@@ -128,7 +133,7 @@ pub fn assign_tag(
         )?;
     }
 
-    Ok(())
+    Ok(effective_type)
 }
 
 /// Replace the date prefix in a MEX basename with `new_date` (`yyyy-mm-dd`).
