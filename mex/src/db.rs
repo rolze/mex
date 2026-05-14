@@ -136,6 +136,43 @@ pub fn assign_tag(
     Ok(effective_type)
 }
 
+/// Remove tags from media files.
+///
+/// - `tag_names` empty → remove **all** tags from every file in `media_ids`.
+/// - `tag_names` non-empty → remove only the named tags (case-insensitive).
+///
+/// Returns the number of `media_tags` rows deleted.
+pub fn remove_tags(
+    db_path: &str,
+    media_ids: &[String],
+    tag_names: &[String],
+) -> Result<usize> {
+    if media_ids.is_empty() {
+        return Ok(0);
+    }
+
+    let conn = Connection::open(db_path)?;
+
+    let id_ph: String = std::iter::repeat("?").take(media_ids.len()).collect::<Vec<_>>().join(",");
+
+    let removed = if tag_names.is_empty() {
+        conn.execute(
+            &format!("DELETE FROM media_tags WHERE media_id IN ({id_ph})"),
+            rusqlite::params_from_iter(media_ids),
+        )?
+    } else {
+        let name_ph: String = std::iter::repeat("?").take(tag_names.len()).collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "DELETE FROM media_tags WHERE media_id IN ({id_ph}) \
+             AND tag_id IN (SELECT id FROM tags WHERE name IN ({name_ph}) COLLATE NOCASE)"
+        );
+        let params: Vec<&String> = media_ids.iter().chain(tag_names.iter()).collect();
+        conn.execute(&sql, rusqlite::params_from_iter(params))?
+    };
+
+    Ok(removed)
+}
+
 /// Replace the date prefix in a MEX basename with `new_date` (`yyyy-mm-dd`).
 ///
 /// Handles two filename formats:
