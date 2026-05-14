@@ -1,7 +1,11 @@
 use crate::db::MediaFile;
 use image::DynamicImage;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
-use std::{collections::{HashMap, HashSet}, path::PathBuf};
+use std::{collections::{BTreeSet, HashMap, HashSet}, path::PathBuf};
+
+/// All command names recognised by the command bar, in alphabetical order.
+/// Used for command-name autocompletion (analogous to tag autocompletion).
+const KNOWN_COMMANDS: &[&str] = &["fix-date", "q", "quit"];
 
 const CACHE_MAX: usize = 30;
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
@@ -13,7 +17,18 @@ pub struct App {
     pub filtered: Vec<MediaFile>,
     pub selected: usize,
     pub scroll_offset: usize,
-    pub filter: String,
+    /// Free-text search term (matches filenames only, not tags).
+    pub filter_text: String,
+    /// Confirmed tag filters — OR logic: file must have at least one of these tags.
+    pub tag_filters: Vec<String>,
+    /// True while the user is typing a `#tag` token (between `#` and Enter/Tab).
+    pub tag_typing: bool,
+    /// Characters typed after `#` for the tag currently being entered.
+    pub tag_input: String,
+    /// All unique tags present in the library, sorted case-insensitively.
+    pub all_tags: Vec<String>,
+    /// Index into the filtered suggestion list for Up/Down cycling.
+    pub suggestion_idx: usize,
     /// Active command being typed (`:q`, etc.). `None` = search/normal mode.
     pub command: Option<String>,
     pub preview_open: bool,
@@ -40,6 +55,11 @@ pub struct App {
     /// from the same position, the current item is NOT toggled again (it was already
     /// toggled as "landed" by the previous step).
     pub shift_last_landed: Option<(usize, bool)>,
+    /// Index into the filtered command-name suggestion list for Up/Down cycling.
+    pub command_suggestion_idx: usize,
+    /// One-shot status message shown in the filter bar after a command executes.
+    /// Cleared on the next keypress.
+    pub status_message: Option<String>,
 }
 
 impl App {
@@ -52,6 +72,13 @@ impl App {
         image_protocol_name: String,
     ) -> Self {
         let filtered = files.clone();
+        let mut tag_set: BTreeSet<String> = BTreeSet::new();
+        for f in &files {
+            for tag in &f.tags {
+                tag_set.insert(tag.clone());
+            }
+        }
+        let all_tags: Vec<String> = tag_set.into_iter().collect();
         Self {
             db_path,
             target_root,
@@ -59,7 +86,12 @@ impl App {
             filtered,
             selected: 0,
             scroll_offset: 0,
-            filter: String::new(),
+            filter_text: String::new(),
+            tag_filters: Vec::new(),
+            tag_typing: false,
+            tag_input: String::new(),
+            all_tags,
+            suggestion_idx: 0,
             command: None,
             preview_open: false,
             list_height: 20,
@@ -74,6 +106,8 @@ impl App {
             quit: false,
             selection: HashSet::new(),
             shift_last_landed: None,
+            command_suggestion_idx: 0,
+            status_message: None,
         }
     }
 
@@ -146,18 +180,108 @@ impl App {
     }
 
     pub fn push_filter_char(&mut self, c: char) {
-        self.filter.push(c);
+        self.status_message = None;
+        if c == '#' {
+            self.tag_typing = true;
+            self.tag_input.clear();
+            self.suggestion_idx = 0;
+        } else if self.tag_typing {
+            self.tag_input.push(c);
+            self.suggestion_idx = 0;
+        } else {
+            self.filter_text.push(c);
+        }
         self.apply_filter();
     }
 
     pub fn pop_filter_char(&mut self) {
-        self.filter.pop();
+        if self.tag_typing {
+            if self.tag_input.is_empty() {
+                self.tag_typing = false;
+            } else {
+                self.tag_input.pop();
+            }
+            self.suggestion_idx = 0;
+        } else if self.filter_text.is_empty() && !self.tag_filters.is_empty() {
+            self.tag_filters.pop();
+        } else {
+            self.filter_text.pop();
+        }
         self.apply_filter();
     }
 
     pub fn clear_filter(&mut self) {
-        self.filter.clear();
+        self.filter_text.clear();
+        self.tag_filters.clear();
+        self.tag_typing = false;
+        self.tag_input.clear();
+        self.suggestion_idx = 0;
         self.apply_filter();
+    }
+
+    // ── Tag suggestion / autocomplete ────────────────────────────────────────
+
+    /// Returns all tags whose name starts with the current `tag_input` (case-insensitive).
+    pub fn filtered_tag_suggestions(&self) -> Vec<&String> {
+        let lower = self.tag_input.to_lowercase();
+        self.all_tags
+            .iter()
+            .filter(|t| t.to_lowercase().starts_with(&lower))
+            .collect()
+    }
+
+    /// The currently highlighted suggestion, or `None` when there are no matches.
+    pub fn current_suggestion(&self) -> Option<String> {
+        let suggestions = self.filtered_tag_suggestions();
+        suggestions.get(self.suggestion_idx).map(|s| (*s).clone())
+    }
+
+    /// Confirm the current tag: push the highlighted suggestion (or the raw
+    /// input if there is none) into `tag_filters`, then exit tag-typing mode.
+    pub fn confirm_tag(&mut self) {
+        let tag = self.current_suggestion()
+            .unwrap_or_else(|| self.tag_input.trim().to_lowercase());
+        let tag = tag.trim().to_string();
+        if !tag.is_empty() && !self.tag_filters.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
+            self.tag_filters.push(tag);
+        }
+        self.tag_typing = false;
+        self.tag_input.clear();
+        self.suggestion_idx = 0;
+        self.apply_filter();
+    }
+
+    /// Complete the current tag input to the highlighted suggestion.
+    /// In command mode, completes the command name.
+    pub fn tab_complete(&mut self) {
+        if self.command.is_some() {
+            self.tab_complete_command();
+        } else if self.tag_typing {
+            if let Some(suggestion) = self.current_suggestion() {
+                self.tag_input = suggestion;
+            }
+        }
+    }
+
+    /// Cycle the suggestion highlight downward (wraps around).
+    pub fn cycle_suggestion_down(&mut self) {
+        let count = self.filtered_tag_suggestions().len();
+        if count > 0 {
+            self.suggestion_idx = (self.suggestion_idx + 1) % count;
+        }
+    }
+
+    /// Cycle the suggestion highlight upward (wraps around).
+    pub fn cycle_suggestion_up(&mut self) {
+        let count = self.filtered_tag_suggestions().len();
+        if count > 0 {
+            self.suggestion_idx = (self.suggestion_idx + count - 1) % count;
+        }
+    }
+
+    /// Returns true when any filter is active (text, confirmed tags, or tag being typed).
+    pub fn is_filter_active(&self) -> bool {
+        !self.filter_text.is_empty() || !self.tag_filters.is_empty() || self.tag_typing
     }
 
     // ── Command mode ────────────────────────────────────────────────────────
@@ -165,47 +289,202 @@ impl App {
     /// Enter `:` command mode. Typing a command string and pressing Enter
     /// executes it. All letters are otherwise reserved for live search.
     pub fn enter_command_mode(&mut self) {
+        self.status_message = None;
         self.command = Some(String::new());
+        self.command_suggestion_idx = 0;
     }
 
     pub fn push_command_char(&mut self, c: char) {
         if let Some(ref mut cmd) = self.command {
             cmd.push(c);
+            self.command_suggestion_idx = 0;
         }
     }
 
     /// Pop last char from command buffer; cancel command mode if buffer is empty.
     pub fn pop_command_char(&mut self) {
         match self.command {
-            Some(ref mut cmd) if !cmd.is_empty() => { cmd.pop(); }
+            Some(ref mut cmd) if !cmd.is_empty() => {
+                cmd.pop();
+                self.command_suggestion_idx = 0;
+            }
             _ => self.command = None,
         }
     }
 
     pub fn cancel_command(&mut self) {
         self.command = None;
+        self.command_suggestion_idx = 0;
+    }
+
+    // ── Command-name autocompletion ──────────────────────────────────────────
+
+    /// Returns known command names that start with the typed prefix (before the
+    /// first space). Returns all commands when the buffer is empty.
+    pub fn command_name_suggestions(&self) -> Vec<&'static str> {
+        let prefix = self.command.as_deref().unwrap_or("").to_lowercase();
+        // Only complete the command-name part (before any space/argument).
+        let name_prefix = prefix.split_once(' ').map(|(n, _)| n).unwrap_or(&prefix);
+        KNOWN_COMMANDS
+            .iter()
+            .copied()
+            .filter(|cmd| cmd.starts_with(name_prefix))
+            .collect()
+    }
+
+    /// The currently highlighted command-name suggestion, or `None` when none match.
+    pub fn current_command_suggestion(&self) -> Option<&'static str> {
+        let suggestions = self.command_name_suggestions();
+        suggestions.get(self.command_suggestion_idx).copied()
+    }
+
+    /// Complete the command buffer to the highlighted command-name suggestion + space.
+    pub fn tab_complete_command(&mut self) {
+        if let Some(suggestion) = self.current_command_suggestion() {
+            // Only fill if we are still typing the command name (no space yet).
+            let has_arg = self.command.as_deref().unwrap_or("").contains(' ');
+            if !has_arg {
+                self.command = Some(format!("{} ", suggestion));
+                self.command_suggestion_idx = 0;
+            }
+        }
+    }
+
+    pub fn cycle_command_suggestion_down(&mut self) {
+        let count = self.command_name_suggestions().len();
+        if count > 0 {
+            self.command_suggestion_idx = (self.command_suggestion_idx + 1) % count;
+        }
+    }
+
+    pub fn cycle_command_suggestion_up(&mut self) {
+        let count = self.command_name_suggestions().len();
+        if count > 0 {
+            self.command_suggestion_idx =
+                (self.command_suggestion_idx + count - 1) % count;
+        }
     }
 
     /// Execute the current command. Sets `self.quit` for `:q` / `:quit`.
     /// Clears command mode regardless of outcome.
     pub fn execute_command(&mut self) {
         let cmd = self.command.take().unwrap_or_default();
-        match cmd.trim() {
-            "q" | "quit" => self.quit = true,
-            _ => {} // unknown command — silently ignore for now
+        self.command_suggestion_idx = 0;
+        let trimmed = cmd.trim();
+
+        if trimmed == "q" || trimmed == "quit" {
+            self.quit = true;
+            return;
+        }
+
+        if let Some(date_arg) = trimmed.strip_prefix("fix-date") {
+            let date_str = date_arg.trim();
+            self.fix_date_selected(date_str);
+            return;
+        }
+
+        if !trimmed.is_empty() {
+            self.status_message = Some(format!("Unknown command: {trimmed}"));
         }
     }
 
-    fn apply_filter(&mut self) {
-        let needle = self.filter.to_lowercase();
-        self.filtered = if needle.is_empty() {
+    // ── fix-date ─────────────────────────────────────────────────────────────
+
+    /// Apply `:fix-date <yyyy-mm-dd>` to the selection set (or cursor file
+    /// if nothing is explicitly selected).
+    pub fn fix_date_selected(&mut self, date_str: &str) {
+        if !is_valid_date(date_str) {
+            self.status_message = Some(format!("fix-date: invalid date '{date_str}' (expected yyyy-mm-dd)"));
+            return;
+        }
+
+        // Collect file IDs to fix.
+        let ids: Vec<String> = if self.selection.is_empty() {
+            self.filtered
+                .get(self.selected)
+                .map(|f| vec![f.id.clone()])
+                .unwrap_or_default()
+        } else {
+            let mut sel: Vec<usize> = self.selection.iter().copied().collect();
+            sel.sort_unstable();
+            sel.iter()
+                .filter_map(|&i| self.filtered.get(i).map(|f| f.id.clone()))
+                .collect()
+        };
+
+        if ids.is_empty() {
+            self.status_message = Some("fix-date: no file selected".into());
+            return;
+        }
+
+        let mut errors = 0usize;
+        let mut first_error: Option<String> = None;
+        for id in &ids {
+            if let Err(e) = crate::db::fix_date(&self.db_path, &self.target_root, id, date_str) {
+                eprintln!("fix-date error for {id}: {e}");
+                if first_error.is_none() {
+                    first_error = Some(e.to_string());
+                }
+                errors += 1;
+            }
+        }
+
+        // Reload file list from DB.
+        if let Err(e) = self.reload() {
+            self.status_message = Some(format!("fix-date: reload failed: {e}"));
+            return;
+        }
+
+        if errors == 0 {
+            self.status_message = Some(format!(
+                "fix-date: updated {} file(s) to {}",
+                ids.len(),
+                date_str
+            ));
+        } else if let Some(msg) = first_error {
+            self.status_message = Some(format!(
+                "fix-date: {} error(s) — {}",
+                errors, msg
+            ));
+        } else {
+            self.status_message = Some(format!(
+                "fix-date: {} updated, {} error(s)",
+                ids.len() - errors,
+                errors
+            ));
+        }
+    }
+
+    /// Reload `all_files` from the DB and re-apply the current filter.
+    pub fn reload(&mut self) -> anyhow::Result<()> {
+        self.all_files = crate::db::load_files(&self.db_path)?;
+        // Rebuild the tag set from the fresh data.
+        let mut tag_set: BTreeSet<String> = BTreeSet::new();
+        for f in &self.all_files {
+            for tag in &f.tags {
+                tag_set.insert(tag.clone());
+            }
+        }
+        self.all_tags = tag_set.into_iter().collect();
+        self.apply_filter();
+        Ok(())
+    }
+
+    pub(crate) fn apply_filter(&mut self) {
+        let text_needle = self.filter_text.to_lowercase();
+        self.filtered = if text_needle.is_empty() && self.tag_filters.is_empty() {
             self.all_files.clone()
         } else {
             self.all_files
                 .iter()
                 .filter(|f| {
-                    f.target_path.to_lowercase().contains(&needle)
-                        || f.tags.iter().any(|t| t.to_lowercase().contains(&needle))
+                    let text_match = text_needle.is_empty()
+                        || f.target_path.to_lowercase().contains(&text_needle);
+                    let tag_match = self.tag_filters.is_empty()
+                        || self.tag_filters.iter().any(|t| {
+                            f.tags.iter().any(|ft| ft.eq_ignore_ascii_case(t))
+                        });
+                    text_match && tag_match
                 })
                 .cloned()
                 .collect()
@@ -321,6 +600,9 @@ impl App {
 
     /// Toggle the current cursor row in/out of the selection set.
     pub fn toggle_selection(&mut self) {
+        if self.filtered.is_empty() {
+            return;
+        }
         if self.selection.contains(&self.selected) {
             self.selection.remove(&self.selected);
         } else {
@@ -486,6 +768,20 @@ impl App {
     }
 }
 
+/// Returns true if `s` is a valid `yyyy-mm-dd` date string.
+fn is_valid_date(s: &str) -> bool {
+    if s.len() != 10 { return false; }
+    let b = s.as_bytes();
+    if b[4] != b'-' || b[7] != b'-' { return false; }
+    let ok_digits = |slice: &[u8]| slice.iter().all(|c| c.is_ascii_digit());
+    if !ok_digits(&b[0..4]) || !ok_digits(&b[5..7]) || !ok_digits(&b[8..10]) {
+        return false;
+    }
+    let month: u8 = s[5..7].parse().unwrap_or(0);
+    let day: u8 = s[8..10].parse().unwrap_or(0);
+    month >= 1 && month <= 12 && day >= 1 && day <= 31
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -547,6 +843,7 @@ mod tests {
                 tags: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
+                os_date: String::new(),
             })
             .collect();
         App::new("test.db".into(), root, files, picker, image_state, "halfblocks".into())
@@ -570,6 +867,7 @@ mod tests {
                 tags: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
+                os_date: String::new(),
             })
             .collect();
         // Extra placeholder rows (non-existent paths — preview will clear gracefully).
@@ -582,6 +880,7 @@ mod tests {
                 tags: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
+                os_date: String::new(),
             });
         }
         App::new("test.db".into(), root, files, picker, image_state, "halfblocks".into())
@@ -766,6 +1065,7 @@ mod tests {
                     tags: vec![],
                     derived_slug,
                     caption_slug: String::new(),
+                    os_date: String::new(),
                 });
                 idx += 1;
             }
@@ -1042,5 +1342,272 @@ mod tests {
         // Simulate second Esc: closes preview
         app.preview_open = false;
         assert!(!app.preview_open);
+    }
+
+    // ── UC-05 · Tag filtering ────────────────────────────────────────────────
+
+    /// Build a test App where each entry is `(target_path, tags)`.
+    fn make_tagged_app(entries: &[(&str, &[&str])]) -> App {
+        let (tx, _rx) = mpsc::channel();
+        let image_state = ThreadProtocol::new(tx, None);
+        let picker = Picker::halfblocks();
+        let files: Vec<crate::db::MediaFile> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, (path, tags))| crate::db::MediaFile {
+                id: i.to_string(),
+                target_path: path.to_string(),
+                derived_date: "2024-01-01".into(),
+                ext: path.rsplit('.').next().unwrap_or("").into(),
+                tags: tags.iter().map(|s| s.to_string()).collect(),
+                derived_slug: String::new(),
+                caption_slug: String::new(),
+                os_date: String::new(),
+            })
+            .collect();
+        App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into())
+    }
+
+    #[test]
+    fn tag_filter_single() {
+        let mut app = make_tagged_app(&[
+            ("2023/a.jpg", &["travel"]),
+            ("2023/b.jpg", &["work"]),
+            ("2023/c.jpg", &[]),
+        ]);
+        app.tag_filters.push("travel".into());
+        app.apply_filter();
+        assert_eq!(app.filtered.len(), 1);
+        assert_eq!(app.filtered[0].target_path, "2023/a.jpg");
+    }
+
+    #[test]
+    fn tag_filter_or_logic() {
+        let mut app = make_tagged_app(&[
+            ("2023/a.jpg", &["travel"]),
+            ("2023/b.jpg", &["holiday"]),
+            ("2023/c.jpg", &["work"]),
+        ]);
+        app.tag_filters.push("travel".into());
+        app.tag_filters.push("holiday".into());
+        app.apply_filter();
+        assert_eq!(app.filtered.len(), 2);
+    }
+
+    #[test]
+    fn tag_filter_case_insensitive() {
+        let mut app = make_tagged_app(&[
+            ("a.jpg", &["Travel"]),
+            ("b.jpg", &["work"]),
+        ]);
+        app.tag_filters.push("TRAVEL".into());
+        app.apply_filter();
+        assert_eq!(app.filtered.len(), 1);
+        assert_eq!(app.filtered[0].target_path, "a.jpg");
+    }
+
+    #[test]
+    fn text_filter_skips_tags() {
+        let mut app = make_tagged_app(&[
+            ("photo.jpg", &["travel"]),
+            ("travel.jpg", &["work"]),
+        ]);
+        // "travel" as text should match filename only, not the tag
+        app.filter_text = "travel".into();
+        app.apply_filter();
+        assert_eq!(app.filtered.len(), 1);
+        assert_eq!(app.filtered[0].target_path, "travel.jpg");
+    }
+
+    #[test]
+    fn combined_filter_and_logic() {
+        let mut app = make_tagged_app(&[
+            ("vacation.jpg", &["travel"]),   // text match + tag match → include
+            ("vacation.jpg2", &["work"]),    // text match, tag no match → exclude
+            ("other.jpg", &["travel"]),      // tag match, text no match → exclude
+        ]);
+        app.filter_text = "vacation".into();
+        app.tag_filters.push("travel".into());
+        app.apply_filter();
+        assert_eq!(app.filtered.len(), 1);
+        assert_eq!(app.filtered[0].target_path, "vacation.jpg");
+    }
+
+    #[test]
+    fn tag_autocomplete_suggestion() {
+        let app = make_tagged_app(&[
+            ("a.jpg", &["travel", "work"]),
+        ]);
+        // all_tags should be ["travel", "work"] (sorted)
+        assert!(app.all_tags.contains(&"travel".to_string()));
+        assert!(app.all_tags.contains(&"work".to_string()));
+        // Simulate typing "#tra"
+        let mut app2 = make_tagged_app(&[("a.jpg", &["travel", "trail"])]);
+        app2.tag_typing = true;
+        app2.tag_input = "tra".into();
+        let suggestions = app2.filtered_tag_suggestions();
+        assert!(suggestions.iter().any(|s| s.as_str() == "travel"));
+        assert!(suggestions.iter().any(|s| s.as_str() == "trail"));
+        // "work" should not appear
+        assert!(!suggestions.iter().any(|s| s.as_str() == "work"));
+    }
+
+    #[test]
+    fn tab_complete_fills_input() {
+        let mut app = make_tagged_app(&[("a.jpg", &["travel"])]);
+        app.tag_typing = true;
+        app.tag_input = "tra".into();
+        app.tab_complete();
+        assert_eq!(app.tag_input, "travel");
+    }
+
+    #[test]
+    fn backspace_exits_tag_mode() {
+        let mut app = make_tagged_app(&[("a.jpg", &["travel"])]);
+        app.tag_typing = true;
+        app.tag_input.clear(); // empty tag_input
+        app.pop_filter_char();
+        assert!(!app.tag_typing, "backspace on empty tag_input should exit tag_typing");
+    }
+
+    #[test]
+    fn backspace_removes_last_tag() {
+        let mut app = make_tagged_app(&[("a.jpg", &["travel", "work"])]);
+        app.tag_filters.push("travel".into());
+        app.tag_filters.push("work".into());
+        // filter_text is empty and not tag_typing
+        app.pop_filter_char();
+        assert_eq!(app.tag_filters.len(), 1);
+        assert_eq!(app.tag_filters[0], "travel");
+    }
+
+    #[test]
+    fn confirm_tag_adds_to_filters() {
+        let mut app = make_tagged_app(&[("a.jpg", &["travel"])]);
+        app.tag_typing = true;
+        app.tag_input = "travel".into();
+        app.confirm_tag();
+        assert!(!app.tag_typing);
+        assert!(app.tag_filters.contains(&"travel".to_string()));
+        assert!(app.tag_input.is_empty());
+    }
+
+    #[test]
+    fn confirm_tag_no_duplicates() {
+        let mut app = make_tagged_app(&[("a.jpg", &["travel"])]);
+        app.tag_filters.push("travel".into());
+        app.tag_typing = true;
+        app.tag_input = "TRAVEL".into();
+        app.confirm_tag();
+        // Should not add again (case-insensitive dedup)
+        assert_eq!(app.tag_filters.len(), 1);
+    }
+
+    #[test]
+    fn clear_filter_resets_all() {
+        let mut app = make_tagged_app(&[("a.jpg", &["travel"])]);
+        app.filter_text = "foo".into();
+        app.tag_filters.push("travel".into());
+        app.tag_typing = true;
+        app.tag_input = "tra".into();
+        app.suggestion_idx = 1;
+        app.clear_filter();
+        assert!(app.filter_text.is_empty());
+        assert!(app.tag_filters.is_empty());
+        assert!(!app.tag_typing);
+        assert!(app.tag_input.is_empty());
+        assert_eq!(app.suggestion_idx, 0);
+    }
+
+    // ── UC-07 command autocomplete ───────────────────────────────────────────
+
+    fn make_cmd_app() -> App {
+        let (tx, _rx) = mpsc::channel();
+        let image_state = ThreadProtocol::new(tx, None);
+        let picker = Picker::halfblocks();
+        App::new("test.db".into(), String::new(), vec![], picker, image_state, "halfblocks".into())
+    }
+
+    #[test]
+    fn command_suggestion_prefix() {
+        let mut app = make_cmd_app();
+        app.enter_command_mode();
+        "fix".chars().for_each(|c| app.push_command_char(c));
+        let suggestions = app.command_name_suggestions();
+        assert!(suggestions.contains(&"fix-date"), "typing 'fix' should suggest 'fix-date'");
+    }
+
+    #[test]
+    fn command_suggestion_full_name() {
+        let mut app = make_cmd_app();
+        app.enter_command_mode();
+        "fix-date".chars().for_each(|c| app.push_command_char(c));
+        let suggestions = app.command_name_suggestions();
+        assert!(suggestions.contains(&"fix-date"), "exact command name still shows suggestion");
+    }
+
+    #[test]
+    fn command_suggestion_empty_returns_all() {
+        let mut app = make_cmd_app();
+        app.enter_command_mode();
+        let suggestions = app.command_name_suggestions();
+        assert_eq!(suggestions.len(), KNOWN_COMMANDS.len());
+    }
+
+    #[test]
+    fn command_suggestion_no_match() {
+        let mut app = make_cmd_app();
+        app.enter_command_mode();
+        "zzz".chars().for_each(|c| app.push_command_char(c));
+        assert!(app.command_name_suggestions().is_empty());
+    }
+
+    #[test]
+    fn tab_complete_fills_command_name() {
+        let mut app = make_cmd_app();
+        app.enter_command_mode();
+        "fix".chars().for_each(|c| app.push_command_char(c));
+        app.tab_complete();
+        assert_eq!(app.command.as_deref(), Some("fix-date "));
+    }
+
+    #[test]
+    fn tab_complete_no_fill_after_space() {
+        let mut app = make_cmd_app();
+        app.enter_command_mode();
+        "fix-date 2024-01-01".chars().for_each(|c| app.push_command_char(c));
+        app.tab_complete();
+        // Should not overwrite the argument.
+        assert_eq!(app.command.as_deref(), Some("fix-date 2024-01-01"));
+    }
+
+    #[test]
+    fn fix_date_invalid_format_sets_status() {
+        let mut app = make_cmd_app();
+        app.fix_date_selected("not-a-date");
+        assert!(app.status_message.is_some());
+        let msg = app.status_message.as_deref().unwrap_or("");
+        assert!(msg.contains("invalid date"), "expected invalid date msg, got: {msg}");
+    }
+
+    #[test]
+    fn fix_date_invalid_month_sets_status() {
+        let mut app = make_cmd_app();
+        app.fix_date_selected("2024-13-01");
+        assert!(app.status_message.is_some());
+    }
+
+    #[test]
+    fn is_valid_date_valid() {
+        assert!(is_valid_date("2024-01-01"));
+        assert!(is_valid_date("2000-12-31"));
+    }
+
+    #[test]
+    fn is_valid_date_invalid() {
+        assert!(!is_valid_date("2024-1-1"));
+        assert!(!is_valid_date("2024-13-01"));
+        assert!(!is_valid_date("not-date-x"));
+        assert!(!is_valid_date(""));
     }
 }

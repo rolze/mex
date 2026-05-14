@@ -150,7 +150,10 @@ fn run_loop(
 
         if event::poll(std::time::Duration::from_millis(16))? {
             match event::read()? {
-                Event::Key(key) => match (key.modifiers, key.code) {
+                Event::Key(key) => {
+                    // Any keypress clears a displayed status message.
+                    app.status_message = None;
+                    match (key.modifiers, key.code) {
                     // Esc: cancel command → clear selection → close preview → clear filter
                     (_, KeyCode::Esc) => {
                         if app.command.is_some() {
@@ -170,8 +173,24 @@ fn run_loop(
                     (KeyModifiers::SHIFT, KeyCode::Down) => app.extend_selection_down(),
                     (KeyModifiers::SHIFT, KeyCode::Home) => app.jump_slug_day_prev(),
                     (KeyModifiers::SHIFT, KeyCode::End)  => app.jump_slug_day_next(),
-                    (_, KeyCode::Down)  => app.move_down(),
-                    (_, KeyCode::Up)    => app.move_up(),
+                    (_, KeyCode::Down)  => {
+                        if app.tag_typing {
+                            app.cycle_suggestion_down();
+                        } else if app.command.is_some() {
+                            app.cycle_command_suggestion_down();
+                        } else {
+                            app.move_down();
+                        }
+                    }
+                    (_, KeyCode::Up)    => {
+                        if app.tag_typing {
+                            app.cycle_suggestion_up();
+                        } else if app.command.is_some() {
+                            app.cycle_command_suggestion_up();
+                        } else {
+                            app.move_up();
+                        }
+                    }
                     (_, KeyCode::Home)  => app.jump_home(),
                     (_, KeyCode::End)   => app.jump_end(),
                     (KeyModifiers::CONTROL, KeyCode::Char('d')) => app.half_page_down(),
@@ -179,9 +198,11 @@ fn run_loop(
                     (_, KeyCode::PageDown) => app.page_down(),
                     (_, KeyCode::PageUp)   => app.page_up(),
 
-                    // Preview toggle (only when not in command mode)
+                    // Preview toggle / tag confirm / command execute
                     (_, KeyCode::Enter) => {
-                        if app.command.is_some() {
+                        if app.tag_typing {
+                            app.confirm_tag();
+                        } else if app.command.is_some() {
                             app.execute_command();
                         } else {
                             app.toggle_preview();
@@ -198,6 +219,9 @@ fn run_loop(
                         }
                     }
 
+                    // Tab: complete current tag suggestion
+                    (_, KeyCode::Tab) => app.tab_complete(),
+
                     // ':' enters command mode
                     (_, KeyCode::Char(':')) => app.enter_command_mode(),
 
@@ -211,6 +235,7 @@ fn run_loop(
                     }
 
                     _ => {}
+                    }
                 }
 
                 _ => {}

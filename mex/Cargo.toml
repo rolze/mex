@@ -14,3 +14,4 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 anyhow = "1"
 ratatui-image = { version = "11", default-features = false, features = ["image-defaults", "crossterm"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+filetime = "0.2"
