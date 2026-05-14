@@ -55,14 +55,14 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
     let pos = if filtered == 0 { 0 } else { app.selected + 1 };
 
     let title = if app.selection.is_empty() {
-        if app.filter.is_empty() {
+        if !app.is_filter_active() {
             format!(" mex — {} / {} ", pos, total)
         } else {
             format!(" mex — {} / {} / {} ", pos, filtered, total)
         }
     } else {
         let sel = app.selection.len();
-        if app.filter.is_empty() {
+        if !app.is_filter_active() {
             format!(" mex — {} / {} ({} selected) ", pos, total, sel)
         } else {
             format!(" mex — {} / {} / {} ({} selected) ", pos, filtered, total, sel)
@@ -112,32 +112,70 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             // Pad to fixed width
             let filename_padded = format!("{:<width$}", filename_cell, width = filename_col);
 
-            // Highlight the first non-empty of (derived_slug, caption_slug) inside the filename.
-            let highlight: &str = if !f.derived_slug.is_empty() { &f.derived_slug }
-                                  else if !f.caption_slug.is_empty() { &f.caption_slug }
-                                  else { "" };
+            // Highlight slug (cyan+bold) and caption (dark-yellow+bold) independently.
+            let slug_hi: &str    = if !f.derived_slug.is_empty()  { &f.derived_slug  } else { "" };
+            let caption_hi: &str = if !f.caption_slug.is_empty() { &f.caption_slug } else { "" };
 
-            let base_fg = if is_cursor { Color::Black } else { Color::White };
-            let filename_spans: Vec<Span> = if !highlight.is_empty() {
-                if let Some(pos) = filename_padded.find(highlight) {
-                    let (before, rest) = filename_padded.split_at(pos);
-                    let (matched, after) = rest.split_at(highlight.len().min(rest.len()));
-                    let hi_fg = if is_cursor { Color::Black } else { Color::Cyan };
-                    vec![
-                        Span::styled(before.to_string(), base_style.fg(base_fg)),
-                        Span::styled(matched.to_string(), base_style.fg(hi_fg).add_modifier(Modifier::BOLD)),
-                        Span::styled(after.to_string(), base_style.fg(base_fg)),
-                    ]
-                } else {
-                    vec![Span::styled(filename_padded, base_style.fg(base_fg))]
+            let base_fg    = if is_cursor { Color::Black } else { Color::White };
+            let slug_fg    = if is_cursor { Color::Black } else { Color::Cyan };
+            let caption_fg = if is_cursor { Color::Black } else { Color::Yellow };
+
+            // Build fg highlight regions: (start_byte, end_byte, fg_color); slug before caption.
+            let mut regions: Vec<(usize, usize, Color)> = Vec::new();
+            if !slug_hi.is_empty() {
+                if let Some(pos) = filename_padded.find(slug_hi) {
+                    regions.push((pos, pos + slug_hi.len(), slug_fg));
                 }
+            }
+            if !caption_hi.is_empty() {
+                let search_from = regions.last().map(|(_, e, _)| *e).unwrap_or(0);
+                if let Some(rel) = filename_padded[search_from..].find(caption_hi) {
+                    let pos = search_from + rel;
+                    regions.push((pos, pos + caption_hi.len(), caption_fg));
+                }
+            }
+
+            // Collect filter text match ranges for bg highlight (skip on cursor row).
+            let filter_matches: Vec<(usize, usize)> = if !is_cursor && !app.filter_text.is_empty() {
+                let needle = app.filter_text.to_lowercase();
+                let haystack = filename_padded.to_lowercase();
+                let mut matches = Vec::new();
+                let mut search_from = 0;
+                while let Some(rel) = haystack[search_from..].find(&needle) {
+                    let start = search_from + rel;
+                    let end = start + needle.len();
+                    matches.push((start, end));
+                    search_from = end;
+                }
+                matches
             } else {
-                vec![Span::styled(filename_padded, base_style.fg(base_fg))]
+                Vec::new()
             };
 
-            let tags_raw = if f.tags.is_empty() { "—".to_string() } else { f.tags.join(", ") };
-            let tags_cell = truncate_end(&tags_raw, TAGS_COL);
-            let tags_str = format!("{:<width$}", tags_cell, width = TAGS_COL);
+            // Build spans by splitting at all region and filter-match boundaries.
+            let filename_spans: Vec<Span> = {
+                let mut pts: Vec<usize> = vec![0, filename_padded.len()];
+                for (s, e, _) in &regions    { pts.push(*s); pts.push(*e); }
+                for (s, e)    in &filter_matches { pts.push(*s); pts.push(*e); }
+                pts.sort_unstable();
+                pts.dedup();
+                pts.windows(2).map(|w| {
+                    let (seg_start, seg_end) = (w[0], w[1]);
+                    let text = filename_padded[seg_start..seg_end].to_string();
+                    let fg_region = regions.iter().find(|(s, e, _)| *s <= seg_start && seg_end <= *e);
+                    let in_filter = filter_matches.iter().any(|(s, e)| *s <= seg_start && seg_end <= *e);
+                    let fg = fg_region.map(|(_, _, c)| *c).unwrap_or(base_fg);
+                    let mut style = base_style.fg(fg);
+                    if fg_region.is_some() { style = style.add_modifier(Modifier::BOLD); }
+                    if in_filter { style = style.bg(Color::Rgb(90, 60, 0)); }
+                    Span::styled(text, style)
+                }).collect()
+            };
+
+            let tag_fg = if is_cursor { Color::Black } else { Color::Green };
+            let sep_fg = if is_cursor { Color::Black } else { Color::DarkGray };
+            let (tag_span_vec, tags_used) = tag_spans(&f.tags, base_style, tag_fg, sep_fg, TAGS_COL);
+            let tags_padding = TAGS_COL.saturating_sub(tags_used);
 
             let mut spans = vec![
                 Span::styled(folder_name, base_style.fg(if is_cursor { Color::Black } else { Color::DarkGray })),
@@ -146,7 +184,13 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             ];
             spans.extend(filename_spans);
             spans.push(Span::raw(" "));
-            spans.push(Span::styled(tags_str, base_style.fg(if is_cursor { Color::Black } else { Color::Green })));
+            spans.extend(tag_span_vec);
+            if tags_padding > 0 {
+                spans.push(Span::styled(
+                    format!("{:width$}", "", width = tags_padding),
+                    base_style,
+                ));
+            }
 
             let line = Line::from(spans);
             ListItem::new(line).style(base_style)
@@ -178,6 +222,48 @@ fn truncate_front(s: &str, max_chars: usize) -> String {
         let start = chars.len() - keep;
         format!("…{}", chars[start..].iter().collect::<String>())
     }
+}
+
+/// Build tag spans that fit within `max_chars`, using ` │ ` as visual separator.
+/// Returns the spans and the total number of characters used.
+fn tag_spans(
+    tags: &[String],
+    base_style: Style,
+    tag_fg: Color,
+    sep_fg: Color,
+    max_chars: usize,
+) -> (Vec<Span<'static>>, usize) {
+    if tags.is_empty() {
+        let s = "—".to_string();
+        let len = s.chars().count();
+        return (vec![Span::styled(s, base_style.fg(tag_fg))], len);
+    }
+
+    const SEP: &str = " │ ";
+    const SEP_LEN: usize = 3;
+
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+
+    for (idx, tag) in tags.iter().enumerate() {
+        if idx > 0 {
+            if used + SEP_LEN > max_chars {
+                break;
+            }
+            spans.push(Span::styled(SEP, base_style.fg(sep_fg)));
+            used += SEP_LEN;
+        }
+        let remaining = max_chars.saturating_sub(used);
+        if remaining == 0 {
+            break;
+        }
+        let tag_str = truncate_end(tag, remaining);
+        let tag_len = tag_str.chars().count();
+        spans.push(Span::styled(tag_str, base_style.fg(tag_fg)));
+        used += tag_len;
+    }
+
+    (spans, used)
 }
 
 /// Truncate `s` to `max_chars`, cutting the tail and appending "…" if needed.
@@ -213,6 +299,10 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(meta_area);
 
+        let date_str = if !file.os_date.is_empty() { file.os_date.as_str() }
+                       else if !file.derived_date.is_empty() { file.derived_date.as_str() }
+                       else { "—" };
+
         let left = Paragraph::new(vec![
             Line::from(vec![
                 Span::styled("File  ", Style::default().fg(Color::DarkGray)),
@@ -220,30 +310,38 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             ]),
             Line::from(vec![
                 Span::styled("Date  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(&file.derived_date, Style::default().fg(Color::Yellow)),
+                Span::styled(date_str, Style::default().fg(Color::Yellow)),
             ]),
         ])
         .wrap(Wrap { trim: true });
         frame.render_widget(left, cols[0]);
 
-        let tags_str = if file.tags.is_empty() { "—".to_string() } else { file.tags.join(", ") };
         let slug_str = if !file.derived_slug.is_empty() { file.derived_slug.as_str() }
                        else { "—" };
         let caption_str = if !file.caption_slug.is_empty() { file.caption_slug.as_str() }
                           else { "—" };
 
+        let mut tags_line = vec![Span::styled("Tags  ", Style::default().fg(Color::DarkGray))];
+        if file.tags.is_empty() {
+            tags_line.push(Span::styled("—", Style::default().fg(Color::Green)));
+        } else {
+            for (idx, tag) in file.tags.iter().enumerate() {
+                if idx > 0 {
+                    tags_line.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                }
+                tags_line.push(Span::styled(tag.clone(), Style::default().fg(Color::Green)));
+            }
+        }
+
         let right = Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled("Tags  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(tags_str, Style::default().fg(Color::Green)),
-            ]),
+            Line::from(tags_line),
             Line::from(vec![
                 Span::styled("Slug  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(slug_str, Style::default().fg(Color::Cyan)),
             ]),
             Line::from(vec![
                 Span::styled("Capt  ", Style::default().fg(Color::DarkGray)),
-                Span::styled(caption_str, Style::default().fg(Color::Cyan)),
+                Span::styled(caption_str, Style::default().fg(Color::Yellow)),
             ]),
         ])
         .wrap(Wrap { trim: true });
@@ -281,33 +379,80 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
-    let (title, filter_text) = if let Some(ref cmd) = app.command {
-        (
-            " Command ",
-            Span::styled(
-                format!(":{cmd}_"),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-            ),
-        )
-    } else if app.filter.is_empty() {
-        (
-            " Filter ",
-            Span::styled(
-                "Type to filter…  |  Enter: preview  |  :: command  |  PgUp/PgDn: page",
+    let title = if app.command.is_some() { " Command " } else { " Filter " };
+
+    let line = if let Some(ref cmd) = app.command {
+        let mut spans: Vec<Span> = vec![Span::styled(
+            format!(":{cmd}"),
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        )];
+
+        // Show dim suffix for command-name autocomplete (only before first space).
+        if !cmd.contains(' ') {
+            if let Some(suggestion) = app.current_command_suggestion() {
+                let typed_chars = cmd.chars().count();
+                let sug_chars = suggestion.chars().count();
+                if sug_chars > typed_chars {
+                    let suffix: String = suggestion.chars().skip(typed_chars).collect();
+                    spans.push(Span::styled(suffix, Style::default().fg(Color::DarkGray)));
+                }
+            }
+        }
+
+        spans.push(Span::raw("_"));
+        Line::from(spans)
+    } else if !app.is_filter_active() {
+        if let Some(ref msg) = app.status_message {
+            Line::from(Span::styled(
+                msg.clone(),
+                Style::default().fg(Color::Yellow),
+            ))
+        } else {
+            Line::from(Span::styled(
+                "Type to filter…  |  #tag  |  Enter: preview  |  :: command  |  PgUp/PgDn: page",
                 Style::default().fg(Color::DarkGray),
-            ),
-        )
+            ))
+        }
     } else {
-        (
-            " Filter ",
-            Span::styled(
-                format!("/{}_", app.filter),
+        let mut spans: Vec<Span> = vec![];
+
+        if !app.filter_text.is_empty() {
+            spans.push(Span::styled(
+                format!("/{} ", app.filter_text),
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-        )
+            ));
+        }
+
+        for tag in &app.tag_filters {
+            spans.push(Span::styled(
+                format!("#{tag} "),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        if app.tag_typing {
+            spans.push(Span::styled(
+                format!("#{}", app.tag_input),
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            ));
+            if let Some(suggestion) = app.current_suggestion() {
+                let input_chars = app.tag_input.chars().count();
+                let sug_chars = suggestion.chars().count();
+                if sug_chars > input_chars {
+                    let suffix: String = suggestion.chars().skip(input_chars).collect();
+                    spans.push(Span::styled(
+                        suffix,
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+            }
+        }
+
+        spans.push(Span::raw("_"));
+        Line::from(spans)
     };
 
-    let para = Paragraph::new(Line::from(filter_text))
+    let para = Paragraph::new(line)
         .block(Block::default().borders(Borders::ALL).title(title));
 
     frame.render_widget(para, area);
