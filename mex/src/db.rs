@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 #[derive(Clone, Debug)]
 pub struct MediaFile {
@@ -74,6 +74,61 @@ pub fn folder_of(path: &str) -> &str {
     } else {
         "."
     }
+}
+
+/// Attach a tag (name + type) to each media file in `media_ids`.
+///
+/// - If the tag name does not exist it is created with the given type.
+/// - If the tag name already exists with the **same** type (case-insensitive),
+///   it is reused.
+/// - If the tag name already exists with a **different** type, an error is
+///   returned and no changes are made.
+/// - Files that already carry the tag are silently skipped (INSERT OR IGNORE).
+pub fn assign_tag(
+    db_path: &str,
+    media_ids: &[String],
+    tag_name: &str,
+    tag_type: &str,
+) -> Result<()> {
+    let conn = Connection::open(db_path)?;
+
+    // Look up or create the tag.
+    let existing: Option<(i64, String)> = conn
+        .query_row(
+            "SELECT id, type FROM tags WHERE name = ?1 COLLATE NOCASE",
+            rusqlite::params![tag_name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+
+    let tag_id = match existing {
+        Some((id, existing_type)) => {
+            if !existing_type.eq_ignore_ascii_case(tag_type) {
+                return Err(anyhow::anyhow!(
+                    "tag '{}' already exists as type '{}'",
+                    tag_name,
+                    existing_type
+                ));
+            }
+            id
+        }
+        None => {
+            conn.execute(
+                "INSERT INTO tags (name, type) VALUES (?1, ?2)",
+                rusqlite::params![tag_name, tag_type],
+            )?;
+            conn.last_insert_rowid()
+        }
+    };
+
+    for media_id in media_ids {
+        conn.execute(
+            "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
+            rusqlite::params![media_id, tag_id],
+        )?;
+    }
+
+    Ok(())
 }
 
 /// Replace the date prefix in a MEX basename with `new_date` (`yyyy-mm-dd`).

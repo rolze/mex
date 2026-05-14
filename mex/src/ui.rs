@@ -397,6 +397,20 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                     spans.push(Span::styled(suffix, Style::default().fg(Color::DarkGray)));
                 }
             }
+        } else if let Some(suggestion) = app.current_tag_arg_suggestion() {
+            // Show dim suffix for tag-arg autocomplete (after space in `:tag …`).
+            let arg = cmd.strip_prefix("tag ").unwrap_or("");
+            let typed_tail = if let Some(at_pos) = arg.rfind('@') {
+                &arg[at_pos + 1..]
+            } else {
+                arg
+            };
+            let typed_chars = typed_tail.chars().count();
+            let sug_chars = suggestion.chars().count();
+            if sug_chars > typed_chars {
+                let suffix: String = suggestion.chars().skip(typed_chars).collect();
+                spans.push(Span::styled(suffix, Style::default().fg(Color::DarkGray)));
+            }
         }
 
         spans.push(Span::raw("_"));
