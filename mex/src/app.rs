@@ -5,7 +5,7 @@ use std::{collections::{BTreeSet, HashMap, HashSet}, path::PathBuf};
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["fix-date", "q", "quit"];
+const KNOWN_COMMANDS: &[&str] = &["fix-date", "q", "quit", "tag"];
 
 const CACHE_MAX: usize = 30;
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
@@ -449,27 +449,91 @@ impl App {
         suggestions.get(self.command_suggestion_idx).copied()
     }
 
-    /// Complete the command buffer to the highlighted command-name suggestion + space.
-    pub fn tab_complete_command(&mut self) {
-        if let Some(suggestion) = self.current_command_suggestion() {
-            // Only fill if we are still typing the command name (no space yet).
-            let has_arg = self.command.as_deref().unwrap_or("").contains(' ');
-            if !has_arg {
-                self.command = Some(format!("{} ", suggestion));
-                self.command_suggestion_idx = 0;
-            }
+    // ── Tag-argument autocompletion (`:tag <name>[@<type>]`) ─────────────────
+
+    /// Returns suggestions for the tag argument of a `:tag` command.
+    ///
+    /// - Before `@`: suggests tag names matching the typed prefix.
+    /// - After `@`: suggests tag types matching the typed prefix.
+    pub fn tag_arg_suggestions(&self) -> Vec<String> {
+        let cmd = self.command.as_deref().unwrap_or("");
+        let Some(arg) = cmd.strip_prefix("tag ") else {
+            return vec![];
+        };
+        if let Some(at_pos) = arg.rfind('@') {
+            let type_prefix = arg[at_pos + 1..].to_lowercase();
+            self.all_tag_types
+                .iter()
+                .filter(|t| t.to_lowercase().starts_with(&type_prefix))
+                .cloned()
+                .collect()
+        } else {
+            let name_prefix = arg.to_lowercase();
+            self.all_tags
+                .iter()
+                .filter(|t| t.to_lowercase().starts_with(&name_prefix))
+                .cloned()
+                .collect()
         }
     }
 
+    /// The currently highlighted tag-arg suggestion, or `None` when none match.
+    pub fn current_tag_arg_suggestion(&self) -> Option<String> {
+        self.tag_arg_suggestions()
+            .into_iter()
+            .nth(self.command_suggestion_idx)
+    }
+
+    /// Complete the command buffer to the highlighted suggestion.
+    /// - Before any space: completes the command name.
+    /// - After `tag `: completes the tag name or type argument.
+    pub fn tab_complete_command(&mut self) {
+        let has_arg = self.command.as_deref().unwrap_or("").contains(' ');
+        if !has_arg {
+            if let Some(suggestion) = self.current_command_suggestion() {
+                self.command = Some(format!("{} ", suggestion));
+                self.command_suggestion_idx = 0;
+            }
+        } else {
+            self.tab_complete_tag_arg();
+        }
+    }
+
+    /// Fill in the current tag-arg suggestion (name or type).
+    fn tab_complete_tag_arg(&mut self) {
+        let Some(suggestion) = self.current_tag_arg_suggestion() else {
+            return;
+        };
+        let cmd = self.command.as_deref().unwrap_or("").to_string();
+        let Some(arg) = cmd.strip_prefix("tag ") else {
+            return;
+        };
+        let new_cmd = if let Some(at_pos) = arg.rfind('@') {
+            format!("tag {}@{}", &arg[..at_pos], suggestion)
+        } else {
+            format!("tag {}", suggestion)
+        };
+        self.command = Some(new_cmd);
+        self.command_suggestion_idx = 0;
+    }
+
     pub fn cycle_command_suggestion_down(&mut self) {
-        let count = self.command_name_suggestions().len();
+        let count = if self.command.as_deref().unwrap_or("").contains(' ') {
+            self.tag_arg_suggestions().len()
+        } else {
+            self.command_name_suggestions().len()
+        };
         if count > 0 {
             self.command_suggestion_idx = (self.command_suggestion_idx + 1) % count;
         }
     }
 
     pub fn cycle_command_suggestion_up(&mut self) {
-        let count = self.command_name_suggestions().len();
+        let count = if self.command.as_deref().unwrap_or("").contains(' ') {
+            self.tag_arg_suggestions().len()
+        } else {
+            self.command_name_suggestions().len()
+        };
         if count > 0 {
             self.command_suggestion_idx =
                 (self.command_suggestion_idx + count - 1) % count;
@@ -491,6 +555,22 @@ impl App {
         if let Some(date_arg) = trimmed.strip_prefix("fix-date") {
             let date_str = date_arg.trim();
             self.fix_date_selected(date_str);
+            return;
+        }
+
+        if let Some(tag_arg) = trimmed.strip_prefix("tag") {
+            let tag_arg = tag_arg.trim();
+            let (name, ty) = if let Some(at_pos) = tag_arg.find('@') {
+                (&tag_arg[..at_pos], tag_arg[at_pos + 1..].trim())
+            } else {
+                (tag_arg, "event")
+            };
+            let name = name.trim();
+            if name.is_empty() {
+                self.status_message = Some("tag: usage: tag <name>[@<type>]".into());
+                return;
+            }
+            self.tag_selected(name, ty);
             return;
         }
 
@@ -563,6 +643,47 @@ impl App {
                 ids.len() - errors,
                 errors
             ));
+        }
+    }
+
+    // ── tag ──────────────────────────────────────────────────────────────────
+
+    /// Apply `:tag <name>[@<type>]` to the selection set (or cursor file if
+    /// nothing is explicitly selected). Defaults to type `"event"` when omitted.
+    pub fn tag_selected(&mut self, tag_name: &str, tag_type: &str) {
+        let ids: Vec<String> = if self.selection.is_empty() {
+            self.filtered
+                .get(self.selected)
+                .map(|f| vec![f.id.clone()])
+                .unwrap_or_default()
+        } else {
+            let mut sel: Vec<usize> = self.selection.iter().copied().collect();
+            sel.sort_unstable();
+            sel.iter()
+                .filter_map(|&i| self.filtered.get(i).map(|f| f.id.clone()))
+                .collect()
+        };
+
+        if ids.is_empty() {
+            self.status_message = Some("tag: no file selected".into());
+            return;
+        }
+
+        match crate::db::assign_tag(&self.db_path, &ids, tag_name, tag_type) {
+            Err(e) => {
+                self.status_message = Some(format!("tag: {e}"));
+            }
+            Ok(()) => {
+                let count = ids.len();
+                if let Err(e) = self.reload() {
+                    self.status_message = Some(format!("tag: reload failed: {e}"));
+                    return;
+                }
+                self.status_message = Some(format!(
+                    "tagged {count} file(s) with {}@{}",
+                    tag_name, tag_type
+                ));
+            }
         }
     }
 
@@ -978,6 +1099,7 @@ mod tests {
                 derived_date: "2024-01-01".into(),
                 ext: name.rsplit('.').next().unwrap_or("").into(),
                 tags: vec![],
+                tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
                 os_date: String::new(),
@@ -1002,6 +1124,7 @@ mod tests {
                 derived_date: "2024-01-01".into(),
                 ext: name.rsplit('.').next().unwrap_or("").into(),
                 tags: vec![],
+                tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
                 os_date: String::new(),
@@ -1015,6 +1138,7 @@ mod tests {
                 derived_date: "2024-01-01".into(),
                 ext: "jpg".into(),
                 tags: vec![],
+                tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
                 os_date: String::new(),
@@ -1200,6 +1324,7 @@ mod tests {
                     derived_date,
                     ext: "jpg".into(),
                     tags: vec![],
+                    tag_types: vec![],
                     derived_slug,
                     caption_slug: String::new(),
                     os_date: String::new(),
@@ -1497,6 +1622,7 @@ mod tests {
                 derived_date: "2024-01-01".into(),
                 ext: path.rsplit('.').next().unwrap_or("").into(),
                 tags: tags.iter().map(|s| s.to_string()).collect(),
+                tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
                 os_date: String::new(),
@@ -1746,5 +1872,183 @@ mod tests {
         assert!(!is_valid_date("2024-13-01"));
         assert!(!is_valid_date("not-date-x"));
         assert!(!is_valid_date(""));
+    }
+
+    // ── UC-09 tag command tests ───────────────────────────────────────────────
+
+    fn make_tag_db() -> (std::path::PathBuf, String) {
+        use std::fs;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("mex_tag_test_{}_{}", std::process::id(), n));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("mex.db");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (id TEXT PRIMARY KEY, target_path TEXT, derived_date TEXT,
+                                 ext TEXT, os_date TEXT, derived_slug TEXT, caption_slug TEXT);
+             CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+                                type TEXT NOT NULL DEFAULT 'event');
+             CREATE TABLE media_tags (media_id TEXT NOT NULL, tag_id INTEGER NOT NULL,
+                                      PRIMARY KEY (media_id, tag_id));
+             INSERT INTO media VALUES ('m1','2024/a.jpg','2024-01-01','jpg',NULL,'','');
+             INSERT INTO media VALUES ('m2','2024/b.jpg','2024-01-01','jpg',NULL,'','');",
+        ).unwrap();
+        (dir, db_path.to_str().unwrap().to_string())
+    }
+
+    #[test]
+    fn assign_tag_creates_new_tag_and_attaches() {
+        let (_dir, db_path) = make_tag_db();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", "event").unwrap();
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name='holiday'", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM media_tags WHERE media_id='m1' AND tag_id=?1", [tag_id], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn assign_tag_reuses_existing_same_type() {
+        let (_dir, db_path) = make_tag_db();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", "event").unwrap();
+        crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", "event").unwrap();
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let tag_count: i64 = conn.query_row("SELECT COUNT(*) FROM tags WHERE name='holiday'", [], |r| r.get(0)).unwrap();
+        assert_eq!(tag_count, 1, "should not create duplicate tag");
+
+        let link_count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0)).unwrap();
+        assert_eq!(link_count, 2);
+    }
+
+    #[test]
+    fn assign_tag_errors_on_type_mismatch() {
+        let (_dir, db_path) = make_tag_db();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", "event").unwrap();
+        let result = crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", "person");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("already exists as type"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn assign_tag_duplicate_on_same_file_is_noop() {
+        let (_dir, db_path) = make_tag_db();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", "event").unwrap();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", "event").unwrap();
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1, "duplicate attach should be ignored");
+    }
+
+    #[test]
+    fn assign_tag_defaults_to_event_type() {
+        let (_dir, db_path) = make_tag_db();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "trip", "event").unwrap();
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let ty: String = conn.query_row("SELECT type FROM tags WHERE name='trip'", [], |r| r.get(0)).unwrap();
+        assert_eq!(ty, "event");
+    }
+
+    #[test]
+    fn tag_arg_suggestions_name_prefix() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let files: Vec<crate::db::MediaFile> = vec![
+            crate::db::MediaFile {
+                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
+                ext: "jpg".into(), tags: vec!["travel".into(), "trip".into()], tag_types: vec![],
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+            }
+        ];
+        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        app.enter_command_mode();
+        "tag tr".chars().for_each(|c| app.push_command_char(c));
+        let suggestions = app.tag_arg_suggestions();
+        assert!(suggestions.contains(&"travel".to_string()));
+        assert!(suggestions.contains(&"trip".to_string()));
+        assert!(!suggestions.contains(&"other".to_string()));
+    }
+
+    #[test]
+    fn tag_arg_suggestions_type_prefix() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let files: Vec<crate::db::MediaFile> = vec![
+            crate::db::MediaFile {
+                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
+                ext: "jpg".into(), tags: vec!["alice".into()], tag_types: vec!["person".into()],
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+            }
+        ];
+        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        app.enter_command_mode();
+        "tag newtag@per".chars().for_each(|c| app.push_command_char(c));
+        let suggestions = app.tag_arg_suggestions();
+        assert!(suggestions.contains(&"person".to_string()));
+    }
+
+    #[test]
+    fn tab_complete_fills_tag_name() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let files: Vec<crate::db::MediaFile> = vec![
+            crate::db::MediaFile {
+                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
+                ext: "jpg".into(), tags: vec!["vacation".into()], tag_types: vec![],
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+            }
+        ];
+        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        app.enter_command_mode();
+        "tag vac".chars().for_each(|c| app.push_command_char(c));
+        app.tab_complete();
+        assert_eq!(app.command.as_deref(), Some("tag vacation"));
+    }
+
+    #[test]
+    fn tab_complete_fills_tag_type() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let files: Vec<crate::db::MediaFile> = vec![
+            crate::db::MediaFile {
+                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
+                ext: "jpg".into(), tags: vec!["alice".into()], tag_types: vec!["person".into()],
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+            }
+        ];
+        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        app.enter_command_mode();
+        "tag newtag@per".chars().for_each(|c| app.push_command_char(c));
+        app.tab_complete();
+        assert_eq!(app.command.as_deref(), Some("tag newtag@person"));
+    }
+
+    #[test]
+    fn execute_tag_command_no_arg_sets_usage() {
+        let mut app = make_cmd_app();
+        app.enter_command_mode();
+        "tag".chars().for_each(|c| app.push_command_char(c));
+        app.execute_command();
+        let msg = app.status_message.as_deref().unwrap_or("");
+        assert!(msg.contains("usage"), "expected usage hint, got: {msg}");
+    }
+
+    #[test]
+    fn known_commands_includes_tag() {
+        let mut app = make_cmd_app();
+        app.command = Some("ta".into());
+        let suggestions = app.command_name_suggestions();
+        assert!(suggestions.contains(&"tag"), "tag should be in KNOWN_COMMANDS");
     }
 }
