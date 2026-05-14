@@ -398,12 +398,17 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
         } else if let Some(suggestion) = app.current_tag_arg_suggestion() {
-            // Show dim suffix for tag-arg autocomplete (after space in `:tag …`).
-            let arg = cmd.strip_prefix("tag ").unwrap_or("");
-            let typed_tail = if let Some(at_pos) = arg.rfind('@') {
-                &arg[at_pos + 1..]
+            // Show dim suffix for tag-arg autocomplete.
+            // typed_tail = the portion of the command that the suggestion completes.
+            let typed_tail = if let Some(arg) = cmd.strip_prefix("tag ") {
+                if let Some(at_pos) = arg.rfind('@') {
+                    &arg[at_pos + 1..]
+                } else {
+                    arg
+                }
             } else {
-                arg
+                // :untag — complete the last word
+                cmd.rsplit(' ').next().unwrap_or("")
             };
             let typed_chars = typed_tail.chars().count();
             let sug_chars = suggestion.chars().count();

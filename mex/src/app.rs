@@ -5,7 +5,7 @@ use std::{collections::{BTreeSet, HashMap, HashSet}, path::PathBuf};
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["fix-date", "q", "quit", "tag"];
+const KNOWN_COMMANDS: &[&str] = &["fix-date", "q", "quit", "tag", "untag"];
 
 const CACHE_MAX: usize = 30;
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
@@ -449,32 +449,54 @@ impl App {
         suggestions.get(self.command_suggestion_idx).copied()
     }
 
-    // ── Tag-argument autocompletion (`:tag <name>[@<type>]`) ─────────────────
+    // ── Tag-argument autocompletion (`:tag <name>[@<type>]`, `:untag [name …]`) ─
 
-    /// Returns suggestions for the tag argument of a `:tag` command.
+    /// Returns suggestions for the tag argument of a `:tag` or `:untag` command.
     ///
+    /// For `:tag`:
     /// - Before `@`: suggests tag names matching the typed prefix.
     /// - After `@`: suggests tag types matching the typed prefix.
+    ///
+    /// For `:untag`:
+    /// - Suggests tag names matching the last (incomplete) word.
     pub fn tag_arg_suggestions(&self) -> Vec<String> {
         let cmd = self.command.as_deref().unwrap_or("");
-        let Some(arg) = cmd.strip_prefix("tag ") else {
-            return vec![];
-        };
-        if let Some(at_pos) = arg.rfind('@') {
-            let type_prefix = arg[at_pos + 1..].to_lowercase();
-            self.all_tag_types
-                .iter()
-                .filter(|t| t.to_lowercase().starts_with(&type_prefix))
-                .cloned()
-                .collect()
-        } else {
-            let name_prefix = arg.to_lowercase();
-            self.all_tags
-                .iter()
-                .filter(|t| t.to_lowercase().starts_with(&name_prefix))
-                .cloned()
-                .collect()
+
+        if let Some(arg) = cmd.strip_prefix("tag ") {
+            if let Some(at_pos) = arg.rfind('@') {
+                let type_prefix = arg[at_pos + 1..].to_lowercase();
+                return self.all_tag_types
+                    .iter()
+                    .filter(|t| t.to_lowercase().starts_with(&type_prefix))
+                    .cloned()
+                    .collect();
+            } else {
+                let name_prefix = arg.to_lowercase();
+                return self.all_tags
+                    .iter()
+                    .filter(|t| t.to_lowercase().starts_with(&name_prefix))
+                    .cloned()
+                    .collect();
+            }
         }
+
+        if let Some(rest) = cmd.strip_prefix("untag") {
+            // Complete the last (incomplete) word.  If rest ends with a space
+            // (or is empty) the user is starting a new word → prefix = "".
+            let prefix = if rest.ends_with(' ') || rest.is_empty() {
+                ""
+            } else {
+                rest.trim_start().rsplit(' ').next().unwrap_or("")
+            };
+            let prefix_lower = prefix.to_lowercase();
+            return self.all_tags
+                .iter()
+                .filter(|t| t.to_lowercase().starts_with(&prefix_lower))
+                .cloned()
+                .collect();
+        }
+
+        vec![]
     }
 
     /// The currently highlighted tag-arg suggestion, or `None` when none match.
@@ -505,14 +527,25 @@ impl App {
             return;
         };
         let cmd = self.command.as_deref().unwrap_or("").to_string();
-        let Some(arg) = cmd.strip_prefix("tag ") else {
+
+        let new_cmd = if let Some(arg) = cmd.strip_prefix("tag ") {
+            if let Some(at_pos) = arg.rfind('@') {
+                format!("tag {}@{}", &arg[..at_pos], suggestion)
+            } else {
+                format!("tag {}", suggestion)
+            }
+        } else if cmd.starts_with("untag") {
+            // Replace the last word with the suggestion and add a trailing space
+            // so the user can immediately start typing the next tag name.
+            if let Some(last_space) = cmd.rfind(' ') {
+                format!("{} {} ", &cmd[..last_space], suggestion)
+            } else {
+                format!("untag {} ", suggestion)
+            }
+        } else {
             return;
         };
-        let new_cmd = if let Some(at_pos) = arg.rfind('@') {
-            format!("tag {}@{}", &arg[..at_pos], suggestion)
-        } else {
-            format!("tag {}", suggestion)
-        };
+
         self.command = Some(new_cmd);
         self.command_suggestion_idx = 0;
     }
@@ -555,6 +588,12 @@ impl App {
         if let Some(date_arg) = trimmed.strip_prefix("fix-date") {
             let date_str = date_arg.trim();
             self.fix_date_selected(date_str);
+            return;
+        }
+
+        if let Some(tag_arg) = trimmed.strip_prefix("untag") {
+            let tag_names: Vec<String> = tag_arg.split_whitespace().map(|s| s.to_string()).collect();
+            self.untag_selected(&tag_names);
             return;
         }
 
@@ -684,6 +723,51 @@ impl App {
                     "tagged {count} file(s) with {}@{}",
                     tag_name, effective_type
                 ));
+            }
+        }
+    }
+
+    /// Apply `:untag [name …]` to the selection set (or cursor file).
+    ///
+    /// - `tag_names` empty  → remove **all** tags from every targeted file.
+    /// - `tag_names` given  → remove only those tags.
+    pub fn untag_selected(&mut self, tag_names: &[String]) {
+        let ids: Vec<String> = if self.selection.is_empty() {
+            self.filtered
+                .get(self.selected)
+                .map(|f| vec![f.id.clone()])
+                .unwrap_or_default()
+        } else {
+            let mut sel: Vec<usize> = self.selection.iter().copied().collect();
+            sel.sort_unstable();
+            sel.iter()
+                .filter_map(|&i| self.filtered.get(i).map(|f| f.id.clone()))
+                .collect()
+        };
+
+        if ids.is_empty() {
+            self.status_message = Some("untag: no file selected".into());
+            return;
+        }
+
+        match crate::db::remove_tags(&self.db_path, &ids, tag_names) {
+            Err(e) => {
+                self.status_message = Some(format!("untag: {e}"));
+            }
+            Ok(_) => {
+                let file_count = ids.len();
+                if let Err(e) = self.reload() {
+                    self.status_message = Some(format!("untag: reload failed: {e}"));
+                    return;
+                }
+                self.status_message = Some(if tag_names.is_empty() {
+                    format!("cleared all tags from {file_count} file(s)")
+                } else {
+                    format!(
+                        "removed {} from {file_count} file(s)",
+                        tag_names.join(", ")
+                    )
+                });
             }
         }
     }
@@ -2067,5 +2151,97 @@ mod tests {
         app.command = Some("ta".into());
         let suggestions = app.command_name_suggestions();
         assert!(suggestions.contains(&"tag"), "tag should be in KNOWN_COMMANDS");
+    }
+
+    // ── :untag tests ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn remove_tags_all() {
+        let (_dir, db_path) = make_tag_db();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "summer", Some("event")).unwrap();
+        let removed = crate::db::remove_tags(&db_path, &["m1".to_string()], &[]).unwrap();
+        assert_eq!(removed, 2);
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags WHERE media_id='m1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn remove_tags_specific() {
+        let (_dir, db_path) = make_tag_db();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "summer", Some("event")).unwrap();
+        crate::db::remove_tags(&db_path, &["m1".to_string()], &["holiday".to_string()]).unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags WHERE media_id='m1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1, "should only remove the specified tag");
+    }
+
+    #[test]
+    fn remove_tags_unknown_name_is_noop() {
+        let (_dir, db_path) = make_tag_db();
+        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        crate::db::remove_tags(&db_path, &["m1".to_string()], &["nonexistent".to_string()]).unwrap();
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags WHERE media_id='m1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1, "removing unknown tag should leave existing tag intact");
+    }
+
+    #[test]
+    fn untag_arg_suggestions_last_word() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let files: Vec<crate::db::MediaFile> = vec![
+            crate::db::MediaFile {
+                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
+                ext: "jpg".into(), tags: vec!["travel".into(), "trip".into()], tag_types: vec![],
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+            }
+        ];
+        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        app.command = Some("untag tr".into());
+        let suggestions = app.tag_arg_suggestions();
+        assert!(suggestions.contains(&"travel".to_string()));
+        assert!(suggestions.contains(&"trip".to_string()));
+    }
+
+    #[test]
+    fn tab_complete_fills_untag_name_with_space() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let files: Vec<crate::db::MediaFile> = vec![
+            crate::db::MediaFile {
+                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
+                ext: "jpg".into(), tags: vec!["vacation".into()], tag_types: vec![],
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+            }
+        ];
+        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        app.enter_command_mode();
+        "untag vac".chars().for_each(|c| app.push_command_char(c));
+        app.tab_complete();
+        assert_eq!(app.command.as_deref(), Some("untag vacation "), "tab should complete and append space");
+    }
+
+    #[test]
+    fn tab_complete_untag_second_word() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let files: Vec<crate::db::MediaFile> = vec![
+            crate::db::MediaFile {
+                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
+                ext: "jpg".into(), tags: vec!["vacation".into(), "trip".into()], tag_types: vec![],
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+            }
+        ];
+        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        app.enter_command_mode();
+        "untag vacation tri".chars().for_each(|c| app.push_command_char(c));
+        app.tab_complete();
+        assert_eq!(app.command.as_deref(), Some("untag vacation trip "));
     }
 }
