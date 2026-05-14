@@ -409,43 +409,91 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             ))
         } else {
             Line::from(Span::styled(
-                "Type to filter…  |  #tag  |  Enter: preview  |  :: command  |  PgUp/PgDn: page",
+                "Type to filter…  |  #tag  |  @type  |  Enter: preview  |  :: command  |  PgUp/PgDn: page",
                 Style::default().fg(Color::DarkGray),
             ))
         }
     } else {
+        // Build a boolean expression: text AND (@types OR …) AND (#tags OR …)
+        // Styling: AND/OR/() = DarkGray, /text = White+Bold, @type = Magenta+Bold, #tag = Cyan+Bold
+        let dim   = Style::default().fg(Color::DarkGray);
+        let white = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
+        let cyan  = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+        let mag   = Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD);
+
         let mut spans: Vec<Span> = vec![];
+        let mut need_and = false;
 
+        let and_sep = || Span::styled(" AND ", dim);
+
+        // ── text ──────────────────────────────────────────────────────────────
         if !app.filter_text.is_empty() {
-            spans.push(Span::styled(
-                format!("/{} ", app.filter_text),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            ));
+            spans.push(Span::styled(format!("/{}", app.filter_text), white));
+            need_and = true;
         }
 
-        for tag in &app.tag_filters {
-            spans.push(Span::styled(
-                format!("#{tag} "),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-            ));
-        }
+        // ── @type group ───────────────────────────────────────────────────────
+        // Count: confirmed + maybe one being typed
+        let typing_type = app.tag_type_typing;
+        let type_count = app.tag_type_filters.len() + if typing_type { 1 } else { 0 };
 
-        if app.tag_typing {
-            spans.push(Span::styled(
-                format!("#{}", app.tag_input),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            ));
-            if let Some(suggestion) = app.current_suggestion() {
-                let input_chars = app.tag_input.chars().count();
-                let sug_chars = suggestion.chars().count();
-                if sug_chars > input_chars {
-                    let suffix: String = suggestion.chars().skip(input_chars).collect();
-                    spans.push(Span::styled(
-                        suffix,
-                        Style::default().fg(Color::DarkGray),
-                    ));
+        if type_count > 0 {
+            if need_and { spans.push(and_sep()); }
+            let use_parens = type_count > 1;
+            if use_parens { spans.push(Span::styled("(", dim)); }
+
+            for (i, ty) in app.tag_type_filters.iter().enumerate() {
+                if i > 0 { spans.push(Span::styled(" OR ", dim)); }
+                spans.push(Span::styled(format!("@{ty}"), mag));
+            }
+
+            if typing_type {
+                if !app.tag_type_filters.is_empty() { spans.push(Span::styled(" OR ", dim)); }
+                spans.push(Span::styled(format!("@{}", app.tag_type_input), mag));
+                // dim autocomplete suffix
+                if let Some(suggestion) = app.current_type_suggestion() {
+                    let input_chars = app.tag_type_input.chars().count();
+                    let sug_chars = suggestion.chars().count();
+                    if sug_chars > input_chars {
+                        let suffix: String = suggestion.chars().skip(input_chars).collect();
+                        spans.push(Span::styled(suffix, dim));
+                    }
                 }
             }
+
+            if use_parens { spans.push(Span::styled(")", dim)); }
+            need_and = true;
+        }
+
+        // ── #tag group ────────────────────────────────────────────────────────
+        let typing_tag = app.tag_typing;
+        let tag_count = app.tag_filters.len() + if typing_tag { 1 } else { 0 };
+
+        if tag_count > 0 {
+            if need_and { spans.push(and_sep()); }
+            let use_parens = tag_count > 1;
+            if use_parens { spans.push(Span::styled("(", dim)); }
+
+            for (i, tag) in app.tag_filters.iter().enumerate() {
+                if i > 0 { spans.push(Span::styled(" OR ", dim)); }
+                spans.push(Span::styled(format!("#{tag}"), cyan));
+            }
+
+            if typing_tag {
+                if !app.tag_filters.is_empty() { spans.push(Span::styled(" OR ", dim)); }
+                spans.push(Span::styled(format!("#{}", app.tag_input), cyan));
+                // dim autocomplete suffix
+                if let Some(suggestion) = app.current_suggestion() {
+                    let input_chars = app.tag_input.chars().count();
+                    let sug_chars = suggestion.chars().count();
+                    if sug_chars > input_chars {
+                        let suffix: String = suggestion.chars().skip(input_chars).collect();
+                        spans.push(Span::styled(suffix, dim));
+                    }
+                }
+            }
+
+            if use_parens { spans.push(Span::styled(")", dim)); }
         }
 
         spans.push(Span::raw("_"));

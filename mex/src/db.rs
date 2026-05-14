@@ -8,6 +8,8 @@ pub struct MediaFile {
     pub derived_date: String,
     pub ext: String,
     pub tags: Vec<String>,
+    /// Tag types parallel to `tags` (same indices). E.g. "event", "person", "album", "camera".
+    pub tag_types: Vec<String>,
     pub derived_slug: String,
     pub caption_slug: String,
     /// Full OS datetime stored in the DB (e.g. `"2022-04-18 14:30:00"`). Empty if not set.
@@ -18,7 +20,7 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
     let conn = Connection::open(db_path)?;
 
     let sql = "SELECT m.id, m.target_path, COALESCE(m.derived_date,''), m.ext,
-                      COALESCE(GROUP_CONCAT(t.name, CHAR(31)),''),
+                      COALESCE(GROUP_CONCAT(t.name || CHAR(30) || t.type, CHAR(31)),''),
                       COALESCE(m.derived_slug,''), COALESCE(m.caption_slug,''),
                       COALESCE(m.os_date,'')
                FROM media m
@@ -32,16 +34,26 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
 
     let rows = stmt.query_map([], |row| {
         let tags_str: String = row.get(4)?;
+        let (tags, tag_types) = if tags_str.is_empty() {
+            (vec![], vec![])
+        } else {
+            tags_str.split('\x1f')
+                .map(|pair| {
+                    if let Some(sep) = pair.find('\x1e') {
+                        (pair[..sep].to_string(), pair[sep + 1..].to_string())
+                    } else {
+                        (pair.to_string(), String::new())
+                    }
+                })
+                .unzip()
+        };
         Ok(MediaFile {
             id: row.get(0)?,
             target_path: row.get(1)?,
             derived_date: row.get(2)?,
             ext: row.get(3)?,
-            tags: if tags_str.is_empty() {
-                vec![]
-            } else {
-                tags_str.split('\x1f').map(|s| s.to_string()).collect()
-            },
+            tags,
+            tag_types,
             derived_slug: row.get(5)?,
             caption_slug: row.get(6)?,
             os_date: row.get(7)?,

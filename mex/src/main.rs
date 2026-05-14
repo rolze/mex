@@ -174,7 +174,9 @@ fn run_loop(
                     (KeyModifiers::SHIFT, KeyCode::Home) => app.jump_slug_day_prev(),
                     (KeyModifiers::SHIFT, KeyCode::End)  => app.jump_slug_day_next(),
                     (_, KeyCode::Down)  => {
-                        if app.tag_typing {
+                        if app.tag_type_typing {
+                            app.cycle_type_suggestion_down();
+                        } else if app.tag_typing {
                             app.cycle_suggestion_down();
                         } else if app.command.is_some() {
                             app.cycle_command_suggestion_down();
@@ -183,7 +185,9 @@ fn run_loop(
                         }
                     }
                     (_, KeyCode::Up)    => {
-                        if app.tag_typing {
+                        if app.tag_type_typing {
+                            app.cycle_type_suggestion_up();
+                        } else if app.tag_typing {
                             app.cycle_suggestion_up();
                         } else if app.command.is_some() {
                             app.cycle_command_suggestion_up();
@@ -195,12 +199,15 @@ fn run_loop(
                     (_, KeyCode::End)   => app.jump_end(),
                     (KeyModifiers::CONTROL, KeyCode::Char('d')) => app.half_page_down(),
                     (KeyModifiers::CONTROL, KeyCode::Char('u')) => app.half_page_up(),
+                    (KeyModifiers::CONTROL, KeyCode::Char('a')) => app.select_all_or_none(),
                     (_, KeyCode::PageDown) => app.page_down(),
                     (_, KeyCode::PageUp)   => app.page_up(),
 
                     // Preview toggle / tag confirm / command execute
                     (_, KeyCode::Enter) => {
-                        if app.tag_typing {
+                        if app.tag_type_typing {
+                            app.confirm_type_filter();
+                        } else if app.tag_typing {
                             app.confirm_tag();
                         } else if app.command.is_some() {
                             app.execute_command();
