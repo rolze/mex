@@ -6,8 +6,7 @@ mod ui;
 use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers,
-        MouseEventKind,
+        self, Event, KeyCode, KeyModifiers,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -114,7 +113,7 @@ fn main() -> Result<()> {
     // Terminal setup
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -124,8 +123,7 @@ fn main() -> Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
+        LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
 
@@ -153,10 +151,12 @@ fn run_loop(
         if event::poll(std::time::Duration::from_millis(16))? {
             match event::read()? {
                 Event::Key(key) => match (key.modifiers, key.code) {
-                    // Esc: cancel command mode → close preview → clear filter
+                    // Esc: cancel command → clear selection → close preview → clear filter
                     (_, KeyCode::Esc) => {
                         if app.command.is_some() {
                             app.cancel_command();
+                        } else if !app.selection.is_empty() {
+                            app.clear_selection();
                         } else if app.preview_open {
                             app.preview_open = false;
                         } else {
@@ -165,10 +165,15 @@ fn run_loop(
                     }
 
                     // Navigation — arrow/page/ctrl keys only; no letter bindings
+                    // Ctrl-modified arrows/home/end must come before their wildcard counterparts.
+                    (KeyModifiers::SHIFT, KeyCode::Up)   => app.extend_selection_up(),
+                    (KeyModifiers::SHIFT, KeyCode::Down) => app.extend_selection_down(),
+                    (KeyModifiers::SHIFT, KeyCode::Home) => app.jump_slug_day_prev(),
+                    (KeyModifiers::SHIFT, KeyCode::End)  => app.jump_slug_day_next(),
                     (_, KeyCode::Down)  => app.move_down(),
                     (_, KeyCode::Up)    => app.move_up(),
-                    (_, KeyCode::Home)  => app.jump_top(),
-                    (_, KeyCode::End)   => app.jump_bottom(),
+                    (_, KeyCode::Home)  => app.jump_home(),
+                    (_, KeyCode::End)   => app.jump_end(),
                     (KeyModifiers::CONTROL, KeyCode::Char('d')) => app.half_page_down(),
                     (KeyModifiers::CONTROL, KeyCode::Char('u')) => app.half_page_up(),
                     (_, KeyCode::PageDown) => app.page_down(),
@@ -182,7 +187,7 @@ fn run_loop(
                             app.toggle_preview();
                         }
                     }
-                    (_, KeyCode::Char(' ')) if app.command.is_none() => app.toggle_preview(),
+                    (_, KeyCode::Char(' ')) if app.command.is_none() => app.toggle_selection(),
 
                     // Backspace: pop from command buffer or filter
                     (_, KeyCode::Backspace) => {
@@ -206,16 +211,7 @@ fn run_loop(
                     }
 
                     _ => {}
-                },
-
-                Event::Mouse(mouse) => match mouse.kind {
-                    MouseEventKind::ScrollDown => app.move_down(),
-                    MouseEventKind::ScrollUp => app.move_up(),
-                    MouseEventKind::Down(_) => {
-                        app.select_at_row(mouse.row);
-                    }
-                    _ => {}
-                },
+                }
 
                 _ => {}
             }
