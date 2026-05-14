@@ -1,8 +1,7 @@
 use crate::db::MediaFile;
 use image::DynamicImage;
-use ratatui::layout::Rect;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::{HashMap, HashSet}, path::PathBuf};
 
 const CACHE_MAX: usize = 30;
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
@@ -19,7 +18,6 @@ pub struct App {
     pub command: Option<String>,
     pub preview_open: bool,
     pub list_height: usize,     // updated each frame
-    pub list_area: Rect,        // updated each frame
     // Image display
     pub image_picker: Picker,
     pub image_state: ThreadProtocol,
@@ -35,6 +33,13 @@ pub struct App {
     pub encode_dispatch_count: usize,
     /// Set to true by execute_command when the user requests quit.
     pub quit: bool,
+    /// Indices (into `filtered`) of explicitly selected files.
+    pub selection: HashSet<usize>,
+    /// Tracks the last item landed on by a Shift-Up/Down move and its direction
+    /// (true = down). When a subsequent Shift move continues in the same direction
+    /// from the same position, the current item is NOT toggled again (it was already
+    /// toggled as "landed" by the previous step).
+    pub shift_last_landed: Option<(usize, bool)>,
 }
 
 impl App {
@@ -58,7 +63,6 @@ impl App {
             command: None,
             preview_open: false,
             list_height: 20,
-            list_area: Rect::default(),
             image_picker,
             image_state,
             image_protocol_name,
@@ -68,12 +72,15 @@ impl App {
             spinner_frame: 0,
             encode_dispatch_count: 0,
             quit: false,
+            selection: HashSet::new(),
+            shift_last_landed: None,
         }
     }
 
     pub fn move_down(&mut self) {
         if self.selected + 1 < self.filtered.len() {
             self.selected += 1;
+            self.shift_last_landed = None;
             self.ensure_visible();
             if self.preview_open { self.refresh_image(); }
         }
@@ -82,6 +89,7 @@ impl App {
     pub fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
+            self.shift_last_landed = None;
             self.ensure_visible();
             if self.preview_open { self.refresh_image(); }
         }
@@ -204,6 +212,8 @@ impl App {
         };
         self.selected = 0;
         self.scroll_offset = 0;
+        self.selection.clear();
+        self.shift_last_landed = None;
         // Discard protocol — new filter means a new image will be shown.
         self.image_state.empty_protocol();
         self.current_image_path = None;
@@ -307,18 +317,172 @@ impl App {
         self.filtered.get(self.selected)
     }
 
-    pub fn select_at_row(&mut self, row: u16) -> bool {
-        let inner_top = self.list_area.y + 1;
-        let inner_bottom = self.list_area.y + self.list_area.height.saturating_sub(1);
-        if row < inner_top || row >= inner_bottom {
-            return false;
+    // ── Selection ────────────────────────────────────────────────────────────
+
+    /// Toggle the current cursor row in/out of the selection set.
+    pub fn toggle_selection(&mut self) {
+        if self.selection.contains(&self.selected) {
+            self.selection.remove(&self.selected);
+        } else {
+            self.selection.insert(self.selected);
         }
-        let idx = self.scroll_offset + (row - inner_top) as usize;
-        if idx < self.filtered.len() {
-            self.selected = idx;
+    }
+
+    /// Clear all selected files.
+    pub fn clear_selection(&mut self) {
+        self.selection.clear();
+        self.shift_last_landed = None;
+    }
+
+    /// Move cursor up, toggling both the item you leave and the item you land on.
+    /// Exception: if this continues a Shift-Up sweep (same direction, no gap),
+    /// the item you leave is NOT toggled again — it was already toggled when you
+    /// landed here in the previous step.
+    pub fn extend_selection_up(&mut self) {
+        if self.selected > 0 {
+            let continuing = self.shift_last_landed == Some((self.selected, false));
+            if !continuing {
+                self.toggle_index(self.selected);
+            }
+            self.selected -= 1;
+            self.ensure_visible();
             if self.preview_open { self.refresh_image(); }
+            self.toggle_index(self.selected);
+            self.shift_last_landed = Some((self.selected, false));
         }
-        true
+    }
+
+    /// Move cursor down, toggling both the item you leave and the item you land on.
+    /// Exception: if this continues a Shift-Down sweep (same direction, no gap),
+    /// the item you leave is NOT toggled again — it was already toggled when you
+    /// landed here in the previous step.
+    pub fn extend_selection_down(&mut self) {
+        if self.selected + 1 < self.filtered.len() {
+            let continuing = self.shift_last_landed == Some((self.selected, true));
+            if !continuing {
+                self.toggle_index(self.selected);
+            }
+            self.selected += 1;
+            self.ensure_visible();
+            if self.preview_open { self.refresh_image(); }
+            self.toggle_index(self.selected);
+            self.shift_last_landed = Some((self.selected, true));
+        }
+    }
+
+    fn toggle_index(&mut self, idx: usize) {
+        if self.selection.contains(&idx) {
+            self.selection.remove(&idx);
+        } else {
+            self.selection.insert(idx);
+        }
+    }
+
+    // ── Slug/day boundary jumps ───────────────────────────────────────────────
+
+    /// Group key for a file: `yyyy-MM-<slug>` when a slug is present, else `yyyy-MM-DD`.
+    /// Matches MEX filename convention: slug files have no day component; day files have DD.
+    fn group_key(f: &MediaFile) -> String {
+        if !f.derived_slug.is_empty() {
+            let month = if f.derived_date.len() >= 7 { &f.derived_date[..7] } else { &f.derived_date };
+            format!("{}-{}", month, f.derived_slug)
+        } else if f.derived_date.len() >= 10 {
+            f.derived_date[..10].to_string()
+        } else {
+            f.derived_date.clone()
+        }
+    }
+
+    /// Find the first index of the current group (scan backward from `pos`).
+    fn group_start_of(&self, pos: usize) -> usize {
+        let key = Self::group_key(&self.filtered[pos]);
+        (0..=pos).rev()
+            .take_while(|&i| Self::group_key(&self.filtered[i]) == key)
+            .last()
+            .unwrap_or(pos)
+    }
+
+    /// Find the last index of the current group (scan forward from `pos`).
+    fn group_end_of(&self, pos: usize) -> usize {
+        let n = self.filtered.len();
+        let key = Self::group_key(&self.filtered[pos]);
+        (pos..n)
+            .take_while(|&i| Self::group_key(&self.filtered[i]) == key)
+            .last()
+            .unwrap_or(pos)
+    }
+
+    /// Toggle all indices in `range` in the selection:
+    /// if every index is already selected → remove all; otherwise insert all.
+    fn toggle_range(&mut self, lo: usize, hi: usize) {
+        let all_selected = (lo..=hi).all(|i| self.selection.contains(&i));
+        if all_selected {
+            for i in lo..=hi { self.selection.remove(&i); }
+        } else {
+            for i in lo..=hi { self.selection.insert(i); }
+        }
+    }
+
+    /// Home (non-selecting): jump to start of current slug/day group.
+    /// If already at the group start, jump to start of the previous group.
+    pub fn jump_home(&mut self) {
+        if self.filtered.is_empty() { return; }
+        let group_start = self.group_start_of(self.selected);
+        if self.selected > group_start {
+            self.selected = group_start;
+        } else if group_start > 0 {
+            let prev_end = group_start - 1;
+            self.selected = self.group_start_of(prev_end);
+        }
+        self.ensure_visible();
+        if self.preview_open { self.refresh_image(); }
+    }
+
+    /// End (non-selecting): jump to the start of the next slug/day group.
+    /// No-op if already in the last group.
+    pub fn jump_end(&mut self) {
+        if self.filtered.is_empty() { return; }
+        let group_end = self.group_end_of(self.selected);
+        let next_start = group_end + 1;
+        if next_start < self.filtered.len() {
+            self.selected = next_start;
+        }
+        self.ensure_visible();
+        if self.preview_open { self.refresh_image(); }
+    }
+
+    /// Shift-Home: toggle-range selection + cursor movement.
+    ///
+    /// - NOT at group start: toggles `group_start..=cursor`; cursor → group_start.
+    /// - AT group start: toggles entire previous group; cursor → prev_group_start.
+    pub fn jump_slug_day_prev(&mut self) {
+        if self.filtered.is_empty() { return; }
+        let group_start = self.group_start_of(self.selected);
+        if self.selected > group_start {
+            self.toggle_range(group_start, self.selected);
+            self.selected = group_start;
+        } else if group_start > 0 {
+            let prev_end = group_start - 1;
+            let prev_start = self.group_start_of(prev_end);
+            self.toggle_range(prev_start, prev_end);
+            self.selected = prev_start;
+        }
+        self.ensure_visible();
+        if self.preview_open { self.refresh_image(); }
+    }
+
+    /// Shift-End: toggle-range selection + cursor overshoot.
+    ///
+    /// Toggles `cursor..=group_end`; cursor moves to the **start of the next group**
+    /// (overshooting the selection boundary). If at the last group, cursor moves to group_end.
+    pub fn jump_slug_day_next(&mut self) {
+        if self.filtered.is_empty() { return; }
+        let group_end = self.group_end_of(self.selected);
+        self.toggle_range(self.selected, group_end);
+        let next_start = group_end + 1;
+        self.selected = if next_start < self.filtered.len() { next_start } else { group_end };
+        self.ensure_visible();
+        if self.preview_open { self.refresh_image(); }
     }
 }
 
@@ -572,5 +736,311 @@ mod tests {
         app.push_filter_char('x');
         assert!(app.current_image_path.is_none(), "filter must clear current_image_path");
         assert!(!app.preview_open, "filter must close preview");
+    }
+
+    // ── UC-04 · Selecting Files ──────────────────────────────────────────────
+
+    /// Build a test App with files arranged in named groups.
+    /// Each entry in `groups` is `(slug_or_date, count)`.
+    /// - If the group name looks like a date (`yyyy-MM-DD`), files use that as `derived_date`
+    ///   with no slug → group key = date.
+    /// - Otherwise the name is used as a `derived_slug` with a fixed month → group key = month-slug.
+    fn make_grouped_app(groups: &[(&str, usize)]) -> App {
+        let (tx, _rx) = mpsc::channel();
+        let image_state = ThreadProtocol::new(tx, None);
+        let picker = Picker::halfblocks();
+        let mut files: Vec<crate::db::MediaFile> = Vec::new();
+        let mut idx = 0usize;
+        for (name, count) in groups {
+            for _ in 0..*count {
+                let (derived_date, derived_slug) = if name.len() == 10 && name.chars().nth(4) == Some('-') {
+                    (name.to_string(), String::new())
+                } else {
+                    ("2024-01".to_string(), name.to_string())
+                };
+                files.push(crate::db::MediaFile {
+                    id: idx.to_string(),
+                    target_path: format!("nonexistent-{idx}.jpg"),
+                    derived_date,
+                    ext: "jpg".into(),
+                    tags: vec![],
+                    derived_slug,
+                    caption_slug: String::new(),
+                });
+                idx += 1;
+            }
+        }
+        App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into())
+    }
+
+    // ── Home (non-selecting) ────────────────────────────────────────────────
+
+    #[test]
+    fn home_jumps_to_group_start() {
+        // Groups: A(3), B(3) — start at index 4 (middle of B)
+        let mut app = make_grouped_app(&[("trip", 3), ("work", 3)]);
+        app.selected = 4;
+        app.jump_home();
+        assert_eq!(app.selected, 3, "Home from middle of group B should land at B's start (index 3)");
+        assert!(app.selection.is_empty(), "Home must not modify selection");
+    }
+
+    #[test]
+    fn home_at_group_start_jumps_to_prev() {
+        // Groups: A(3), B(3) — cursor at 3 (start of B)
+        let mut app = make_grouped_app(&[("trip", 3), ("work", 3)]);
+        app.selected = 3;
+        app.jump_home();
+        assert_eq!(app.selected, 0, "Home at start of B should jump to start of A (index 0)");
+        assert!(app.selection.is_empty());
+    }
+
+    #[test]
+    fn home_at_first_item_is_noop() {
+        let mut app = make_grouped_app(&[("trip", 3)]);
+        app.selected = 0;
+        app.jump_home();
+        assert_eq!(app.selected, 0, "Home at first item should be a no-op");
+    }
+
+    // ── End (non-selecting) ─────────────────────────────────────────────────
+
+    #[test]
+    fn end_jumps_to_start_of_next_group() {
+        // Groups: A(3) indices 0-2, B(3) indices 3-5
+        let mut app = make_grouped_app(&[("trip", 3), ("work", 3)]);
+        app.selected = 1; // middle of A
+        app.jump_end();
+        assert_eq!(app.selected, 3, "End should jump to start of next group (index 3)");
+        assert!(app.selection.is_empty(), "End must not modify selection");
+    }
+
+    #[test]
+    fn end_at_last_group_is_noop() {
+        let mut app = make_grouped_app(&[("trip", 3), ("work", 3)]);
+        app.selected = 4; // inside last group
+        app.jump_end();
+        assert_eq!(app.selected, 4, "End at last group should be a no-op");
+    }
+
+    #[test]
+    fn end_from_last_item_of_first_group_jumps_to_next() {
+        // Groups: A(3) indices 0-2, B(3) indices 3-5
+        let mut app = make_grouped_app(&[("trip", 3), ("work", 3)]);
+        app.selected = 2; // last item of A
+        app.jump_end();
+        assert_eq!(app.selected, 3, "End from last item of A should jump to start of B");
+    }
+
+    // ── Shift-Home (toggle-range selection) ────────────────────────────────
+
+    #[test]
+    fn shift_home_selects_to_group_start() {
+        // Groups: A(4) indices 0-3 — cursor at 2
+        let mut app = make_grouped_app(&[("trip", 4)]);
+        app.selected = 2;
+        app.jump_slug_day_prev();
+        assert_eq!(app.selected, 0, "cursor should move to group start");
+        assert!(app.selection.contains(&0));
+        assert!(app.selection.contains(&1));
+        assert!(app.selection.contains(&2));
+        assert_eq!(app.selection.len(), 3, "should select indices 0..=2");
+    }
+
+    #[test]
+    fn shift_home_toggles_deselect() {
+        // Groups: A(4) — cursor at 2, range already selected
+        let mut app = make_grouped_app(&[("trip", 4)]);
+        app.selected = 2;
+        // Pre-select the range that Shift-Home would select
+        app.selection.extend([0, 1, 2]);
+        app.jump_slug_day_prev();
+        assert!(app.selection.is_empty(), "Shift-Home on already-selected range should deselect");
+        assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn shift_home_at_group_start_selects_prev_group() {
+        // Groups: A(3) indices 0-2, B(3) indices 3-5 — cursor at 3 (start of B)
+        let mut app = make_grouped_app(&[("trip", 3), ("work", 3)]);
+        app.selected = 3;
+        app.jump_slug_day_prev();
+        assert_eq!(app.selected, 0, "cursor should jump to start of A");
+        assert!(app.selection.contains(&0));
+        assert!(app.selection.contains(&1));
+        assert!(app.selection.contains(&2));
+        assert_eq!(app.selection.len(), 3, "should select entire previous group (A)");
+        assert!(!app.selection.contains(&3), "current position (start of B) must not be selected");
+    }
+
+    #[test]
+    fn shift_home_at_first_group_start_is_noop() {
+        let mut app = make_grouped_app(&[("trip", 3)]);
+        app.selected = 0;
+        app.jump_slug_day_prev();
+        assert_eq!(app.selected, 0);
+        assert!(app.selection.is_empty());
+    }
+
+    // ── Shift-End (toggle-range + cursor overshoot) ─────────────────────────
+
+    #[test]
+    fn shift_end_selects_to_group_end() {
+        // Groups: A(4) indices 0-3, B(3) indices 4-6 — cursor at 1
+        let mut app = make_grouped_app(&[("trip", 4), ("work", 3)]);
+        app.selected = 1;
+        app.jump_slug_day_next();
+        assert!(app.selection.contains(&1));
+        assert!(app.selection.contains(&2));
+        assert!(app.selection.contains(&3));
+        assert_eq!(app.selection.len(), 3, "should select 1..=3 (rest of group A)");
+    }
+
+    #[test]
+    fn shift_end_cursor_overshoots_to_next_group_start() {
+        // Groups: A(4) indices 0-3, B(3) indices 4-6 — cursor at 1
+        let mut app = make_grouped_app(&[("trip", 4), ("work", 3)]);
+        app.selected = 1;
+        app.jump_slug_day_next();
+        assert_eq!(app.selected, 4, "cursor should overshoot to start of next group (index 4)");
+        assert!(!app.selection.contains(&4), "start of next group must NOT be in selection");
+    }
+
+    #[test]
+    fn shift_end_toggles_deselect() {
+        // Groups: A(4) — cursor at 1, range already selected
+        let mut app = make_grouped_app(&[("trip", 4), ("work", 3)]);
+        app.selected = 1;
+        app.selection.extend([1, 2, 3]); // pre-select what Shift-End would select
+        app.jump_slug_day_next();
+        assert!(
+            !app.selection.contains(&1) && !app.selection.contains(&2) && !app.selection.contains(&3),
+            "Shift-End on already-selected range should deselect"
+        );
+    }
+
+    #[test]
+    fn shift_end_at_last_group_selects_rest_no_cursor_move() {
+        // Groups: A(3) indices 0-2 only — cursor at 1
+        let mut app = make_grouped_app(&[("trip", 3)]);
+        app.selected = 1;
+        app.jump_slug_day_next();
+        assert!(app.selection.contains(&1));
+        assert!(app.selection.contains(&2));
+        assert_eq!(app.selection.len(), 2);
+        // No next group — cursor stays at last item of group
+        assert_eq!(app.selected, 2, "cursor should stay at last item when no next group exists");
+    }
+
+    // ── Shift-Up/Down (toggle both, skip re-toggle when continuing) ─────────
+
+    #[test]
+    fn shift_down_first_press_toggles_start_and_landed() {
+        let mut app = make_grouped_app(&[("trip", 5)]);
+        app.selected = 0;
+        app.extend_selection_down(); // toggle 0 (sel), move→1, toggle 1 (sel)
+        assert!(app.selection.contains(&0));
+        assert!(app.selection.contains(&1));
+        assert_eq!(app.selection.len(), 2);
+    }
+
+    #[test]
+    fn shift_down_continuing_only_toggles_landed() {
+        let mut app = make_grouped_app(&[("trip", 5)]);
+        app.selected = 0;
+        app.extend_selection_down(); // toggle 0, move→1, toggle 1 → {0,1}
+        app.extend_selection_down(); // continuing: skip 1, move→2, toggle 2 → {0,1,2}
+        assert!(app.selection.contains(&0));
+        assert!(app.selection.contains(&1), "item 1 must NOT be double-toggled");
+        assert!(app.selection.contains(&2));
+        assert_eq!(app.selection.len(), 3);
+    }
+
+    #[test]
+    fn shift_down_continuing_builds_range() {
+        let mut app = make_grouped_app(&[("trip", 6)]);
+        app.selected = 0;
+        app.extend_selection_down();
+        app.extend_selection_down();
+        app.extend_selection_down();
+        app.extend_selection_down(); // → {0,1,2,3,4}
+        assert_eq!(app.selection.len(), 5);
+        for i in 0..=4 { assert!(app.selection.contains(&i)); }
+    }
+
+    #[test]
+    fn shift_direction_change_toggles_current_on_reverse() {
+        let mut app = make_grouped_app(&[("trip", 5)]);
+        app.selected = 0;
+        app.extend_selection_down(); // {0,1}, cursor=1
+        app.extend_selection_down(); // {0,1,2}, cursor=2
+        // Reverse: not continuing down from 2, so toggle 2 (desel) + move + toggle 1 (desel)
+        app.extend_selection_up();   // {0}, cursor=1
+        assert!(app.selection.contains(&0));
+        assert!(!app.selection.contains(&1));
+        assert!(!app.selection.contains(&2));
+        assert_eq!(app.selection.len(), 1);
+    }
+
+    #[test]
+    fn shift_up_continuing_builds_range() {
+        let mut app = make_grouped_app(&[("trip", 5)]);
+        app.selected = 4;
+        app.extend_selection_up();
+        app.extend_selection_up();
+        app.extend_selection_up(); // → {4,3,2,1}
+        assert_eq!(app.selection.len(), 4);
+        for i in 1..=4 { assert!(app.selection.contains(&i)); }
+    }
+
+    #[test]
+    fn shift_normal_nav_resets_continuation() {
+        let mut app = make_grouped_app(&[("trip", 5)]);
+        app.selected = 0;
+        app.extend_selection_down(); // {0,1}, state=(1,down)
+        app.move_down();             // normal nav, resets shift state, cursor=2
+        app.extend_selection_down(); // fresh start: toggle 2, move→3, toggle 3 → {0,1,2,3}
+        assert!(app.selection.contains(&2), "fresh start toggles current");
+        assert!(app.selection.contains(&3));
+    }
+
+    #[test]
+    fn shift_down_preserves_existing_selection() {
+        let mut app = make_grouped_app(&[("trip", 5)]);
+        app.selection.insert(4);
+        app.selected = 1;
+        app.extend_selection_down(); // toggles 1 and 2; item 4 untouched
+        assert!(app.selection.contains(&4));
+        assert!(app.selection.contains(&1));
+        assert!(app.selection.contains(&2));
+    }
+
+    // ── Space toggle ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn space_toggle_independent_of_anchor() {
+        let mut app = make_grouped_app(&[("trip", 5)]);
+        app.selected = 2;
+        app.toggle_selection(); // select index 2
+        assert!(app.selection.contains(&2));
+        app.toggle_selection(); // deselect index 2
+        assert!(!app.selection.contains(&2));
+    }
+
+    // ── Esc clears selection ─────────────────────────────────────────────────
+
+    #[test]
+    fn selection_cleared_before_preview_on_esc_order() {
+        let mut app = make_grouped_app(&[("trip", 3)]);
+        app.selection.insert(0);
+        app.selection.insert(1);
+        app.preview_open = true;
+        // Simulate first Esc: clears selection (preview stays open)
+        app.clear_selection();
+        assert!(app.selection.is_empty(), "selection should be cleared");
+        assert!(app.preview_open, "preview should still be open after first Esc-equivalent");
+        // Simulate second Esc: closes preview
+        app.preview_open = false;
+        assert!(!app.preview_open);
     }
 }

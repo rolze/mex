@@ -23,17 +23,6 @@
 > No letter keys are bound to navigation actions — all letters go directly into search.
 > Use `:` + Enter for commands.
 
-### Mouse
-
-| Action | Behaviour |
-|--------|-----------|
-| **Scroll wheel up** | Move selection up one row (equivalent to `↑`) |
-| **Scroll wheel down** | Move selection down one row (equivalent to `↓`) |
-| **Left click** on a row | Immediately moves the selection highlight to that row |
-
-> The scroll wheel moves the *selection*, not just the viewport scroll offset — the highlighted item follows the wheel.  
-> The viewport auto-scrolls to keep the selection always visible.
-
 ## Filter Bar
 
 - **Type any characters** → live substring filter applied to filename and tags
@@ -43,10 +32,12 @@
 
 ## Split Pane (Preview)
 
-- Activated with `Enter` / `Space` or a click on the highlighted row
+- Activated with `Enter` / `Space`
 - Left pane: file list (45 % width)
 - Right pane: metadata (path, date, ext, tags) + `chafa` image render when the file exists on disk
 - Close with `Esc` or `Enter` / `Space` again
+
+See [[UC-03.md]]
 
 ## Column Layout (Left Pane)
 
@@ -60,3 +51,10 @@
 - **Folder**: the year directory (e.g. `2022/`). Truncated at the front if longer than 6 chars.
 - **Filename**: takes all remaining width. If the name is too long, the *beginning* is replaced with `…` so the extension and unique tail are always visible (e.g. `…-long-event-name.jpeg`).
 - **Tags**: up to 30 chars. If the tag list is too long, the end is replaced with `…`.
+
+# Tags
+
+Tags are a core element in the tool. It should be fast and easy to maintain those tags across different ranges of files.
+
+They are displayed with a special highlight (let's ponder how) to spot easily what text comprises one tag.
+

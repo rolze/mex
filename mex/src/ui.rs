@@ -38,7 +38,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let list_area = main_chunks[0];
     app.list_height = list_area.height.saturating_sub(2) as usize;
-    app.list_area = list_area;
 
     draw_list(frame, app, list_area);
 
@@ -55,10 +54,19 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
     let filtered = app.filtered.len();
     let pos = if filtered == 0 { 0 } else { app.selected + 1 };
 
-    let title = if app.filter.is_empty() {
-        format!(" mex — {} / {} ", pos, total)
+    let title = if app.selection.is_empty() {
+        if app.filter.is_empty() {
+            format!(" mex — {} / {} ", pos, total)
+        } else {
+            format!(" mex — {} / {} / {} ", pos, filtered, total)
+        }
     } else {
-        format!(" mex — {} / {} / {} ", pos, filtered, total)
+        let sel = app.selection.len();
+        if app.filter.is_empty() {
+            format!(" mex — {} / {} ({} selected) ", pos, total, sel)
+        } else {
+            format!(" mex — {} / {} / {} ({} selected) ", pos, filtered, total, sel)
+        }
     };
 
     // Fixed column widths (folder is always a short year prefix)
@@ -79,14 +87,22 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
         .skip(app.scroll_offset)
         .take(area.height.saturating_sub(2) as usize)
         .map(|(i, f)| {
-            let selected = i == app.selected;
+            let is_cursor = i == app.selected;
+            let is_selected = app.selection.contains(&i);
 
             let folder = folder_of(&f.target_path);
-            let folder_cell = truncate_front(folder, FOLDER_COL - 1); // -1 for "/"
-            let folder_str = format!("{:<width$}/", folder_cell, width = FOLDER_COL - 1);
+            // Reserve 1 char for the selection marker (between folder name and "/").
+            let folder_cell = truncate_front(folder, FOLDER_COL - 2); // -2 for marker + /
+            let folder_name = format!("{:<width$}", folder_cell, width = FOLDER_COL - 2);
+            // Dot only when the file is in the selection set (not just cursor position).
+            let show_dot = is_selected;
+            let marker_str = if show_dot { "•" } else { " " };
+            let marker_fg = if is_cursor { Color::Black } else { Color::White };
 
-            let base_style = if selected {
+            let base_style = if is_cursor {
                 Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else if is_selected {
+                Style::default().bg(Color::Rgb(50, 50, 90))
             } else {
                 Style::default()
             };
@@ -101,12 +117,12 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
                                   else if !f.caption_slug.is_empty() { &f.caption_slug }
                                   else { "" };
 
-            let base_fg = if selected { Color::Black } else { Color::White };
+            let base_fg = if is_cursor { Color::Black } else { Color::White };
             let filename_spans: Vec<Span> = if !highlight.is_empty() {
                 if let Some(pos) = filename_padded.find(highlight) {
                     let (before, rest) = filename_padded.split_at(pos);
                     let (matched, after) = rest.split_at(highlight.len().min(rest.len()));
-                    let hi_fg = if selected { Color::Black } else { Color::Cyan };
+                    let hi_fg = if is_cursor { Color::Black } else { Color::Cyan };
                     vec![
                         Span::styled(before.to_string(), base_style.fg(base_fg)),
                         Span::styled(matched.to_string(), base_style.fg(hi_fg).add_modifier(Modifier::BOLD)),
@@ -124,11 +140,13 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let tags_str = format!("{:<width$}", tags_cell, width = TAGS_COL);
 
             let mut spans = vec![
-                Span::styled(folder_str, base_style.fg(if selected { Color::Black } else { Color::DarkGray })),
+                Span::styled(folder_name, base_style.fg(if is_cursor { Color::Black } else { Color::DarkGray })),
+                Span::styled(marker_str, base_style.fg(marker_fg).add_modifier(Modifier::BOLD)),
+                Span::styled("/", base_style.fg(if is_cursor { Color::Black } else { Color::DarkGray })),
             ];
             spans.extend(filename_spans);
             spans.push(Span::raw(" "));
-            spans.push(Span::styled(tags_str, base_style.fg(if selected { Color::Black } else { Color::Green })));
+            spans.push(Span::styled(tags_str, base_style.fg(if is_cursor { Color::Black } else { Color::Green })));
 
             let line = Line::from(spans);
             ListItem::new(line).style(base_style)
