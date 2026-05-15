@@ -376,6 +376,52 @@ fn days_from_epoch(year: i64, month: i64, day: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
+/// Fix the extension of a single media file: rename on disk, update DB.
+///
+/// `new_ext` must be the canonical extension detected from the file's magic bytes
+/// (e.g. `"jpg"`).  The caller is responsible for detection; this function only
+/// does the rename + DB update.
+pub fn fix_ext(db_path: &str, target_root: &str, file_id: &str, new_ext: &str) -> Result<()> {
+    use std::path::Path;
+
+    let conn = Connection::open(db_path)?;
+
+    let target_path: String = conn.query_row(
+        "SELECT target_path FROM media WHERE id = ?1",
+        [file_id],
+        |row| row.get(0),
+    )?;
+
+    let old_abs = Path::new(target_root).join(&target_path);
+    let stem = old_abs
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| anyhow::anyhow!("cannot determine stem for {}", old_abs.display()))?;
+
+    let new_basename = format!("{stem}.{new_ext}");
+    let new_target_path = if let Some(pos) = target_path.rfind('/') {
+        format!("{}/{}", &target_path[..pos], new_basename)
+    } else {
+        new_basename
+    };
+    let new_abs = Path::new(target_root).join(&new_target_path);
+
+    if old_abs == new_abs {
+        return Ok(());
+    }
+    if !old_abs.exists() {
+        anyhow::bail!("file not found: {}", old_abs.display());
+    }
+    std::fs::rename(&old_abs, &new_abs)?;
+
+    conn.execute(
+        "UPDATE media SET target_path = ?1, ext = ?2 WHERE id = ?3",
+        rusqlite::params![new_target_path, new_ext, file_id],
+    )?;
+
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────

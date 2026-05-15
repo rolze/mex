@@ -1090,6 +1090,28 @@ fn parse_iso8601_date(s: &str) -> Option<String> {
     None
 }
 
+// ── Format / extension mismatch detection ────────────────────────────────────
+
+/// Returns the canonical extension for the detected format if the file's magic
+/// bytes indicate a format different from `claimed_ext`.  Returns `None` when
+/// they match or the format cannot be detected (e.g. RAW, video).
+pub(crate) fn detect_wrong_ext(path: &Path, claimed_ext: &str) -> Option<String> {
+    let mut f = fs::File::open(path).ok()?;
+    let mut header = [0u8; 16];
+    let n = f.read(&mut header).ok()?;
+    if n < 4 {
+        return None;
+    }
+    let fmt = image::guess_format(&header[..n]).ok()?;
+    let valid_exts = fmt.extensions_str();
+    let claimed = claimed_ext.to_lowercase();
+    if valid_exts.iter().any(|&e| e == claimed) {
+        None
+    } else {
+        Some(valid_exts[0].to_string())
+    }
+}
+
 // ── SHA-256 ───────────────────────────────────────────────────────────────────
 
 pub fn sha256_file(path: &Path) -> Result<String> {
@@ -1122,6 +1144,8 @@ pub struct ImportEntry {
     pub content_hash: String,
     pub file_size: u64,
     pub ext: String,
+    /// `Some("jpg")` when magic bytes reveal a format that differs from `ext`.
+    pub wrong_ext: Option<String>,
     pub derived_date: Option<String>,
     pub date_source: String,
     pub exif_raw: Option<String>,
@@ -1229,6 +1253,7 @@ pub fn scan_source(
                 content_hash: String::new(),
                 file_size: 0,
                 ext: ext.clone(),
+                wrong_ext: None,
                 derived_date: None,
                 date_source: "skipped".into(),
                 exif_raw: None,
@@ -1336,11 +1361,15 @@ pub fn scan_source(
             (ImportStatus::Pending, None)
         };
 
+        // Extension / format mismatch (only for image files the crate can probe)
+        let wrong_ext = detect_wrong_ext(path, &ext);
+
         entries.push(ImportEntry {
             source_path: path.to_path_buf(),
             content_hash: hash,
             file_size,
             ext,
+            wrong_ext,
             derived_date,
             date_source: date_source.to_string(),
             exif_raw,

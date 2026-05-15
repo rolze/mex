@@ -10,7 +10,7 @@ use std::{
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["fix-date", "import", "q", "quit", "tag", "untag"];
+const KNOWN_COMMANDS: &[&str] = &["fix-date", "fix-ext", "import", "q", "quit", "tag", "untag"];
 
 // ── Import state ──────────────────────────────────────────────────────────────
 
@@ -622,6 +622,11 @@ impl App {
             return;
         }
 
+        if trimmed == "fix-ext" {
+            self.fix_ext_selected();
+            return;
+        }
+
         if let Some(path_arg) = trimmed.strip_prefix("import") {
             let path_str = path_arg.trim();
             self.start_import(path_str);
@@ -933,6 +938,74 @@ impl App {
                 errors
             ));
         }
+    }
+
+    // ── fix-ext ──────────────────────────────────────────────────────────────
+
+    /// Apply `:fix-ext` to the selection set (or cursor file if nothing is
+    /// explicitly selected): detect extension/format mismatches via magic bytes
+    /// and rename the file on disk + update the DB for each affected file.
+    pub fn fix_ext_selected(&mut self) {
+        let targets: Vec<(String, String)> = if self.selection.is_empty() {
+            self.filtered
+                .get(self.selected)
+                .map(|f| vec![(f.id.clone(), f.target_path.clone())])
+                .unwrap_or_default()
+        } else {
+            let mut sel: Vec<usize> = self.selection.iter().copied().collect();
+            sel.sort_unstable();
+            sel.iter()
+                .filter_map(|&i| self.filtered.get(i).map(|f| (f.id.clone(), f.target_path.clone())))
+                .collect()
+        };
+
+        if targets.is_empty() {
+            self.status_message = Some("fix-ext: no file selected".into());
+            return;
+        }
+
+        let mut fixed = 0usize;
+        let mut already_ok = 0usize;
+        let mut errors = 0usize;
+        let mut first_error: Option<String> = None;
+
+        for (id, rel_path) in &targets {
+            let abs_path = PathBuf::from(&self.target_root).join(rel_path);
+            let current_ext = abs_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            match crate::import::detect_wrong_ext(&abs_path, &current_ext) {
+                Some(new_ext) => {
+                    if let Err(e) = crate::db::fix_ext(&self.db_path, &self.target_root, id, &new_ext) {
+                        eprintln!("fix-ext error for {id}: {e}");
+                        if first_error.is_none() {
+                            first_error = Some(e.to_string());
+                        }
+                        errors += 1;
+                    } else {
+                        fixed += 1;
+                    }
+                }
+                None => already_ok += 1,
+            }
+        }
+
+        if let Err(e) = self.reload() {
+            self.status_message = Some(format!("fix-ext: reload failed: {e}"));
+            return;
+        }
+
+        self.status_message = Some(if errors > 0 {
+            let msg = first_error.unwrap_or_default();
+            format!("fix-ext: {errors} error(s) — {msg}")
+        } else if fixed == 0 {
+            format!("fix-ext: {already_ok} file(s) already correct")
+        } else {
+            format!("fix-ext: fixed {fixed} file(s)")
+        });
     }
 
     // ── tag ──────────────────────────────────────────────────────────────────
