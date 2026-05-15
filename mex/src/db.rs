@@ -14,6 +14,8 @@ pub struct MediaFile {
     pub caption_slug: String,
     /// Full OS datetime stored in the DB (e.g. `"2022-04-18 14:30:00"`). Empty if not set.
     pub os_date: String,
+    /// Original filename (basename of `source_path`) before import. Empty if not set.
+    pub orig_filename: String,
 }
 
 pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
@@ -22,7 +24,7 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
     let sql = "SELECT m.id, m.target_path, COALESCE(m.derived_date,''), m.ext,
                       COALESCE(GROUP_CONCAT(t.name || CHAR(30) || t.type, CHAR(31)),''),
                       COALESCE(m.derived_slug,''), COALESCE(m.caption_slug,''),
-                      COALESCE(m.os_date,'')
+                      COALESCE(m.os_date,''), COALESCE(m.source_path,'')
                FROM media m
                LEFT JOIN media_tags mt ON mt.media_id = m.id
                LEFT JOIN tags t ON t.id = mt.tag_id
@@ -47,6 +49,11 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
                 })
                 .unzip()
         };
+        let source_path: String = row.get(8)?;
+        let orig_filename = std::path::Path::new(&source_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         Ok(MediaFile {
             id: row.get(0)?,
             target_path: row.get(1)?,
@@ -57,6 +64,7 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
             derived_slug: row.get(5)?,
             caption_slug: row.get(6)?,
             os_date: row.get(7)?,
+            orig_filename,
         })
     })?;
 
