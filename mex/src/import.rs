@@ -1145,13 +1145,13 @@ pub struct ImportSummary {
 
 /// Scan `source_root` for media files.
 ///
-/// `existing_hashes` — set of `content_hash` values already in the DB with `status='moved'`.
-/// Files whose hash is in this set are marked `Duplicate`.
+/// `existing_hashes` — map of `content_hash → target_path` for files already in the DB
+/// with `status='moved'`.  Files whose hash is in this map are marked `Duplicate`.
 ///
 /// Returns one `ImportEntry` per media file found (including duplicates, skipped, etc.).
 pub fn scan_source(
     source_root: &Path,
-    existing_hashes: &HashSet<String>,
+    existing_hashes: &HashMap<String, String>,
     progress_cb: &mut dyn FnMut(usize),
 ) -> Result<Vec<ImportEntry>> {
     let mut entries: Vec<ImportEntry> = Vec::new();
@@ -1323,14 +1323,17 @@ pub fn scan_source(
             derive_slug(path, source_root, filename, in_junk);
 
         // Dedup
-        let status = if existing_hashes.contains(&hash) || seen_hashes.contains_key(&hash) {
-            ImportStatus::Duplicate
+        let (status, dup_target) = if let Some(existing_tgt) = existing_hashes.get(&hash) {
+            (ImportStatus::Duplicate, Some(format!("already imported: {existing_tgt}")))
+        } else if let Some(first_seen) = seen_hashes.get(&hash) {
+            let name = first_seen.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+            (ImportStatus::Duplicate, Some(format!("batch duplicate of: {name}")))
         } else if derived_date.is_none() {
             seen_hashes.insert(hash.clone(), path.to_path_buf());
-            ImportStatus::UnknownDate
+            (ImportStatus::UnknownDate, None)
         } else {
             seen_hashes.insert(hash.clone(), path.to_path_buf());
-            ImportStatus::Pending
+            (ImportStatus::Pending, None)
         };
 
         entries.push(ImportEntry {
@@ -1345,7 +1348,7 @@ pub fn scan_source(
             caption_slug,
             slug_source,
             counter: None,
-            target_path: None,
+            target_path: dup_target,
             status,
         });
     }
@@ -1901,14 +1904,14 @@ fn uuid_v4() -> String {
 
 // ── Public helper: load existing hashes from DB ───────────────────────────────
 
-pub fn load_existing_hashes(conn: &rusqlite::Connection) -> Result<HashSet<String>> {
+pub fn load_existing_hashes(conn: &rusqlite::Connection) -> Result<HashMap<String, String>> {
     let mut stmt = conn.prepare(
-        "SELECT content_hash FROM media WHERE status='moved' AND content_hash IS NOT NULL",
+        "SELECT content_hash, COALESCE(target_path, '') FROM media WHERE status='moved' AND content_hash IS NOT NULL",
     )?;
-    let hashes: Result<HashSet<String>, _> = stmt
-        .query_map([], |row| row.get(0))?
+    let map: Result<HashMap<String, String>, _> = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect();
-    Ok(hashes?)
+    Ok(map?)
 }
 
 // ── Message type for background thread ───────────────────────────────────────
