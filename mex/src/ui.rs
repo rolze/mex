@@ -325,6 +325,8 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                        else if !file.derived_date.is_empty() { file.derived_date.as_str() }
                        else { "—" };
 
+        let orig_str = if !file.orig_filename.is_empty() { file.orig_filename.as_str() } else { "—" };
+
         let left = Paragraph::new(vec![
             Line::from(vec![
                 Span::styled("File  ", Style::default().fg(Color::DarkGray)),
@@ -333,6 +335,10 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             Line::from(vec![
                 Span::styled("Date  ", Style::default().fg(Color::DarkGray)),
                 Span::styled(date_str, Style::default().fg(Color::Yellow)),
+            ]),
+            Line::from(vec![
+                Span::styled("Orig  ", Style::default().fg(Color::DarkGray)),
+                Span::raw(orig_str),
             ]),
         ])
         .wrap(Wrap { trim: true });
