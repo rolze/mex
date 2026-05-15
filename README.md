@@ -1,8 +1,19 @@
-# MEX
+# mex — Media Explorer
 
-My very personalized media importer and browser. It fits my mental model, most likely it won't fit yours. In that case, fork it and go away. ;)
+A personal, opinionated terminal media browser and importer written in **Rust + Ratatui**. It fits one mental model (mine) — fork it if yours differs.
 
-## Expected folder and filename layout
+## What it does
+
+- **Browses** a large media library (tested to 50 000+ files) from a SQLite-backed index (`.mex.db`) — instant, keyboard-only, no mouse required.
+- **Imports** new media from phones, cameras, and drives: deduplicates by SHA-256, extracts dates from EXIF/XMP/filename/folder, derives slugs from source paths, and normalises filenames to a consistent scheme.
+- **Filters** the list live by filename text, tags (`#tag`), and tag types (`@type`) — combined with AND/OR logic.
+- **Selects** files individually or in groups (Shift-arrows, Shift-Home/End) for bulk tagging or view creation.
+- **Tags** files with typed, autocompleted tags (`:tag name@type` / `:untag`).
+- **Creates views** on demand as hard-linked directory trees (`:vc <name>`) for album sharing without copying files.
+- **Fixes** metadata in-place: `:fix-date` to correct date prefixes and `:fix-ext` to repair wrong file extensions.
+- **Previews** images inline using Kitty / Sixel / iTerm2 / halfblock protocols — auto-detected, overridable via `MEX_PROTOCOL`.
+
+## Filename convention
 
 ```
 <yyyy>/  yyyy-MM-<slug>-####-<caption>.<ext>   ← slug + caption
@@ -11,13 +22,10 @@ My very personalized media importer and browser. It fits my mental model, most l
          yyyy-MM-DD-####.<ext>                  ← counter only
 ```
 
-# Key ideas
+- Year-based folder, date prefix on every file.
+- **Slug** — the only file-based grouper (derived from source folder names; falls back to `yyyy-MM-DD`).
+- **Caption** — optional short description embedded in the filename; user-editable.
 
-* organized by <yyyy> on folder level
-* files always prefixed by <yyyy>-<mm>-... 
-* <slug> is the only filebased grouper (derived from various hints if available), if not possible it falls back to <yyyy>-<mm>-<dd>-...
-* <caption> is an additional potentially valueable information, derived from source filenames, can be extended/changed afterwards by the user to add a short description to the file
-* import media files from various devices (mobile phones, camera, etc.) with different filename conventions
-* on demand "view" creation based on filter results for album creation and viewing (Linux hard links)
-* no mouse support, focus is on fast keyboard interactions
-* sophisticated selection and tagging behaviour
+## Configuration
+
+Per-machine config in `~/.config/mex/config.toml` (`target_root`). The shared `.mex.db` is never written during configuration.
