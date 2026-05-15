@@ -24,7 +24,7 @@ pub enum ImportState {
         scroll: usize, // scroll offset for the preview list
     },
     /// Copy in progress.
-    Copying { done: usize, total: usize, current_file: String },
+    Copying { done: usize, total: usize, current_file: String, copied: usize, skipped_dup: usize, errors: usize },
     /// Copy finished; message is displayed until the next keypress.
     Done(String),
 }
@@ -731,8 +731,8 @@ impl App {
                 self.import_state = ImportState::Idle;
                 self.import_rx = None;
             }
-            ImportMsg::CopyProgress { done, total, current_file } => {
-                self.import_state = ImportState::Copying { done, total, current_file };
+            ImportMsg::CopyProgress { done, total, current_file, copied, skipped_dup, errors } => {
+                self.import_state = ImportState::Copying { done, total, current_file, copied, skipped_dup, errors };
             }
             ImportMsg::CopyDone(summary) => {
                 let msg = format!(
@@ -759,7 +759,7 @@ impl App {
             _ => return,
         };
         let total = entries.iter().filter(|e| e.status == ImportStatus::Pending).count();
-        self.import_state = ImportState::Copying { done: 0, total, current_file: String::new() };
+        self.import_state = ImportState::Copying { done: 0, total, current_file: String::new(), copied: 0, skipped_dup: 0, errors: 0 };
 
         let db_path = self.db_path.clone();
         let target_root = self.target_root.clone();
@@ -776,12 +776,15 @@ impl App {
                 }
             };
             let tx2 = tx.clone();
-            let mut progress_cb = move |done: usize, total: usize, file: &str| -> bool {
+            let mut progress_cb = move |done: usize, total: usize, file: &str, summary: &crate::import::ImportSummary| -> bool {
                 tx2.send(ImportMsg::CopyProgress {
                     done,
                     total,
                     current_file: file.to_string(),
-                }).is_ok()  // false when receiver dropped (user pressed Esc)
+                    copied: summary.copied,
+                    skipped_dup: summary.skipped_dup,
+                    errors: summary.errors,
+                }).is_ok()
             };
             match crate::import::execute_import(
                 &entries,

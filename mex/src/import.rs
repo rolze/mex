@@ -1653,7 +1653,7 @@ pub fn execute_import(
     target_root: &Path,
     conn: &mut rusqlite::Connection,
     import_date: &str,
-    progress_cb: &mut dyn FnMut(usize, usize, &str) -> bool,
+    progress_cb: &mut dyn FnMut(usize, usize, &str, &ImportSummary) -> bool,
 ) -> Result<ImportSummary> {
     // Load hashes of already-imported files for dedup.
     let existing_hashes = load_existing_hashes(conn)?;
@@ -1692,7 +1692,7 @@ pub fn execute_import(
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
-        let keep_going = progress_cb(attempted, total, &current_file);
+        let keep_going = progress_cb(attempted, total, &current_file, &summary);
         if !keep_going {
             // User aborted — assign tag to files already processed this session.
             break;
@@ -1759,7 +1759,7 @@ pub fn execute_import(
         imported_ids.push(id);
         summary.copied += 1;
         // Completion update — false return value means abort (handled at next iteration start).
-        progress_cb(attempted, total, &current_file);
+        progress_cb(attempted, total, &current_file, &summary);
     }
 
     // Assign import tag to all imported files
@@ -1943,7 +1943,7 @@ pub enum ImportMsg {
     ScanProgress { count: usize, current_file: String },
     ScanDone(Vec<ImportEntry>),
     ScanError(String),
-    CopyProgress { done: usize, total: usize, current_file: String },
+    CopyProgress { done: usize, total: usize, current_file: String, copied: usize, skipped_dup: usize, errors: usize },
     CopyDone(ImportSummary),
     CopyError(String),
 }

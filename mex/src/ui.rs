@@ -27,11 +27,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             draw_import_preview(frame, app, area);
             return;
         }
-        ImportState::Copying { done, total, current_file } => {
+        ImportState::Copying { done, total, current_file, copied, skipped_dup, errors } => {
             let done = *done;
             let total = *total;
+            let copied = *copied;
+            let skipped_dup = *skipped_dup;
+            let errors = *errors;
             let current_file = current_file.clone();
-            draw_import_copying(frame, app, area, done, total, &current_file);
+            draw_import_copying(frame, app, area, done, total, &current_file, copied, skipped_dup, errors);
             return;
         }
         _ => {}
@@ -729,6 +732,9 @@ fn draw_import_copying(
     done: usize,
     total: usize,
     current_file: &str,
+    copied: usize,
+    skipped_dup: usize,
+    errors: usize,
 ) {
     let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
     let pct = if total > 0 { done * 100 / total } else { 0 };
@@ -743,8 +749,20 @@ fn draw_import_copying(
     } else {
         format!("\n  → {current_file}")
     };
+
+    // Build stats line: only show non-zero counters to keep it clean.
+    let mut stats_parts: Vec<String> = Vec::new();
+    if copied > 0       { stats_parts.push(format!("✓ {copied} copied")); }
+    if skipped_dup > 0  { stats_parts.push(format!("⊘ {skipped_dup} duplicate")); }
+    if errors > 0       { stats_parts.push(format!("✗ {errors} error")); }
+    let stats_line = if stats_parts.is_empty() {
+        String::new()
+    } else {
+        format!("\n  {}", stats_parts.join("   "))
+    };
+
     let text = format!(
-        "{spinner}  {done} / {total} files  ({pct}%)\n  {bar}{file_line}\n\n  [Esc] abort"
+        "{spinner}  {done} / {total}  ({pct}%)\n  {bar}{file_line}{stats_line}\n\n  [Esc] abort"
     );
 
     let block = Block::default()
