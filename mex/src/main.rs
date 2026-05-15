@@ -67,6 +67,7 @@ fn main() -> Result<()> {
     )?;
 
     let target_root = resolve_target_root();
+    db::init_db(&db_path).context("Failed to initialise DB")?;
     let files = db::load_files(&db_path).context("Failed to load files from DB")?;
 
     // Query terminal for graphics protocol/font-size (before entering alt screen).
