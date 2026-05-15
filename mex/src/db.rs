@@ -607,4 +607,16 @@ mod tests {
 
         fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn test_folder_of() {
+        assert_eq!(folder_of("2022/image.jpg"), "2022");
+        assert_eq!(folder_of("a/b/c.jpg"), "a/b");
+        assert_eq!(folder_of("image.jpg"), ".");
+        assert_eq!(folder_of(""), ".");
+        assert_eq!(folder_of("/image.jpg"), "");
+        assert_eq!(folder_of("folder/"), "folder");
+        assert_eq!(folder_of("a///b"), "a//");
+        assert_eq!(folder_of("/"), "");
+    }
 }
