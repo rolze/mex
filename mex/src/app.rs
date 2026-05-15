@@ -1,11 +1,33 @@
 use crate::db::MediaFile;
+use crate::import::{ImportEntry, ImportMsg, ImportStatus};
 use image::DynamicImage;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
-use std::{collections::{BTreeSet, HashMap, HashSet}, path::PathBuf};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    path::PathBuf,
+    sync::mpsc,
+};
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["fix-date", "q", "quit", "tag", "untag"];
+const KNOWN_COMMANDS: &[&str] = &["fix-date", "import", "q", "quit", "tag", "untag"];
+
+// ── Import state ──────────────────────────────────────────────────────────────
+
+pub enum ImportState {
+    Idle,
+    /// Background scan in progress; `scanned` is the number of files found so far.
+    Scanning { scanned: usize },
+    /// Scan finished; waiting for user confirmation (y / Esc).
+    Preview {
+        entries: Vec<ImportEntry>,
+        scroll: usize, // scroll offset for the preview list
+    },
+    /// Copy in progress.
+    Copying { done: usize, total: usize },
+    /// Copy finished; message is displayed until the next keypress.
+    Done(String),
+}
 
 const CACHE_MAX: usize = 30;
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
@@ -70,6 +92,10 @@ pub struct App {
     /// One-shot status message shown in the filter bar after a command executes.
     /// Cleared on the next keypress.
     pub status_message: Option<String>,
+    /// Import state machine.
+    pub import_state: ImportState,
+    /// Receive channel for background import thread messages.
+    pub import_rx: Option<mpsc::Receiver<ImportMsg>>,
 }
 
 impl App {
@@ -130,6 +156,8 @@ impl App {
             tag_type_input: String::new(),
             type_suggestion_idx: 0,
             status_message: None,
+            import_state: ImportState::Idle,
+            import_rx: None,
         }
     }
 
@@ -591,6 +619,12 @@ impl App {
             return;
         }
 
+        if let Some(path_arg) = trimmed.strip_prefix("import") {
+            let path_str = path_arg.trim();
+            self.start_import(path_str);
+            return;
+        }
+
         if let Some(tag_arg) = trimmed.strip_prefix("untag") {
             let tag_names: Vec<String> = tag_arg.split_whitespace().map(|s| s.to_string()).collect();
             self.untag_selected(&tag_names);
@@ -616,6 +650,202 @@ impl App {
         if !trimmed.is_empty() {
             self.status_message = Some(format!("Unknown command: {trimmed}"));
         }
+    }
+
+    // ── import ────────────────────────────────────────────────────────────────
+
+    /// Start `:import <path>` — validate path, then spawn background scan thread.
+    pub fn start_import(&mut self, path_str: &str) {
+        let path = std::path::Path::new(path_str);
+        if path_str.is_empty() {
+            self.status_message = Some("import: usage: import <path>".into());
+            return;
+        }
+        if !path.exists() {
+            self.status_message = Some(format!("import: path does not exist: {path_str}"));
+            return;
+        }
+        if !path.is_dir() {
+            self.status_message = Some(format!("import: not a directory: {path_str}"));
+            return;
+        }
+
+        let db_path = self.db_path.clone();
+        let source_root = path.to_path_buf();
+        let (tx, rx) = mpsc::channel::<ImportMsg>();
+        self.import_rx = Some(rx);
+        self.import_state = ImportState::Scanning { scanned: 0 };
+
+        std::thread::spawn(move || {
+            // Load existing hashes for dedup
+            let existing_hashes = match rusqlite::Connection::open(&db_path)
+                .map_err(anyhow::Error::from)
+                .and_then(|c| crate::import::load_existing_hashes(&c))
+            {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = tx.send(ImportMsg::ScanError(e.to_string()));
+                    return;
+                }
+            };
+
+            let tx2 = tx.clone();
+            let mut progress_cb = move |n: usize| {
+                let _ = tx2.send(ImportMsg::ScanProgress(n));
+            };
+
+            match crate::import::scan_source(&source_root, &existing_hashes, &mut progress_cb) {
+                Ok(mut entries) => {
+                    crate::import::apply_folder_mtime_consensus(&mut entries);
+
+                    // Assign counters
+                    match rusqlite::Connection::open(&db_path) {
+                        Ok(conn) => {
+                            // We need target_root for filesystem counter check; pass via the
+                            // conn is not possible, so we embed it in the closure differently.
+                            // assign_counters needs target_root: pass a dummy here; the
+                            // actual root is resolved in on_import_scan_done.
+                            // WORKAROUND: we pass the DB path; assign_counters is called in
+                            // on_import_scan_done after receiving entries.
+                            let _ = conn; // used in on_import_scan_done
+                        }
+                        Err(_) => {}
+                    }
+                    let _ = tx.send(ImportMsg::ScanDone(entries));
+                }
+                Err(e) => {
+                    let _ = tx.send(ImportMsg::ScanError(e.to_string()));
+                }
+            }
+        });
+    }
+
+    /// Called by the event loop when an `ImportMsg` arrives on `import_rx`.
+    pub fn on_import_msg(&mut self, msg: ImportMsg) {
+        match msg {
+            ImportMsg::ScanProgress(n) => {
+                self.import_state = ImportState::Scanning { scanned: n };
+            }
+            ImportMsg::ScanDone(mut entries) => {
+                // Assign counters now that we have target_root
+                let target_root = std::path::Path::new(&self.target_root);
+                if let Ok(conn) = rusqlite::Connection::open(&self.db_path) {
+                    if let Err(e) = crate::import::assign_counters(&mut entries, target_root, &conn) {
+                        self.status_message = Some(format!("import: counter error: {e}"));
+                        self.import_state = ImportState::Idle;
+                        return;
+                    }
+                }
+                self.import_state = ImportState::Preview {
+                    entries,
+                    scroll: 0,
+                };
+            }
+            ImportMsg::ScanError(e) => {
+                self.status_message = Some(format!("import: scan error: {e}"));
+                self.import_state = ImportState::Idle;
+                self.import_rx = None;
+            }
+            ImportMsg::CopyProgress(done, total) => {
+                self.import_state = ImportState::Copying { done, total };
+            }
+            ImportMsg::CopyDone(summary) => {
+                let msg = format!(
+                    "import: copied {}, {} dup, {} unknown-date, {} error(s)",
+                    summary.copied, summary.skipped_dup, summary.unknown_date, summary.errors
+                );
+                self.import_state = ImportState::Done(msg.clone());
+                self.status_message = Some(msg);
+                self.import_rx = None;
+                let _ = self.reload();
+            }
+            ImportMsg::CopyError(e) => {
+                self.status_message = Some(format!("import: copy error: {e}"));
+                self.import_state = ImportState::Idle;
+                self.import_rx = None;
+            }
+        }
+    }
+
+    /// Confirm the import preview → start background copy thread.
+    pub fn confirm_import(&mut self) {
+        let entries = match &self.import_state {
+            ImportState::Preview { entries, .. } => entries.clone(),
+            _ => return,
+        };
+        let total = entries.iter().filter(|e| e.status == ImportStatus::Pending).count();
+        self.import_state = ImportState::Copying { done: 0, total };
+
+        let db_path = self.db_path.clone();
+        let target_root = self.target_root.clone();
+        let today = today_date();
+        let (tx, rx) = mpsc::channel::<ImportMsg>();
+        self.import_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let conn = match rusqlite::Connection::open(&db_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(ImportMsg::CopyError(e.to_string()));
+                    return;
+                }
+            };
+            let tx2 = tx.clone();
+            let mut progress_cb = move |done: usize, total: usize| {
+                let _ = tx2.send(ImportMsg::CopyProgress(done, total));
+            };
+            match crate::import::execute_import(
+                &entries,
+                std::path::Path::new(&target_root),
+                &conn,
+                &today,
+                &mut progress_cb,
+            ) {
+                Ok(summary) => {
+                    let _ = tx.send(ImportMsg::CopyDone(summary));
+                }
+                Err(e) => {
+                    let _ = tx.send(ImportMsg::CopyError(e.to_string()));
+                }
+            }
+        });
+    }
+
+    /// Cancel the current import operation (scan preview or scanning state).
+    pub fn cancel_import(&mut self) {
+        self.import_rx = None;
+        self.import_state = ImportState::Idle;
+    }
+
+    /// Scroll the import preview list down.
+    pub fn import_preview_scroll_down(&mut self) {
+        if let ImportState::Preview { scroll, entries } = &mut self.import_state {
+            let max = entries.iter().filter(|e| e.status != ImportStatus::Skipped).count();
+            if *scroll + 1 < max {
+                *scroll += 1;
+            }
+        }
+    }
+
+    /// Scroll the import preview list up.
+    pub fn import_preview_scroll_up(&mut self) {
+        if let ImportState::Preview { scroll, .. } = &mut self.import_state {
+            *scroll = scroll.saturating_sub(1);
+        }
+    }
+
+    /// Poll the import receive channel — call once per event-loop tick.
+    /// Returns `true` if a message was processed (caller should redraw).
+    pub fn poll_import(&mut self) -> bool {
+        let msg = match &self.import_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(m) => m,
+                Err(_) => return false,
+            },
+            None => return false,
+        };
+        self.on_import_msg(msg);
+        true
     }
 
     // ── fix-date ─────────────────────────────────────────────────────────────
@@ -1123,6 +1353,16 @@ fn is_valid_date(s: &str) -> bool {
     let month: u8 = s[5..7].parse().unwrap_or(0);
     let day: u8 = s[8..10].parse().unwrap_or(0);
     month >= 1 && month <= 12 && day >= 1 && day <= 31
+}
+
+/// Return today's date as `"YYYY-MM-DD"` using standard Unix time.
+fn today_date() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    crate::import::secs_to_date_pub(secs)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

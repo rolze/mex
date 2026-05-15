@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod db;
+mod import;
 mod ui;
 
 use anyhow::{Context, Result};
@@ -148,9 +149,51 @@ fn run_loop(
             app.on_encode_done(response);
         }
 
+        // Poll import background thread (scan progress, copy progress, done).
+        app.poll_import();
+
         if event::poll(std::time::Duration::from_millis(16))? {
             match event::read()? {
                 Event::Key(key) => {
+                    // Handle import-preview / import-done screens first.
+                    match &app.import_state {
+                        app::ImportState::Preview { .. } => {
+                            match key.code {
+                                KeyCode::Char('y') | KeyCode::Enter => {
+                                    app.confirm_import();
+                                    continue;
+                                }
+                                KeyCode::Esc => {
+                                    app.cancel_import();
+                                    continue;
+                                }
+                                KeyCode::Down => {
+                                    app.import_preview_scroll_down();
+                                    continue;
+                                }
+                                KeyCode::Up => {
+                                    app.import_preview_scroll_up();
+                                    continue;
+                                }
+                                _ => continue, // swallow all other keys on preview
+                            }
+                        }
+                        app::ImportState::Scanning { .. } | app::ImportState::Copying { .. } => {
+                            // Esc cancels scan (copy cannot be undone)
+                            if key.code == KeyCode::Esc {
+                                if matches!(app.import_state, app::ImportState::Scanning { .. }) {
+                                    app.cancel_import();
+                                }
+                                continue;
+                            }
+                            continue; // swallow other keys while busy
+                        }
+                        app::ImportState::Done(_) => {
+                            app.import_state = app::ImportState::Idle;
+                            // fall through so the keypress also registers normally
+                        }
+                        app::ImportState::Idle => {}
+                    }
                     // Any keypress clears a displayed status message.
                     app.status_message = None;
                     match (key.modifiers, key.code) {

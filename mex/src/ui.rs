@@ -1,5 +1,6 @@
-use crate::app::App;
+use crate::app::{App, ImportState};
 use crate::db::folder_of;
+use crate::import::ImportStatus;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -13,6 +14,20 @@ const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.size();
+
+    // Import screens take over the full area (except filter bar).
+    match &app.import_state {
+        ImportState::Scanning { scanned } => {
+            let scanned = *scanned;
+            draw_import_scanning(frame, app, area, scanned);
+            return;
+        }
+        ImportState::Preview { .. } => {
+            draw_import_preview(frame, app, area);
+            return;
+        }
+        _ => {}
+    }
 
     // Outer: filter bar at bottom (3 lines) + main content
     let outer_chunks = Layout::default()
@@ -44,6 +59,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if app.preview_open {
         let preview_area = main_chunks[1];
         draw_preview(frame, app, preview_area);
+    }
+
+    // Import copy-progress overlay (shown on top of list while copying)
+    if let ImportState::Copying { done, total } = &app.import_state {
+        let done = *done;
+        let total = *total;
+        draw_import_progress_overlay(frame, app, list_area, done, total);
     }
 
     draw_filter(frame, app, filter_area);
@@ -524,3 +546,167 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(para, area);
 }
+
+// ── Import UI ─────────────────────────────────────────────────────────────────
+
+/// Full-screen "Scanning…" overlay shown while the background thread walks the source.
+fn draw_import_scanning(frame: &mut Frame, app: &App, area: Rect, scanned: usize) {
+    let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
+    let text = format!("{spinner} Scanning… {scanned} files found");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Import — Scanning ")
+        .style(Style::default().fg(Color::Cyan));
+    let para = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center);
+    frame.render_widget(para, area);
+}
+
+/// Full-screen dry-run preview: stats header + scrollable table of planned copies.
+fn draw_import_preview(frame: &mut Frame, app: &App, area: Rect) {
+    let (entries, scroll) = match &app.import_state {
+        ImportState::Preview { entries, scroll } => (entries, *scroll),
+        _ => return,
+    };
+
+    let pending = entries.iter().filter(|e| e.status == ImportStatus::Pending).count();
+    let dups = entries.iter().filter(|e| e.status == ImportStatus::Duplicate).count();
+    let skipped = entries.iter().filter(|e| e.status == ImportStatus::Skipped).count();
+    let unknown = entries.iter().filter(|e| e.status == ImportStatus::UnknownDate).count();
+
+    // Layout: stats bar (5 lines) + scrollable list + footer (3 lines)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(7), // stats + header row
+            Constraint::Min(1),    // list
+            Constraint::Length(3), // footer
+        ])
+        .split(area);
+
+    // Stats block
+    let stats_text = vec![
+        Line::from(vec![
+            Span::styled("  Ready to copy:  ", Style::default().fg(Color::White)),
+            Span::styled(format!("{pending:>5}"), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Duplicate:      ", Style::default().fg(Color::White)),
+            Span::styled(format!("{dups:>5}"), Style::default().fg(Color::DarkGray)),
+            Span::styled("  (will be skipped)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Quality variant:", Style::default().fg(Color::White)),
+            Span::styled(format!("{skipped:>5}"), Style::default().fg(Color::DarkGray)),
+            Span::styled("  (will be skipped)", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Unknown date:   ", Style::default().fg(Color::White)),
+            Span::styled(format!("{unknown:>5}"), Style::default().fg(Color::Yellow)),
+            Span::styled("  (needs review — not copied)", Style::default().fg(Color::Yellow)),
+        ]),
+    ];
+    let stats_para = Paragraph::new(stats_text)
+        .block(Block::default().borders(Borders::ALL).title(" Import — Preview ").style(Style::default().fg(Color::Cyan)));
+    frame.render_widget(stats_para, chunks[0]);
+
+    // Table of pending + unknown entries
+    let list_height = chunks[1].height.saturating_sub(2) as usize;
+    let visible: Vec<&crate::import::ImportEntry> = entries
+        .iter()
+        .filter(|e| e.status != ImportStatus::Skipped)
+        .skip(scroll)
+        .take(list_height)
+        .collect();
+
+    let width = chunks[1].width.saturating_sub(4) as usize;
+    let src_col = (width / 2).min(50);
+    let tgt_col = width.saturating_sub(src_col).saturating_sub(14);
+
+    let items: Vec<ListItem> = visible
+        .iter()
+        .map(|e| {
+            let src = e.source_path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("?");
+            let src = truncate_front(src, src_col);
+            let tgt = e.target_path.as_deref().unwrap_or("— no date —");
+            let tgt = truncate_end(tgt, tgt_col);
+            let (status_char, status_color) = match e.status {
+                ImportStatus::Pending => ('→', Color::Green),
+                ImportStatus::UnknownDate => ('?', Color::Yellow),
+                ImportStatus::Duplicate => ('=', Color::DarkGray),
+                ImportStatus::Skipped => ('-', Color::DarkGray),
+            };
+            let date_src = &e.date_source;
+            let slug_src = &e.slug_source;
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("{src:<src_col$}"),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" {status_char} "),
+                    Style::default().fg(status_color),
+                ),
+                Span::styled(
+                    format!("{tgt:<tgt_col$}"),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::styled(
+                    format!("  {date_src:>4}/{slug_src:<4}"),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            " {pending} ready  ↑↓ scroll ",
+        )));
+    frame.render_widget(list, chunks[1]);
+
+    // Footer
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled("  y / Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(" — confirm import    ", Style::default().fg(Color::White)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(" — cancel", Style::default().fg(Color::White)),
+    ]))
+    .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(footer, chunks[2]);
+}
+
+/// Small overlay on top of the list view while files are being copied.
+fn draw_import_progress_overlay(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    done: usize,
+    total: usize,
+) {
+    let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
+    let pct = if total > 0 { done * 100 / total } else { 0 };
+    let text = format!("{spinner}  Copying {done}/{total} files ({pct}%)");
+
+    // Centre a small floating box
+    let w = (text.len() as u16 + 6).min(area.width);
+    let h = 3u16;
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let overlay_area = Rect { x, y, width: w, height: h };
+
+    let para = Paragraph::new(text)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Cyan).bg(Color::Black)),
+        )
+        .alignment(Alignment::Center);
+    frame.render_widget(para, overlay_area);
+}
+
+
