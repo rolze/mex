@@ -1029,66 +1029,6 @@ fn parse_exif_date_str(raw: &str) -> Option<String> {
 
 /// Look for a paired `.xmp` or `.XMP` sidecar and extract `photoshop:DateCreated`
 /// or `xmp:CreateDate`.  Returns `"YYYY-MM-DD"` or `None`.
-pub fn xmp_date(media_path: &Path) -> Option<String> {
-    let stem = media_path.file_stem()?.to_str()?;
-    let dir = media_path.parent().unwrap_or(Path::new("."));
-    for ext in &["xmp", "XMP"] {
-        let xp = dir.join(format!("{stem}.{ext}"));
-        if !xp.exists() {
-            continue;
-        }
-        if let Ok(content) = fs::read_to_string(&xp) {
-            if let Some(d) = extract_xmp_date_from_content(&content) {
-                return Some(d);
-            }
-        }
-    }
-    None
-}
-
-fn extract_xmp_date_from_content(content: &str) -> Option<String> {
-    // Search for photoshop:DateCreated or xmp:CreateDate attributes/elements
-    for tag in &["photoshop:DateCreated", "xmp:CreateDate"] {
-        // Element: <photoshop:DateCreated>2019-04-01T12:48:51+02:00</...>
-        if let Some(start) = content.find(&format!("<{tag}>")) {
-            let after = &content[start + tag.len() + 2..];
-            if let Some(end) = after.find('<') {
-                let val = after[..end].trim();
-                if let Some(d) = parse_iso8601_date(val) {
-                    return Some(d);
-                }
-            }
-        }
-        // Attribute: photoshop:DateCreated="2019-04-01T12:48:51+02:00"
-        if let Some(start) = content.find(&format!("{tag}=\"")) {
-            let after = &content[start + tag.len() + 2..];
-            if let Some(end) = after.find('"') {
-                let val = after[..end].trim();
-                if let Some(d) = parse_iso8601_date(val) {
-                    return Some(d);
-                }
-            }
-        }
-    }
-    None
-}
-
-fn parse_iso8601_date(s: &str) -> Option<String> {
-    // "YYYY-MM-DDT..." or "YYYY-MM-DD ..."
-    if s.len() >= 10 {
-        let d = &s[..10];
-        let b = d.as_bytes();
-        if b[4] == b'-' && b[7] == b'-' && all_digit(b, 0, 4) && all_digit(b, 5, 2) && all_digit(b, 8, 2) {
-            let yr = parse_4year(b, 0);
-            let mm = parse_2digit_u(b, 5);
-            let dd = parse_2digit_u(b, 8);
-            if yr >= 1900 && yr <= 2050 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 {
-                return Some(format!("{yr:04}-{mm:02}-{dd:02}"));
-            }
-        }
-    }
-    None
-}
 
 // ── Format / extension mismatch detection ────────────────────────────────────
 
@@ -1288,21 +1228,21 @@ pub fn scan_source(
         let filename_str = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         progress_cb(found, filename_str);
 
-        let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
-
-        // EXIF
-        let exif_raw = exif_date(path);
-        let xmp_d = xmp_date(path);
-
-        // OS mtime
-        let mtime_d = path.metadata().ok().and_then(|m| {
+        // Use walkdir's cached metadata — no extra stat() call over MTP.
+        let meta = e.metadata().ok();
+        let file_size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+        let mtime_d = meta.as_ref().and_then(|m| {
             m.modified().ok().and_then(|st| {
                 use std::time::UNIX_EPOCH;
                 let secs = st.duration_since(UNIX_EPOCH).ok()?.as_secs();
-                let dt = secs_to_date(secs);
-                Some(dt)
+                Some(secs_to_date(secs))
             })
         });
+
+        // No file-content reads during scan (EXIF/XMP/magic header all require
+        // opening the file, which is expensive over MTP and slow USB mounts).
+        // Date is derived from filename patterns, folder path, and OS mtime only.
+        // EXIF will be re-read during execute for DB storage if needed.
 
         // Folder path components (relative to source_root)
         let dir = path.parent().unwrap_or(source_root);
@@ -1327,8 +1267,7 @@ pub fn scan_source(
 
         let (derived_date, date_source) = derive_date(
             folder_result,
-            exif_raw.as_deref(),
-            xmp_d.as_deref(),
+            None,   // EXIF deferred — no file read during scan
             filename,
             mtime_d.as_deref(),
         );
@@ -1344,18 +1283,15 @@ pub fn scan_source(
             ImportStatus::Pending
         };
 
-        // Extension / format mismatch (only for image files the crate can probe)
-        let wrong_ext = detect_wrong_ext(path, &ext);
-
         entries.push(ImportEntry {
             source_path: path.to_path_buf(),
             content_hash: String::new(),
             file_size,
             ext,
-            wrong_ext,
+            wrong_ext: None,   // magic-byte check deferred to execute
             derived_date,
             date_source: date_source.to_string(),
-            exif_raw,
+            exif_raw: None,    // EXIF deferred to execute
             derived_slug,
             caption_slug,
             slug_source,
@@ -1371,7 +1307,6 @@ pub fn scan_source(
 fn derive_date(
     folder_result: Option<(String, DatePrecision)>,
     exif_raw: Option<&str>,
-    xmp_d: Option<&str>,
     filename: &str,
     mtime_d: Option<&str>,
 ) -> (Option<String>, &'static str) {
@@ -1393,9 +1328,6 @@ fn derive_date(
     }
     if let Some(ex) = exif_raw {
         return (Some(ex.to_string()), "exif");
-    }
-    if let Some(xd) = xmp_d {
-        return (Some(xd.to_string()), "xmp");
     }
     if let Some(d) = parse_date_filename(filename) {
         return (Some(d), "filename");
@@ -1833,6 +1765,10 @@ pub fn execute_import(
             entry.content_hash = source_hash.clone();
             seen_hashes.insert(source_hash, entry.source_path.clone());
         }
+
+        // Read EXIF from the locally-copied destination — free since dest is on local disk.
+        // This is the only per-file extra open during execute (source is not re-opened).
+        entry.exif_raw = exif_date(&abs_tgt);
 
         let id = upsert_media_row(conn, entry, rel_tgt, import_date)?;
         imported_ids.push(id);
