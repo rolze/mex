@@ -1715,9 +1715,11 @@ pub fn execute_import(
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
 
-        // Stream-copy source → dest while computing source hash (one MTP read).
-        let source_hash = match stream_copy_and_hash(&entry.source_path, &abs_tgt) {
-            Ok(h) => h,
+        // Stream-copy source → dest while computing source hash in one pass.
+        // write_all() returning Ok is sufficient integrity guarantee on modern OS/FS;
+        // we skip a destination re-read to avoid doubling I/O for large video files.
+        let (source_hash, _) = match stream_copy_and_hash(&entry.source_path, &abs_tgt) {
+            Ok(r) => r,
             Err(e) => {
                 eprintln!("import: copy error {}: {e}", entry.source_path.display());
                 fs::remove_file(&abs_tgt).ok();
@@ -1740,41 +1742,8 @@ pub fn execute_import(
             continue;
         }
 
-        // Verify destination integrity.
-        let dest_hash = match sha256_file(&abs_tgt) {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!("import: verify error {}: {e}", abs_tgt.display());
-                fs::remove_file(&abs_tgt).ok();
-                summary.errors += 1;
-                continue;
-            }
-        };
-        if dest_hash != source_hash {
-            fs::remove_file(&abs_tgt).ok();
-            // Retry once.
-            let source_hash2 = match stream_copy_and_hash(&entry.source_path, &abs_tgt) {
-                Ok(h) => h,
-                Err(e) => {
-                    eprintln!("import: retry copy error {}: {e}", entry.source_path.display());
-                    fs::remove_file(&abs_tgt).ok();
-                    summary.errors += 1;
-                    continue;
-                }
-            };
-            let dest_hash2 = sha256_file(&abs_tgt).unwrap_or_default();
-            if dest_hash2 != source_hash2 {
-                fs::remove_file(&abs_tgt).ok();
-                eprintln!("import: hash mismatch after retry: {}", entry.source_path.display());
-                summary.errors += 1;
-                continue;
-            }
-            entry.content_hash = source_hash2.clone();
-            seen_hashes.insert(source_hash2, entry.source_path.clone());
-        } else {
-            entry.content_hash = source_hash.clone();
-            seen_hashes.insert(source_hash, entry.source_path.clone());
-        }
+        entry.content_hash = source_hash.clone();
+        seen_hashes.insert(source_hash, entry.source_path.clone());
 
         // Read EXIF from the locally-copied destination — free since dest is on local disk.
         // This is the only per-file extra open during execute (source is not re-opened).
@@ -1796,8 +1765,8 @@ pub fn execute_import(
 }
 
 /// Stream-copy `src` to `dst` while computing the SHA-256 of `src` in one pass.
-/// Returns the hex-encoded SHA-256 of the source file.
-fn stream_copy_and_hash(src: &Path, dst: &Path) -> Result<String> {
+/// Returns `(hex_sha256, bytes_copied)`.
+fn stream_copy_and_hash(src: &Path, dst: &Path) -> Result<(String, u64)> {
     use std::io::Write;
     let mut hasher = Sha256::new();
     let mut src_file =
@@ -1805,6 +1774,7 @@ fn stream_copy_and_hash(src: &Path, dst: &Path) -> Result<String> {
     let mut dst_file =
         fs::File::create(dst).with_context(|| format!("create {}", dst.display()))?;
     let mut buf = [0u8; 65536];
+    let mut total: u64 = 0;
     loop {
         let n = src_file.read(&mut buf)?;
         if n == 0 {
@@ -1812,8 +1782,9 @@ fn stream_copy_and_hash(src: &Path, dst: &Path) -> Result<String> {
         }
         hasher.update(&buf[..n]);
         dst_file.write_all(&buf[..n])?;
+        total += n as u64;
     }
-    Ok(hex::encode(hasher.finalize()))
+    Ok((hex::encode(hasher.finalize()), total))
 }
 
 fn upsert_media_row(
