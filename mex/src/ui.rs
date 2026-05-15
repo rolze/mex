@@ -563,7 +563,7 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
 /// Full-screen "Scanning…" overlay shown while the background thread walks the source.
 fn draw_import_scanning(frame: &mut Frame, app: &App, area: Rect, scanned: usize) {
     let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
-    let text = format!("{spinner} Scanning… {scanned} files found");
+    let text = format!("{spinner} Scanning… {scanned} files found\n\n[Esc] abort");
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Import — Scanning ")
