@@ -237,11 +237,62 @@ fn regex_replace_all(s: &str, pattern: &str, replacement: &str) -> String {
     }
 }
 
+// ── UUID helpers ─────────────────────────────────────────────────────────────
+
+/// Returns true if the byte slice at position 0..36 matches a UUID hex pattern.
+fn match_uuid_at(b: &[u8]) -> bool {
+    if b.len() < 36 {
+        return false;
+    }
+    let groups: &[usize] = &[8, 4, 4, 4, 12];
+    let mut pos = 0usize;
+    for (gi, &len) in groups.iter().enumerate() {
+        for _ in 0..len {
+            if !b[pos].is_ascii_hexdigit() {
+                return false;
+            }
+            pos += 1;
+        }
+        if gi < 4 {
+            if b[pos] != b'-' {
+                return false;
+            }
+            pos += 1;
+        }
+    }
+    true
+}
+
+/// Returns true if `s` is exactly a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
+pub fn is_uuid_stem(s: &str) -> bool {
+    s.len() == 36 && match_uuid_at(s.as_bytes())
+}
+
+/// Remove all UUID sub-strings (8-4-4-4-12 hex) from `s`, replacing with a space.
+fn strip_uuids(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.char_indices().peekable();
+    while let Some((byte_pos, ch)) = chars.next() {
+        // UUIDs start with an ASCII hex digit; only attempt match at ASCII boundaries
+        if ch.is_ascii_hexdigit() && byte_pos + 36 <= b.len() && match_uuid_at(&b[byte_pos..]) {
+            out.push(' ');
+            // Consume the remaining 35 ASCII characters of the UUID
+            for _ in 0..35 {
+                chars.next();
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 // ── Camera code detection ─────────────────────────────────────────────────────
 
 const CAMERA_CODE_PREFIXES: &[&str] = &[
     "img", "dsc", "dscn", "dscf", "cimg", "mvc", "sdc", "pic", "pict", "kif", "ssl", "dcp",
-    "picture", "bild",
+    "picture", "bild", "pano", "vid", "mvi", "save", "burst", "snap",
 ];
 
 pub fn is_camera_code(filename: &str) -> bool {
@@ -255,7 +306,10 @@ pub fn is_camera_code(filename: &str) -> bool {
         if lower.starts_with(prefix) {
             let rest = &lower[prefix.len()..];
             let rest = rest.trim_start_matches(|c| c == '_' || c == '-');
-            if rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit()) {
+            // Camera codes are followed only by digits and separators (no real words)
+            if rest.is_empty()
+                || rest.chars().all(|c| c.is_ascii_digit() || c == '_' || c == '-')
+            {
                 return true;
             }
         }
@@ -263,6 +317,15 @@ pub fn is_camera_code(filename: &str) -> bool {
     // "Kopie von *" / "Copy of *"
     if lower.starts_with("kopie von ") || lower.starts_with("copy of ") {
         return true;
+    }
+    // WhatsApp: IMG-YYYYMMDD-WA0004 format
+    if lower.starts_with("img-") || lower.starts_with("img_") {
+        if let Some(wa_pos) = lower.find("-wa") {
+            let after_wa = &lower[wa_pos + 3..];
+            if !after_wa.is_empty() && after_wa.chars().all(|c| c.is_ascii_digit()) {
+                return true;
+            }
+        }
     }
     // FAT32 all-uppercase alpha + digits, no separator: e.g. PARIS1, LONDON3
     is_camera_fat32(base)
@@ -291,20 +354,34 @@ const JUNK_WORDS: &[&str] = &[
     "picture", "bild", "kopie", "copy", "von", "of", "foto", "photo", "image",
     "screenshot", "screenshots", "bilder", "videos",
     "the", "and", "und", "mit", "an", "im", "oder", "der", "die", "das", "ein", "eine",
+    // Camera / app prefixes that produce no useful slug
+    "save", "snap", "pano", "vid", "mvi", "burst",
+    // Common stop words (German + English) that slip through as 2-3 char tokens
+    "in", "on", "at", "zu", "am", "bei", "auf", "aus", "vor", "vom", "from",
+    // Generic file/download names
+    "file", "download", "export",
 ];
 
 /// Extract a slug from a name (filename or folder name).
 /// Returns `None` if no meaningful tokens remain after stripping.
 pub fn extract_slug(name: &str) -> Option<String> {
     let (base, ext) = split_ext(name);
+    // UUID stems produce no slug (and have no useful date either)
+    if is_uuid_stem(base) {
+        return None;
+    }
     // Only strip extension if it looks like a real file extension (≤5 chars, no spaces).
     let s = if !ext.is_empty() && ext.len() <= 5 && !ext.contains(' ') {
         base
     } else {
         name
     };
-    let s = transliterate(s);
+    // Strip embedded UUIDs before they get broken apart by replace_sep
+    let s = strip_uuids(s);
+    let s = transliterate(&s);
     let s = replace_sep(&s);
+    // Split on letter→digit transitions ("snap202405051452" → "snap 202405051452")
+    let s = split_letter_digit(&s);
     // Strip 4-digit years
     let s = regex_replace_all(&s, r"\b(?:19|20)\d{2}\b", " ");
     // Strip 6–8 digit sequences
@@ -320,9 +397,12 @@ pub fn extract_slug(name: &str) -> Option<String> {
         })
         .filter(|t| {
             !t.is_empty()
-                && t.len() >= 2
+                && t.len() >= 3                  // ≥3 chars: filters "in","zu","wa","am" etc.
+                && t.len() <= 20                 // ≤20 chars: filters extreme random IDs
                 && !t.chars().all(|c| c.is_ascii_digit())
                 && !JUNK_WORDS.iter().any(|&j| j == t.as_str())
+                && !is_hex_garbage(t)            // filter UUID/hash hex fragments
+                && !is_seq_number(t)             // filter "wa0004", "p6agdx"-style IDs
         })
         .collect();
 
@@ -331,6 +411,43 @@ pub fn extract_slug(name: &str) -> Option<String> {
     } else {
         Some(tokens[..tokens.len().min(4)].join("-"))
     }
+}
+
+/// Returns true if a token consists entirely of hex characters and is long enough
+/// to be a UUID fragment or hash (≥5 chars, all [0-9a-f]).
+fn is_hex_garbage(t: &str) -> bool {
+    t.len() >= 5 && t.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Returns true if a token looks like a sequence/counter code:
+/// 1–3 alphabetic chars followed by 3+ digits (e.g. "wa0004", "wA0013", "p6a...").
+/// Also catches short opaque IDs like "p6agdx" (≤3 letters then alphanumeric mixed).
+fn is_seq_number(t: &str) -> bool {
+    let bytes = t.as_bytes();
+    let alpha_end = bytes
+        .iter()
+        .position(|b| !b.is_ascii_alphabetic())
+        .unwrap_or(bytes.len());
+    if alpha_end == 0 || alpha_end > 3 {
+        return false;
+    }
+    // Rest must be all digits and at least 3 of them
+    bytes[alpha_end..].iter().all(|b| b.is_ascii_digit()) && bytes.len() - alpha_end >= 3
+}
+
+/// Insert a space between an alphabetic char and a following digit
+/// ("snap202405051452" → "snap 202405051452", "phoneImageCapture1764…" → "…Capture 1764…").
+fn split_letter_digit(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    let mut prev_alpha = false;
+    for ch in s.chars() {
+        if ch.is_ascii_digit() && prev_alpha {
+            out.push(' ');
+        }
+        out.push(ch);
+        prev_alpha = ch.is_ascii_alphabetic();
+    }
+    out
 }
 
 fn strip_long_numbers(s: &str) -> String {
@@ -570,6 +687,10 @@ pub fn parse_german_folder_date(name: &str) -> Option<String> {
 /// Parse date embedded in a filename.
 pub fn parse_date_filename(filename: &str) -> Option<String> {
     let (base, _) = split_ext(filename);
+    // UUID stems: skip all filename date extraction (hex digits produce false positives)
+    if is_uuid_stem(base) {
+        return None;
+    }
     // 1. Mobile phone format first
     if let Some(d) = parse_mobile_date(base) {
         return Some(d);
@@ -578,12 +699,25 @@ pub fn parse_date_filename(filename: &str) -> Option<String> {
     if let Some(d) = find_ymd_in(base) {
         return Some(d);
     }
-    // 3. yyMMdd
+    // 3. yyMMdd (6 consecutive digits)
     if let Some(d) = find_yymmdd_in(base) {
         return Some(d);
     }
-    // 4. yyyy-MM at start (already-organised files)
+    // 4. yy-MM-dd or yy_MM_dd with separators (e.g. Picsart_24-11-24_...)
+    if let Some(d) = find_yymmdd_sep_in(base) {
+        return Some(d);
+    }
+    // 5. App-specific: snap/SnapWidget prefix + YYYYMMDD+time (e.g. snap202405051452)
+    if let Some(d) = find_snap_date(base) {
+        return Some(d);
+    }
+    // 6. yyyy-MM at start (already-organised files)
     if let Some(d) = find_year_month_prefix(base) {
+        return Some(d);
+    }
+    // 7. 13-digit Unix millisecond timestamp anywhere in the name
+    //    (e.g. "phoneImageCapture1764072777554", "Revolut_receipt_..._1703345353881")
+    if let Some(d) = find_unix_ms_date(base) {
         return Some(d);
     }
     None
@@ -665,6 +799,72 @@ fn find_year_month_prefix(s: &str) -> Option<String> {
                 return Some(format!("{yr:04}-{mm:02}-01"));
             }
         }
+    }
+    None
+}
+
+/// Find `yy[-_]mm[-_]dd` patterns (2-digit year with separator), e.g. Picsart `24-11-24`.
+/// Returned as `YYYY-MM-DD`.
+fn find_yymmdd_sep_in(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    while i + 8 <= b.len() {
+        let before_ok = i == 0 || !b[i - 1].is_ascii_digit();
+        if before_ok
+            && all_digit(b, i, 2)
+            && is_sep(b, i + 2)
+            && all_digit(b, i + 3, 2)
+            && is_sep(b, i + 5)
+            && all_digit(b, i + 6, 2)
+        {
+            let after_ok = i + 8 >= b.len() || !b[i + 8].is_ascii_digit();
+            if after_ok {
+                let yy = parse_2digit_u(b, i);
+                let mm = parse_2digit_u(b, i + 3);
+                let dd = parse_2digit_u(b, i + 6);
+                let yr = if yy <= 30 { 2000 + yy } else { 1900 + yy };
+                if mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 {
+                    return Some(format!("{yr:04}-{mm:02}-{dd:02}"));
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Detect snap/SnapWidget filenames: `snap` + exactly 8 date digits + 4 time digits.
+/// e.g. `snap202405051452` → `2024-05-05`.
+fn find_snap_date(s: &str) -> Option<String> {
+    let lower = s.to_lowercase();
+    let rest = lower.strip_prefix("snap")?;
+    if rest.len() >= 12 && rest[..12].bytes().all(|b| b.is_ascii_digit()) {
+        find_ymd_in(&rest[..8])
+    } else {
+        None
+    }
+}
+
+/// Find a 13-digit Unix millisecond timestamp anywhere in `s` and convert to a date.
+/// Valid range: roughly 2000-01-01 to 2100-01-01 (946_684_800_000 … 4_102_444_800_000 ms).
+fn find_unix_ms_date(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    while i + 13 <= b.len() {
+        let before_ok = i == 0 || !b[i - 1].is_ascii_digit();
+        if before_ok && b[i..i + 13].iter().all(|x| x.is_ascii_digit()) {
+            let after_ok = i + 13 >= b.len() || !b[i + 13].is_ascii_digit();
+            if after_ok {
+                let slice = std::str::from_utf8(&b[i..i + 13]).ok()?;
+                let ms: i64 = slice.parse().ok()?;
+                let secs = ms / 1000;
+                // 2000-01-01 … 2100-01-01
+                if secs >= 946_684_800 && secs <= 4_102_444_800 {
+                    return Some(secs_to_date_pub(secs as u64));
+                }
+            }
+        }
+        i += 1;
     }
     None
 }
@@ -1826,5 +2026,59 @@ mod tests {
         // folder slug "paris", filename "paris_roland_party" → strip "paris" → "roland-party"
         let cap = derive_caption_slug("paris_roland_party.jpg", Some("paris"));
         assert_eq!(cap, Some("roland-party".into()));
+    }
+
+    #[test]
+    fn test_uuid_stem_detection() {
+        assert!(is_uuid_stem("4b0bdd13-72f4-4f25-99cf-6f4474f6d447"));
+        assert!(!is_uuid_stem("not-a-uuid"));
+        assert_eq!(parse_date_filename("4b0bdd13-72f4-4f25-99cf-6f4474f6d447.jpg"), None);
+        // hex chars inside UUID should not produce false date
+        assert_eq!(extract_slug("4b0bdd13-72f4-4f25-99cf-6f4474f6d447"), None);
+    }
+
+    #[test]
+    fn test_picsart_date() {
+        // Picsart_YY-MM-DD_HH-MM-SS-mmm
+        assert_eq!(parse_date_filename("Picsart_24-11-24_00-15-22-784.jpg"), Some("2024-11-24".into()));
+        assert_eq!(parse_date_filename("Picsart_25-02-09_13-33-35-838.png"), Some("2025-02-09".into()));
+    }
+
+    #[test]
+    fn test_snap_date() {
+        assert_eq!(parse_date_filename("snap202405051452.jpg"), Some("2024-05-05".into()));
+        assert_eq!(parse_date_filename("snap202505041450.jpg"), Some("2025-05-04".into()));
+    }
+
+    #[test]
+    fn test_unix_ms_date() {
+        // phoneImageCapture1764072777554 → ~2025-12-25
+        assert!(parse_date_filename("phoneImageCapture1764072777554.jpg").is_some());
+        // Revolut trailing timestamp
+        let f = "Revolut_receipt_transaction_d46bace5-3508-47ea-82fd-cf7215ce5d95_1639813806453.jpg";
+        assert_eq!(parse_date_filename(f), Some("2021-12-18".into()));
+    }
+
+    #[test]
+    fn test_whatsapp_camera_code() {
+        assert!(is_camera_code("IMG-20250801-WA0004.jpg"));
+        assert!(is_camera_code("IMG-20220709-WA0008.jpg"));
+        // normal IMG_ still detected
+        assert!(is_camera_code("IMG_20210307_200951.jpg"));
+    }
+
+    #[test]
+    fn test_slug_improvements() {
+        // WA counter suppressed
+        assert_eq!(extract_slug("IMG-20250801-WA0004"), None);
+        // SmartBG UUID stripped, only "smartbg" remains
+        assert_eq!(
+            extract_slug("SmartBG_2024-12-07_5554ba2b-20ff-4d67-8d75-9ba83036495d"),
+            Some("smartbg".into())
+        );
+        // snap prefix: no slug (JUNK_WORDS)
+        assert_eq!(extract_slug("snap202405051452"), None);
+        // hex garbage filtered
+        assert_eq!(extract_slug("5554ba2b-20ff-4d67-8d75-9ba83036495d"), None);
     }
 }
