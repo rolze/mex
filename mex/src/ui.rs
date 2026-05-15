@@ -564,22 +564,23 @@ fn draw_import_scanning(frame: &mut Frame, app: &App, area: Rect, scanned: usize
 }
 
 /// Full-screen dry-run preview: stats header + scrollable table of planned copies.
-fn draw_import_preview(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     let (entries, scroll) = match &app.import_state {
         ImportState::Preview { entries, scroll } => (entries, *scroll),
         _ => return,
     };
 
+    let total = entries.len();
     let pending = entries.iter().filter(|e| e.status == ImportStatus::Pending).count();
     let dups = entries.iter().filter(|e| e.status == ImportStatus::Duplicate).count();
     let skipped = entries.iter().filter(|e| e.status == ImportStatus::Skipped).count();
     let unknown = entries.iter().filter(|e| e.status == ImportStatus::UnknownDate).count();
 
-    // Layout: stats bar (5 lines) + scrollable list + footer (3 lines)
+    // Layout: stats bar (6 lines) + scrollable list + footer (3 lines)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(7), // stats + header row
+            Constraint::Length(8), // stats + header row
             Constraint::Min(1),    // list
             Constraint::Length(3), // footer
         ])
@@ -588,21 +589,25 @@ fn draw_import_preview(frame: &mut Frame, app: &App, area: Rect) {
     // Stats block
     let stats_text = vec![
         Line::from(vec![
-            Span::styled("  Ready to copy:  ", Style::default().fg(Color::White)),
+            Span::styled("  Total files found:", Style::default().fg(Color::White)),
+            Span::styled(format!("{total:>5}"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ready to copy:    ", Style::default().fg(Color::White)),
             Span::styled(format!("{pending:>5}"), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
-            Span::styled("  Duplicate:      ", Style::default().fg(Color::White)),
+            Span::styled("  Duplicate:        ", Style::default().fg(Color::White)),
             Span::styled(format!("{dups:>5}"), Style::default().fg(Color::DarkGray)),
             Span::styled("  (will be skipped)", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
-            Span::styled("  Quality variant:", Style::default().fg(Color::White)),
+            Span::styled("  Quality variant:  ", Style::default().fg(Color::White)),
             Span::styled(format!("{skipped:>5}"), Style::default().fg(Color::DarkGray)),
             Span::styled("  (will be skipped)", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
-            Span::styled("  Unknown date:   ", Style::default().fg(Color::White)),
+            Span::styled("  Unknown date:     ", Style::default().fg(Color::White)),
             Span::styled(format!("{unknown:>5}"), Style::default().fg(Color::Yellow)),
             Span::styled("  (needs review — not copied)", Style::default().fg(Color::Yellow)),
         ]),
@@ -613,6 +618,8 @@ fn draw_import_preview(frame: &mut Frame, app: &App, area: Rect) {
 
     // Table of pending + unknown entries
     let list_height = chunks[1].height.saturating_sub(2) as usize;
+    app.import_list_height = list_height;
+    let visible_count = entries.iter().filter(|e| e.status != ImportStatus::Skipped).count();
     let visible: Vec<&crate::import::ImportEntry> = entries
         .iter()
         .filter(|e| e.status != ImportStatus::Skipped)
@@ -663,9 +670,10 @@ fn draw_import_preview(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
+    let scroll_end = (scroll + list_height).min(visible_count);
     let list = List::new(items)
         .block(Block::default().borders(Borders::ALL).title(format!(
-            " {pending} ready  ↑↓ scroll ",
+            " {pending} ready  {scroll_end}/{visible_count}  ↑↓/PgDn/PgUp ",
         )));
     frame.render_widget(list, chunks[1]);
 
