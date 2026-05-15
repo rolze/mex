@@ -101,7 +101,7 @@ pub fn assign_tag(
     tag_name: &str,
     tag_type: Option<&str>,
 ) -> Result<String> {
-    let conn = Connection::open(db_path)?;
+    let mut conn = Connection::open(db_path)?;
 
     let existing: Option<(i64, String)> = conn
         .query_row(
@@ -134,12 +134,14 @@ pub fn assign_tag(
         }
     };
 
+    let tx = conn.transaction()?;
     for media_id in media_ids {
-        conn.execute(
+        tx.execute(
             "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
             rusqlite::params![media_id, tag_id],
         )?;
     }
+    tx.commit()?;
 
     Ok(effective_type)
 }
