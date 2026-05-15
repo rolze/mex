@@ -281,8 +281,15 @@ fn run_loop(
                     // Tab: complete current tag suggestion
                     (_, KeyCode::Tab) => app.tab_complete(),
 
-                    // ':' enters command mode
-                    (_, KeyCode::Char(':')) => app.enter_command_mode(),
+                    // ':' enters command mode (unless already in command mode, where it
+                    // is a literal character — needed for paths like mtp:host=…)
+                    (_, KeyCode::Char(':')) => {
+                        if app.command.is_some() {
+                            app.push_command_char(':');
+                        } else {
+                            app.enter_command_mode();
+                        }
+                    }
 
                     // All other printable chars → command buffer or filter
                     (_, KeyCode::Char(c)) => {
