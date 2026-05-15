@@ -678,47 +678,21 @@ impl App {
             return;
         }
 
-        let db_path = self.db_path.clone();
         let source_root = path.to_path_buf();
         let (tx, rx) = mpsc::channel::<ImportMsg>();
         self.import_rx = Some(rx);
         self.import_state = ImportState::Scanning { scanned: 0 };
 
         std::thread::spawn(move || {
-            // Load existing hashes for dedup
-            let existing_hashes = match rusqlite::Connection::open(&db_path)
-                .map_err(anyhow::Error::from)
-                .and_then(|c| crate::import::load_existing_hashes(&c))
-            {
-                Ok(h) => h,
-                Err(e) => {
-                    let _ = tx.send(ImportMsg::ScanError(e.to_string()));
-                    return;
-                }
-            };
-
             let tx2 = tx.clone();
             let mut progress_cb = move |n: usize| {
                 let _ = tx2.send(ImportMsg::ScanProgress(n));
             };
 
-            match crate::import::scan_source(&source_root, &existing_hashes, &mut progress_cb) {
+            match crate::import::scan_source(&source_root, &mut progress_cb) {
                 Ok(mut entries) => {
                     crate::import::apply_folder_mtime_consensus(&mut entries);
 
-                    // Assign counters
-                    match rusqlite::Connection::open(&db_path) {
-                        Ok(conn) => {
-                            // We need target_root for filesystem counter check; pass via the
-                            // conn is not possible, so we embed it in the closure differently.
-                            // assign_counters needs target_root: pass a dummy here; the
-                            // actual root is resolved in on_import_scan_done.
-                            // WORKAROUND: we pass the DB path; assign_counters is called in
-                            // on_import_scan_done after receiving entries.
-                            let _ = conn; // used in on_import_scan_done
-                        }
-                        Err(_) => {}
-                    }
                     let _ = tx.send(ImportMsg::ScanDone(entries));
                 }
                 Err(e) => {
