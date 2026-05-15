@@ -775,6 +775,10 @@ impl App {
                     return;
                 }
             };
+            if let Err(e) = crate::db::ensure_schema_v1(&conn) {
+                let _ = tx.send(ImportMsg::CopyError(format!("schema migration failed: {e}")));
+                return;
+            }
             let tx2 = tx.clone();
             let mut progress_cb = move |done: usize, total: usize, file: &str, summary: &crate::import::ImportSummary| -> bool {
                 tx2.send(ImportMsg::CopyProgress {
@@ -1504,7 +1508,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(),
+                os_date: String::new(), orig_filename: String::new(),
             })
             .collect();
         App::new("test.db".into(), root, files, picker, image_state, "halfblocks".into())
@@ -1529,7 +1533,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(),
+                os_date: String::new(), orig_filename: String::new(),
             })
             .collect();
         // Extra placeholder rows (non-existent paths — preview will clear gracefully).
@@ -1543,7 +1547,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(),
+                os_date: String::new(), orig_filename: String::new(),
             });
         }
         App::new("test.db".into(), root, files, picker, image_state, "halfblocks".into())
@@ -1729,7 +1733,7 @@ mod tests {
                     tag_types: vec![],
                     derived_slug,
                     caption_slug: String::new(),
-                    os_date: String::new(),
+                    os_date: String::new(), orig_filename: String::new(),
                 });
                 idx += 1;
             }
@@ -2027,7 +2031,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(),
+                os_date: String::new(), orig_filename: String::new(),
             })
             .collect();
         App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into())
@@ -2383,7 +2387,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["travel".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2404,7 +2408,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["alice".into()], tag_types: vec!["person".into()],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2423,7 +2427,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["vacation".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2442,7 +2446,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["alice".into()], tag_types: vec!["person".into()],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2514,7 +2518,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["travel".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2533,7 +2537,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["vacation".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2552,7 +2556,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["vacation".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());

@@ -1,8 +1,4 @@
-mod app;
-mod config;
-mod db;
-mod import;
-mod ui;
+use mex::{app, config, db, import, ui};
 
 use anyhow::{Context, Result};
 use crossterm::{
@@ -158,7 +154,7 @@ fn run_loop(
                     // Handle import-preview / import-done screens first.
                     match &app.import_state {
                         app::ImportState::Preview { ref entries, .. } => {
-                            let has_pending = entries.iter().any(|e| e.status == crate::import::ImportStatus::Pending);
+                            let has_pending = entries.iter().any(|e| e.status == import::ImportStatus::Pending);
                             match key.code {
                                 KeyCode::Char('y') | KeyCode::Enter if has_pending => {
                                     app.confirm_import();

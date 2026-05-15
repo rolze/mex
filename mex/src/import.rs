@@ -1068,6 +1068,34 @@ pub fn sha256_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// Compute SHA-256 of the first `chunk_bytes` bytes of `path`.
+///
+/// If the file is shorter than `chunk_bytes` the whole file is hashed.
+/// This is the fast duplicate-probe hash: reading only a small prefix over a
+/// slow MTP connection is far cheaper than reading the entire file.
+pub fn partial_hash_chunk(path: &Path, chunk_bytes: usize) -> Result<String> {
+    let mut hasher = Sha256::new();
+    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut remaining = chunk_bytes;
+    let mut buf = [0u8; 65536];
+    while remaining > 0 {
+        let want = remaining.min(buf.len());
+        let n = file.read(&mut buf[..want])?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        remaining -= n;
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Chunk size used for the partial-hash duplicate probe (256 KiB).
+///
+/// Large enough to distinguish real camera files (JPEG DCT blocks, MP4 moov
+/// atoms) while remaining fast over slow MTP connections (~0.25 s at 1 MB/s).
+pub const PARTIAL_HASH_BYTES: usize = 256 * 1024;
+
 // ── Import types ──────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1082,6 +1110,7 @@ pub enum ImportStatus {
 pub struct ImportEntry {
     pub source_path: PathBuf,
     pub content_hash: String,
+    pub partial_hash: String,
     pub file_size: u64,
     pub ext: String,
     /// `Some("jpg")` when magic bytes reveal a format that differs from `ext`.
@@ -1190,6 +1219,7 @@ pub fn scan_source(
             entries.push(ImportEntry {
                 source_path: path.to_path_buf(),
                 content_hash: String::new(),
+                partial_hash: String::new(),
                 file_size: 0,
                 ext: ext.clone(),
                 wrong_ext: None,
@@ -1286,6 +1316,7 @@ pub fn scan_source(
         entries.push(ImportEntry {
             source_path: path.to_path_buf(),
             content_hash: String::new(),
+            partial_hash: String::new(),
             file_size,
             ext,
             wrong_ext: None,   // magic-byte check deferred to execute
@@ -1641,10 +1672,11 @@ pub fn assign_counters(
 
 /// Copy all `Pending` entries to target, insert/update DB rows, assign import tag.
 ///
-/// Deduplication happens here: each source file is stream-copied while its SHA-256
-/// is computed in one pass (one read of the source). The hash is then checked
-/// against already-imported files (DB) and within-batch duplicates before the
-/// copy is committed.
+/// Deduplication happens here: each source file is first probed with a fast
+/// partial hash (first 256 KiB).  If the `(file_size, partial_hash)` pair
+/// already exists in the DB the file is skipped immediately — no full copy
+/// over the slow MTP link.  Only files that pass the probe are
+/// stream-copied while their full SHA-256 is computed in one pass.
 ///
 /// `import_date` — today's date as `"YYYY-MM-DD"`, used for the import tag name.
 /// `progress_cb(done, total)` — called after each successful copy.
@@ -1655,10 +1687,11 @@ pub fn execute_import(
     import_date: &str,
     progress_cb: &mut dyn FnMut(usize, usize, &str, &ImportSummary) -> bool,
 ) -> Result<ImportSummary> {
-    // Load hashes of already-imported files for dedup.
+    // Backfill and load are separated: run `migrate-partial-hashes` once
+    // (or let the first import handle missing entries gracefully via NULL exclusion).
     let existing_hashes = load_existing_hashes(conn)?;
 
-    // Work with owned clones so we can fill in content_hash after streaming.
+    // Work with owned clones so we can fill in hashes after streaming.
     let mut pending: Vec<ImportEntry> = entries
         .iter()
         .filter(|e| e.status == ImportStatus::Pending && e.target_path.is_some())
@@ -1673,8 +1706,9 @@ pub fn execute_import(
         .count();
     // No Duplicate entries from scan any more; they'll be counted below.
 
-    // Within-batch dedup: track hashes we've already imported this session.
-    let mut seen_hashes: HashMap<String, PathBuf> = HashMap::new();
+    // Within-batch dedup: track (file_size, partial_hash) of files imported
+    // in this session so that later duplicates are caught without a full copy.
+    let mut seen_hashes: HashMap<(u64, String), PathBuf> = HashMap::new();
 
     let mut imported_ids: Vec<String> = Vec::new();
     let mut attempted: usize = 0;
@@ -1698,20 +1732,33 @@ pub fn execute_import(
             break;
         }
 
-        // If target already exists on disk, check whether it's the same file.
-        if abs_tgt.exists() {
-            if let Ok(existing_hash) = sha256_file(&abs_tgt) {
-                if existing_hashes.contains_key(&existing_hash) {
-                    // Already imported in a previous session — just re-register.
-                    entry.content_hash = existing_hash;
-                    let id = upsert_media_row(conn, entry, rel_tgt, import_date)?;
-                    imported_ids.push(id);
-                    summary.skipped_dup += 1;
-                    summary.copied += 1;
-                    continue;
-                }
+        // ── Fast duplicate probe ──────────────────────────────────────────────
+        // Read only the first 256 KiB from the source (over MTP).  This is
+        // orders of magnitude cheaper than a full copy for large files.
+        let probe_key: Option<(u64, String)> = partial_hash_chunk(&entry.source_path, PARTIAL_HASH_BYTES)
+            .ok()
+            .map(|ph| (entry.file_size, ph));
+
+        if let Some(ref key) = probe_key {
+            if existing_hashes.contains_key(key) {
+                // Confirmed duplicate — skip without touching the target FS.
+                summary.skipped_dup += 1;
+                continue;
             }
-            eprintln!("import: conflict at {} — different file exists, skipping", abs_tgt.display());
+            if let Some(first_seen) = seen_hashes.get(key) {
+                let name = first_seen.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+                eprintln!("import: batch duplicate of {name}, skipping {}", entry.source_path.display());
+                summary.skipped_dup += 1;
+                continue;
+            }
+        }
+
+        // If target already exists on disk, check whether it's the same file.
+        // After backfill, any previously-imported file will have been caught by
+        // the probe above.  A surviving abs_tgt.exists() means a genuine name
+        // collision with an unrelated file — treat as an error.
+        if abs_tgt.exists() {
+            eprintln!("import: conflict at {} — file exists, skipping", abs_tgt.display());
             summary.errors += 1;
             continue;
         }
@@ -1721,7 +1768,7 @@ pub fn execute_import(
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
 
-        // Stream-copy source → dest while computing source hash in one pass.
+        // Stream-copy source → dest while computing full SHA-256 in one pass.
         // write_all() returning Ok is sufficient integrity guarantee on modern OS/FS;
         // we skip a destination re-read to avoid doubling I/O for large video files.
         let (source_hash, _) = match stream_copy_and_hash(&entry.source_path, &abs_tgt) {
@@ -1734,22 +1781,11 @@ pub fn execute_import(
             }
         };
 
-        // Dedup: check against DB and within-batch.
-        if existing_hashes.contains_key(&source_hash) {
-            fs::remove_file(&abs_tgt).ok();
-            summary.skipped_dup += 1;
-            continue;
+        entry.content_hash = source_hash;
+        if let Some(key) = probe_key {
+            entry.partial_hash = key.1.clone();
+            seen_hashes.insert(key, entry.source_path.clone());
         }
-        if let Some(first_seen) = seen_hashes.get(&source_hash) {
-            let name = first_seen.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-            eprintln!("import: batch duplicate of {name}, skipping {}", entry.source_path.display());
-            fs::remove_file(&abs_tgt).ok();
-            summary.skipped_dup += 1;
-            continue;
-        }
-
-        entry.content_hash = source_hash.clone();
-        seen_hashes.insert(source_hash, entry.source_path.clone());
 
         // Read EXIF from the locally-copied destination — free since dest is on local disk.
         // This is the only per-file extra open during execute (source is not re-opened).
@@ -1811,15 +1847,16 @@ fn upsert_media_row(
 
     conn.execute(
         "INSERT OR REPLACE INTO media \
-         (id, source_path, target_path, content_hash, file_size, ext, \
+         (id, source_path, target_path, content_hash, partial_hash, file_size, ext, \
           exif_date, derived_date, date_source, derived_slug, caption_slug, \
           slug_source, counter, status, scanned_at, moved_at) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'moved',datetime('now'),datetime('now'))",
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,'moved',datetime('now'),datetime('now'))",
         rusqlite::params![
             id,
             src,
             rel_tgt,
             entry.content_hash,
+            if entry.partial_hash.is_empty() { None } else { Some(&entry.partial_hash) },
             entry.file_size as i64,
             entry.ext,
             entry.exif_raw,
@@ -1927,12 +1964,55 @@ fn uuid_v4() -> String {
 
 // ── Public helper: load existing hashes from DB ───────────────────────────────
 
-pub fn load_existing_hashes(conn: &rusqlite::Connection) -> Result<HashMap<String, String>> {
+/// Backfill `partial_hash` for any DB rows that are missing it.
+///
+/// Reads the first `PARTIAL_HASH_BYTES` from each target file on local disk
+/// (fast — target is local storage, not MTP) and persists the result.  Runs
+/// once at the start of `execute_import`; subsequent imports are instant
+/// because the column will already be populated.
+pub fn ensure_partial_hashes(conn: &rusqlite::Connection, target_root: &Path) -> Result<()> {
+    // Collect rows that still need a partial_hash.
     let mut stmt = conn.prepare(
-        "SELECT content_hash, COALESCE(target_path, '') FROM media WHERE status='moved' AND content_hash IS NOT NULL",
+        "SELECT id, file_size, target_path FROM media \
+         WHERE status='moved' AND partial_hash IS NULL AND target_path IS NOT NULL",
     )?;
-    let map: Result<HashMap<String, String>, _> = stmt
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+    let rows: Vec<(String, i64, String)> = stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    for (id, _size, rel_path) in rows {
+        let abs_path = target_root.join(&rel_path);
+        if let Ok(phash) = partial_hash_chunk(&abs_path, PARTIAL_HASH_BYTES) {
+            conn.execute(
+                "UPDATE media SET partial_hash = ?1 WHERE id = ?2",
+                rusqlite::params![phash, id],
+            )?;
+        }
+        // Rows whose target file is missing are left as NULL — harmless; they
+        // simply won't participate in the fast dedup set.
+    }
+    Ok(())
+}
+
+/// Load the dedup set from the DB.
+///
+/// Returns a map keyed by `(file_size, partial_hash)` → `target_path`.
+/// Rows where `partial_hash` is NULL are excluded here; they are handled by
+/// `ensure_partial_hashes`, which backfills them before the copy loop runs.
+pub fn load_existing_hashes(conn: &rusqlite::Connection) -> Result<HashMap<(u64, String), String>> {
+    let mut stmt = conn.prepare(
+        "SELECT file_size, partial_hash, COALESCE(target_path, '') \
+         FROM media \
+         WHERE status='moved' AND partial_hash IS NOT NULL AND file_size IS NOT NULL",
+    )?;
+    let map: Result<HashMap<(u64, String), String>, _> = stmt
+        .query_map([], |row| {
+            let size: i64 = row.get(0)?;
+            let phash: String = row.get(1)?;
+            let tpath: String = row.get(2)?;
+            Ok(((size as u64, phash), tpath))
+        })?
         .collect();
     Ok(map?)
 }

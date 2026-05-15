@@ -84,6 +84,22 @@ pub fn folder_of(path: &str) -> &str {
     }
 }
 
+/// Migrate the DB schema to version 1 (adds `partial_hash` column).
+///
+/// Safe to call on every connection open — it is a no-op when the DB is
+/// already at the current version.  Uses `PRAGMA user_version` as the schema
+/// version counter (0 = original, 1 = adds `partial_hash`).
+pub fn ensure_schema_v1(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < 1 {
+        conn.execute_batch(
+            "ALTER TABLE media ADD COLUMN partial_hash TEXT;
+             PRAGMA user_version = 1;",
+        )?;
+    }
+    Ok(())
+}
+
 /// Attach a tag (name + type) to each media file in `media_ids`.
 ///
 /// `tag_type`:
