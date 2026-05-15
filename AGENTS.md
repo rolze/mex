@@ -2,7 +2,7 @@
 
 ## UC document sync
 
-Every UC document (`UC-XX.md`) is the source of truth for its feature.
+Every UC document (`spec/UC-XX.md`) is the source of truth for its feature.
 
 **Rule: every implementation change must be reflected in the corresponding UC document in the same commit.**
 
