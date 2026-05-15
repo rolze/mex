@@ -791,7 +791,7 @@ impl App {
         self.import_rx = Some(rx);
 
         std::thread::spawn(move || {
-            let conn = match rusqlite::Connection::open(&db_path) {
+            let mut conn = match rusqlite::Connection::open(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = tx.send(ImportMsg::CopyError(e.to_string()));
@@ -805,7 +805,7 @@ impl App {
             match crate::import::execute_import(
                 &entries,
                 std::path::Path::new(&target_root),
-                &conn,
+                &mut conn,
                 &today,
                 &mut progress_cb,
             ) {
