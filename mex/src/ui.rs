@@ -744,7 +744,7 @@ fn draw_import_copying(
         format!("\n  → {current_file}")
     };
     let text = format!(
-        "{spinner}  {done} / {total} files  ({pct}%)\n  {bar}{file_line}"
+        "{spinner}  {done} / {total} files  ({pct}%)\n  {bar}{file_line}\n\n  [Esc] abort"
     );
 
     let block = Block::default()

@@ -1653,7 +1653,7 @@ pub fn execute_import(
     target_root: &Path,
     conn: &mut rusqlite::Connection,
     import_date: &str,
-    progress_cb: &mut dyn FnMut(usize, usize, &str),
+    progress_cb: &mut dyn FnMut(usize, usize, &str) -> bool,
 ) -> Result<ImportSummary> {
     // Load hashes of already-imported files for dedup.
     let existing_hashes = load_existing_hashes(conn)?;
@@ -1685,14 +1685,18 @@ pub fn execute_import(
         let abs_tgt = target_root.join(rel_tgt);
 
         // Announce which file is starting — visible immediately, before the
-        // (potentially slow) copy begins.
+        // (potentially slow) copy begins. Returns false if the user aborted.
         let current_file = entry
             .source_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
-        progress_cb(attempted, total, &current_file);
+        let keep_going = progress_cb(attempted, total, &current_file);
+        if !keep_going {
+            // User aborted — assign tag to files already processed this session.
+            break;
+        }
 
         // If target already exists on disk, check whether it's the same file.
         if abs_tgt.exists() {
@@ -1754,7 +1758,7 @@ pub fn execute_import(
         let id = upsert_media_row(conn, entry, rel_tgt, import_date)?;
         imported_ids.push(id);
         summary.copied += 1;
-        // Completion update — same attempted count, file name unchanged.
+        // Completion update — false return value means abort (handled at next iteration start).
         progress_cb(attempted, total, &current_file);
     }
 

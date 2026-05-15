@@ -776,12 +776,12 @@ impl App {
                 }
             };
             let tx2 = tx.clone();
-            let mut progress_cb = move |done: usize, total: usize, file: &str| {
-                let _ = tx2.send(ImportMsg::CopyProgress {
+            let mut progress_cb = move |done: usize, total: usize, file: &str| -> bool {
+                tx2.send(ImportMsg::CopyProgress {
                     done,
                     total,
                     current_file: file.to_string(),
-                });
+                }).is_ok()  // false when receiver dropped (user pressed Esc)
             };
             match crate::import::execute_import(
                 &entries,

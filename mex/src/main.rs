@@ -188,11 +188,8 @@ fn run_loop(
                             }
                         }
                         app::ImportState::Scanning { .. } | app::ImportState::Copying { .. } => {
-                            // Esc cancels scan (copy cannot be undone)
                             if key.code == KeyCode::Esc {
-                                if matches!(app.import_state, app::ImportState::Scanning { .. }) {
-                                    app.cancel_import();
-                                }
+                                app.cancel_import();
                                 continue;
                             }
                             continue; // swallow other keys while busy
