@@ -96,6 +96,8 @@ pub struct App {
     pub import_state: ImportState,
     /// Receive channel for background import thread messages.
     pub import_rx: Option<mpsc::Receiver<ImportMsg>>,
+    /// Height of the import preview list (visible rows); updated each frame.
+    pub import_list_height: usize,
 }
 
 impl App {
@@ -158,6 +160,7 @@ impl App {
             status_message: None,
             import_state: ImportState::Idle,
             import_rx: None,
+            import_list_height: 20,
         }
     }
 
@@ -820,8 +823,9 @@ impl App {
     /// Scroll the import preview list down.
     pub fn import_preview_scroll_down(&mut self) {
         if let ImportState::Preview { scroll, entries } = &mut self.import_state {
-            let max = entries.iter().filter(|e| e.status != ImportStatus::Skipped).count();
-            if *scroll + 1 < max {
+            let visible = entries.iter().filter(|e| e.status != ImportStatus::Skipped).count();
+            let max_scroll = visible.saturating_sub(self.import_list_height);
+            if *scroll < max_scroll {
                 *scroll += 1;
             }
         }
@@ -831,6 +835,22 @@ impl App {
     pub fn import_preview_scroll_up(&mut self) {
         if let ImportState::Preview { scroll, .. } = &mut self.import_state {
             *scroll = scroll.saturating_sub(1);
+        }
+    }
+
+    /// Scroll the import preview list down by one page.
+    pub fn import_preview_page_down(&mut self) {
+        if let ImportState::Preview { scroll, entries } = &mut self.import_state {
+            let visible = entries.iter().filter(|e| e.status != ImportStatus::Skipped).count();
+            let max_scroll = visible.saturating_sub(self.import_list_height);
+            *scroll = (*scroll + self.import_list_height).min(max_scroll);
+        }
+    }
+
+    /// Scroll the import preview list up by one page.
+    pub fn import_preview_page_up(&mut self) {
+        if let ImportState::Preview { scroll, .. } = &mut self.import_state {
+            *scroll = scroll.saturating_sub(self.import_list_height);
         }
     }
 

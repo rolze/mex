@@ -175,6 +175,14 @@ fn run_loop(
                                     app.import_preview_scroll_up();
                                     continue;
                                 }
+                                KeyCode::PageDown => {
+                                    app.import_preview_page_down();
+                                    continue;
+                                }
+                                KeyCode::PageUp => {
+                                    app.import_preview_page_up();
+                                    continue;
+                                }
                                 _ => continue, // swallow all other keys on preview
                             }
                         }
