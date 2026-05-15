@@ -48,19 +48,3 @@ Release build (faster startup and rendering):
 cargo build --release
 ./target/release/mex
 ```
-
-## Key bindings (PoC)
-
-| Key | Action |
-|-----|--------|
-| ↑ / k | Move up |
-| ↓ / j | Move down |
-| g | Jump to top |
-| G | Jump to bottom |
-| Ctrl-d | Half-page down |
-| Ctrl-u | Half-page up |
-| Enter / Space | Toggle right-pane preview |
-| Type anything | Filter list (substring match) |
-| Backspace | Delete last filter character |
-| Esc | Clear filter / close preview |
-| q | Quit |
