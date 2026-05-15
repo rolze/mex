@@ -741,7 +741,7 @@ fn draw_import_copying(
     let file_line = if current_file.is_empty() {
         String::new()
     } else {
-        format!("\n  ✓ {current_file}")
+        format!("\n  → {current_file}")
     };
     let text = format!(
         "{spinner}  {done} / {total} files  ({pct}%)\n  {bar}{file_line}"
