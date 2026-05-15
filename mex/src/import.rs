@@ -1176,7 +1176,7 @@ pub struct ImportSummary {
 /// Returns one `ImportEntry` per media file found (including skipped, unknown-date, etc.).
 pub fn scan_source(
     source_root: &Path,
-    progress_cb: &mut dyn FnMut(usize),
+    progress_cb: &mut dyn FnMut(usize, &str),
 ) -> Result<Vec<ImportEntry>> {
     let mut entries: Vec<ImportEntry> = Vec::new();
     let mut found = 0usize;
@@ -1285,9 +1285,8 @@ pub fn scan_source(
         }
 
         found += 1;
-        if found % 50 == 0 {
-            progress_cb(found);
-        }
+        let filename_str = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        progress_cb(found, filename_str);
 
         let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
 
@@ -1722,7 +1721,7 @@ pub fn execute_import(
     target_root: &Path,
     conn: &mut rusqlite::Connection,
     import_date: &str,
-    progress_cb: &mut dyn FnMut(usize, usize),
+    progress_cb: &mut dyn FnMut(usize, usize, &str),
 ) -> Result<ImportSummary> {
     // Load hashes of already-imported files for dedup.
     let existing_hashes = load_existing_hashes(conn)?;
@@ -1838,7 +1837,13 @@ pub fn execute_import(
         let id = upsert_media_row(conn, entry, rel_tgt, import_date)?;
         imported_ids.push(id);
         summary.copied += 1;
-        progress_cb(summary.copied, total);
+        let current_file = entry
+            .source_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        progress_cb(summary.copied, total, &current_file);
     }
 
     // Assign import tag to all imported files
@@ -2017,10 +2022,10 @@ pub fn load_existing_hashes(conn: &rusqlite::Connection) -> Result<HashMap<Strin
 // ── Message type for background thread ───────────────────────────────────────
 
 pub enum ImportMsg {
-    ScanProgress(usize),
+    ScanProgress { count: usize, current_file: String },
     ScanDone(Vec<ImportEntry>),
     ScanError(String),
-    CopyProgress(usize, usize), // done, total
+    CopyProgress { done: usize, total: usize, current_file: String },
     CopyDone(ImportSummary),
     CopyError(String),
 }

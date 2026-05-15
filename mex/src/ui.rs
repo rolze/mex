@@ -17,13 +17,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Import screens take over the full area (except filter bar).
     match &app.import_state {
-        ImportState::Scanning { scanned } => {
+        ImportState::Scanning { scanned, current_file } => {
             let scanned = *scanned;
-            draw_import_scanning(frame, app, area, scanned);
+            let current_file = current_file.clone();
+            draw_import_scanning(frame, app, area, scanned, &current_file);
             return;
         }
         ImportState::Preview { .. } => {
             draw_import_preview(frame, app, area);
+            return;
+        }
+        ImportState::Copying { done, total, current_file } => {
+            let done = *done;
+            let total = *total;
+            let current_file = current_file.clone();
+            draw_import_copying(frame, app, area, done, total, &current_file);
             return;
         }
         _ => {}
@@ -61,12 +69,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_preview(frame, app, preview_area);
     }
 
-    // Import copy-progress overlay (shown on top of list while copying)
-    if let ImportState::Copying { done, total } = &app.import_state {
-        let done = *done;
-        let total = *total;
-        draw_import_progress_overlay(frame, app, list_area, done, total);
-    }
+    // Import copy-progress is now a full-screen overlay (handled above in match).
 
     draw_filter(frame, app, filter_area);
 }
@@ -561,9 +564,14 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
 // ── Import UI ─────────────────────────────────────────────────────────────────
 
 /// Full-screen "Scanning…" overlay shown while the background thread walks the source.
-fn draw_import_scanning(frame: &mut Frame, app: &App, area: Rect, scanned: usize) {
+fn draw_import_scanning(frame: &mut Frame, app: &App, area: Rect, scanned: usize, current_file: &str) {
     let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
-    let text = format!("{spinner} Scanning… {scanned} files found\n\n[Esc] abort");
+    let file_line = if current_file.is_empty() {
+        String::new()
+    } else {
+        format!("\n  {current_file}")
+    };
+    let text = format!("{spinner} Scanning… {scanned} files found{file_line}\n\n[Esc] abort");
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" Import — Scanning ")
@@ -713,33 +721,40 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(footer, chunks[2]);
 }
 
-/// Small overlay on top of the list view while files are being copied.
-fn draw_import_progress_overlay(
+/// Full-screen overlay shown while files are being copied.
+fn draw_import_copying(
     frame: &mut Frame,
     app: &App,
     area: Rect,
     done: usize,
     total: usize,
+    current_file: &str,
 ) {
     let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
     let pct = if total > 0 { done * 100 / total } else { 0 };
-    let text = format!("{spinner}  Copying {done}/{total} files ({pct}%)");
 
-    // Centre a small floating box
-    let w = (text.len() as u16 + 6).min(area.width);
-    let h = 3u16;
-    let x = area.x + (area.width.saturating_sub(w)) / 2;
-    let y = area.y + (area.height.saturating_sub(h)) / 2;
-    let overlay_area = Rect { x, y, width: w, height: h };
+    // ASCII progress bar
+    let bar_width = (area.width as usize).saturating_sub(8).min(50);
+    let filled = if total > 0 { bar_width * done / total } else { 0 };
+    let bar: String = "█".repeat(filled) + &"░".repeat(bar_width - filled);
 
+    let file_line = if current_file.is_empty() {
+        String::new()
+    } else {
+        format!("\n  ✓ {current_file}")
+    };
+    let text = format!(
+        "{spinner}  {done} / {total} files  ({pct}%)\n  {bar}{file_line}"
+    );
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Import — Copying ")
+        .style(Style::default().fg(Color::Cyan));
     let para = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .style(Style::default().fg(Color::Cyan).bg(Color::Black)),
-        )
+        .block(block)
         .alignment(Alignment::Center);
-    frame.render_widget(para, overlay_area);
+    frame.render_widget(para, area);
 }
 
 

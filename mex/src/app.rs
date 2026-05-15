@@ -17,14 +17,14 @@ const KNOWN_COMMANDS: &[&str] = &["fix-date", "fix-ext", "import", "q", "quit", 
 pub enum ImportState {
     Idle,
     /// Background scan in progress; `scanned` is the number of files found so far.
-    Scanning { scanned: usize },
+    Scanning { scanned: usize, current_file: String },
     /// Scan finished; waiting for user confirmation (y / Esc).
     Preview {
         entries: Vec<ImportEntry>,
         scroll: usize, // scroll offset for the preview list
     },
     /// Copy in progress.
-    Copying { done: usize, total: usize },
+    Copying { done: usize, total: usize, current_file: String },
     /// Copy finished; message is displayed until the next keypress.
     Done(String),
 }
@@ -681,12 +681,15 @@ impl App {
         let source_root = path.to_path_buf();
         let (tx, rx) = mpsc::channel::<ImportMsg>();
         self.import_rx = Some(rx);
-        self.import_state = ImportState::Scanning { scanned: 0 };
+        self.import_state = ImportState::Scanning { scanned: 0, current_file: String::new() };
 
         std::thread::spawn(move || {
             let tx2 = tx.clone();
-            let mut progress_cb = move |n: usize| {
-                let _ = tx2.send(ImportMsg::ScanProgress(n));
+            let mut progress_cb = move |n: usize, file: &str| {
+                let _ = tx2.send(ImportMsg::ScanProgress {
+                    count: n,
+                    current_file: file.to_string(),
+                });
             };
 
             match crate::import::scan_source(&source_root, &mut progress_cb) {
@@ -705,8 +708,8 @@ impl App {
     /// Called by the event loop when an `ImportMsg` arrives on `import_rx`.
     pub fn on_import_msg(&mut self, msg: ImportMsg) {
         match msg {
-            ImportMsg::ScanProgress(n) => {
-                self.import_state = ImportState::Scanning { scanned: n };
+            ImportMsg::ScanProgress { count, current_file } => {
+                self.import_state = ImportState::Scanning { scanned: count, current_file };
             }
             ImportMsg::ScanDone(mut entries) => {
                 // Assign counters now that we have target_root
@@ -728,8 +731,8 @@ impl App {
                 self.import_state = ImportState::Idle;
                 self.import_rx = None;
             }
-            ImportMsg::CopyProgress(done, total) => {
-                self.import_state = ImportState::Copying { done, total };
+            ImportMsg::CopyProgress { done, total, current_file } => {
+                self.import_state = ImportState::Copying { done, total, current_file };
             }
             ImportMsg::CopyDone(summary) => {
                 let msg = format!(
@@ -756,7 +759,7 @@ impl App {
             _ => return,
         };
         let total = entries.iter().filter(|e| e.status == ImportStatus::Pending).count();
-        self.import_state = ImportState::Copying { done: 0, total };
+        self.import_state = ImportState::Copying { done: 0, total, current_file: String::new() };
 
         let db_path = self.db_path.clone();
         let target_root = self.target_root.clone();
@@ -773,8 +776,12 @@ impl App {
                 }
             };
             let tx2 = tx.clone();
-            let mut progress_cb = move |done: usize, total: usize| {
-                let _ = tx2.send(ImportMsg::CopyProgress(done, total));
+            let mut progress_cb = move |done: usize, total: usize, file: &str| {
+                let _ = tx2.send(ImportMsg::CopyProgress {
+                    done,
+                    total,
+                    current_file: file.to_string(),
+                });
             };
             match crate::import::execute_import(
                 &entries,
