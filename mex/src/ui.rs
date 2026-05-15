@@ -444,6 +444,11 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                 let suffix: String = suggestion.chars().skip(typed_chars).collect();
                 spans.push(Span::styled(suffix, Style::default().fg(Color::DarkGray)));
             }
+        } else if let Some(arg) = cmd.strip_prefix("import ") {
+            // Show dim "<path>" placeholder when no path has been typed yet.
+            if arg.trim().is_empty() {
+                spans.push(Span::styled("<path>", Style::default().fg(Color::DarkGray)));
+            }
         }
 
         spans.push(Span::raw("_"));
