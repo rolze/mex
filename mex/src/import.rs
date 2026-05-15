@@ -1863,37 +1863,51 @@ fn assign_import_tag(
     import_date: &str,
 ) -> Result<()> {
     // Tag name: "import-YY-MM-DD" (short year), type "mex"
+    // If the day's base tag already exists, append _2, _3, … so each
+    // import session on the same day gets its own unique tag.
     let yy = &import_date[2..4];
     let mm = &import_date[5..7];
     let dd = &import_date[8..10];
-    let tag_name = format!("import-{yy}-{mm}-{dd}");
+    let base = format!("import-{yy}-{mm}-{dd}");
 
-    // Ensure tag exists with type 'mex'
-    let tag_id: i64 = {
-        use rusqlite::OptionalExtension;
-        let existing: Option<(i64, String)> = conn
-            .query_row(
-                "SELECT id, type FROM tags WHERE name = ?1 COLLATE NOCASE",
-                [&tag_name],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        match existing {
-            Some((id, ty)) => {
-                if !ty.eq_ignore_ascii_case("mex") {
-                    anyhow::bail!("tag '{tag_name}' already exists with type '{ty}', expected 'mex'");
-                }
-                id
-            }
-            None => {
-                conn.execute(
-                    "INSERT INTO tags (name, type) VALUES (?1, 'mex')",
-                    [&tag_name],
-                )?;
-                conn.last_insert_rowid()
-            }
-        }
+    // Find all existing mex tags that match this day's base or base_N.
+    // Use a block so `stmt` is dropped before we need a mutable borrow of conn below.
+    let like_pattern = format!("{base}_%");
+    let existing_names: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM tags WHERE type = 'mex' AND (name = ?1 COLLATE NOCASE OR name LIKE ?2 COLLATE NOCASE)",
+        )?;
+        let names: Vec<String> = stmt
+            .query_map(rusqlite::params![&base, &like_pattern], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        names
     };
+
+    // Determine the next suffix: base has implicit index 1; base_2, base_3 follow.
+    let max_index = existing_names.iter().fold(
+        if existing_names.is_empty() { 0u32 } else { 1u32 },
+        |acc, name| {
+            let suffix = name[base.len()..].to_ascii_lowercase();
+            if let Some(n) = suffix.strip_prefix('_').and_then(|s| s.parse::<u32>().ok()) {
+                acc.max(n)
+            } else {
+                acc
+            }
+        },
+    );
+
+    let tag_name = if max_index == 0 {
+        base.clone()
+    } else {
+        format!("{base}_{}", max_index + 1)
+    };
+
+    conn.execute(
+        "INSERT INTO tags (name, type) VALUES (?1, 'mex')",
+        [&tag_name],
+    )?;
+    let tag_id = conn.last_insert_rowid();
 
     let tx = conn.transaction()?;
     for mid in media_ids {
