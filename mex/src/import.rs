@@ -1677,20 +1677,22 @@ pub fn execute_import(
     let mut seen_hashes: HashMap<String, PathBuf> = HashMap::new();
 
     let mut imported_ids: Vec<String> = Vec::new();
+    let mut attempted: usize = 0;
 
     for entry in &mut pending {
+        attempted += 1;
         let rel_tgt = entry.target_path.as_ref().unwrap();
         let abs_tgt = target_root.join(rel_tgt);
 
         // Announce which file is starting — visible immediately, before the
-        // (potentially slow) copy begins, so the UI never shows "0 files" for long.
+        // (potentially slow) copy begins.
         let current_file = entry
             .source_path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
-        progress_cb(summary.copied, total, &current_file);
+        progress_cb(attempted, total, &current_file);
 
         // If target already exists on disk, check whether it's the same file.
         if abs_tgt.exists() {
@@ -1752,8 +1754,8 @@ pub fn execute_import(
         let id = upsert_media_row(conn, entry, rel_tgt, import_date)?;
         imported_ids.push(id);
         summary.copied += 1;
-        // Send updated count with same filename to reflect completion.
-        progress_cb(summary.copied, total, &current_file);
+        // Completion update — same attempted count, file name unchanged.
+        progress_cb(attempted, total, &current_file);
     }
 
     // Assign import tag to all imported files
