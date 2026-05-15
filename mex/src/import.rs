@@ -1682,6 +1682,16 @@ pub fn execute_import(
         let rel_tgt = entry.target_path.as_ref().unwrap();
         let abs_tgt = target_root.join(rel_tgt);
 
+        // Announce which file is starting — visible immediately, before the
+        // (potentially slow) copy begins, so the UI never shows "0 files" for long.
+        let current_file = entry
+            .source_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        progress_cb(summary.copied, total, &current_file);
+
         // If target already exists on disk, check whether it's the same file.
         if abs_tgt.exists() {
             if let Ok(existing_hash) = sha256_file(&abs_tgt) {
@@ -1773,12 +1783,7 @@ pub fn execute_import(
         let id = upsert_media_row(conn, entry, rel_tgt, import_date)?;
         imported_ids.push(id);
         summary.copied += 1;
-        let current_file = entry
-            .source_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("")
-            .to_string();
+        // Send updated count with same filename to reflect completion.
         progress_cb(summary.copied, total, &current_file);
     }
 
