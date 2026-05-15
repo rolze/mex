@@ -648,10 +648,15 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             };
             let date_src = &e.date_source;
             let slug_src = &e.slug_source;
+            let (src_color, ext_warn) = if let Some(actual) = &e.wrong_ext {
+                (Color::Red, format!(" !.{actual}"))
+            } else {
+                (Color::White, String::new())
+            };
             let line = Line::from(vec![
                 Span::styled(
                     format!("{src:<src_col$}"),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(src_color),
                 ),
                 Span::styled(
                     format!(" {status_char} "),
@@ -665,6 +670,7 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                     format!("  {date_src:>4}/{slug_src:<4}"),
                     Style::default().fg(Color::DarkGray),
                 ),
+                Span::styled(ext_warn, Style::default().fg(Color::Red)),
             ]);
             ListItem::new(line)
         })
