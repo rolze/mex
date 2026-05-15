@@ -84,6 +84,47 @@ pub fn folder_of(path: &str) -> &str {
     }
 }
 
+/// Initialise the DB schema on a fresh database and migrate existing ones.
+///
+/// Safe to call every startup — all statements use `CREATE TABLE IF NOT EXISTS`
+/// and `ensure_schema_v1` is a no-op when already at the current version.
+pub fn init_db(db_path: &str) -> Result<()> {
+    let conn = Connection::open(db_path)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS media (
+            id           TEXT PRIMARY KEY,
+            source_path  TEXT,
+            target_path  TEXT,
+            content_hash TEXT,
+            file_size    INTEGER,
+            ext          TEXT,
+            exif_date    TEXT,
+            derived_date TEXT,
+            date_source  TEXT,
+            derived_slug TEXT,
+            caption_slug TEXT,
+            slug_source  TEXT,
+            counter      INTEGER,
+            status       TEXT,
+            os_date      TEXT,
+            scanned_at   TEXT,
+            moved_at     TEXT
+        );
+        CREATE TABLE IF NOT EXISTS tags (
+            id   INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            type TEXT DEFAULT 'event'
+        );
+        CREATE TABLE IF NOT EXISTS media_tags (
+            media_id TEXT,
+            tag_id   INTEGER,
+            PRIMARY KEY (media_id, tag_id)
+        );",
+    )?;
+    ensure_schema_v1(&conn)?;
+    Ok(())
+}
+
 /// Migrate the DB schema to version 1 (adds `partial_hash` column).
 ///
 /// Safe to call on every connection open — it is a no-op when the DB is
