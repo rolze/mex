@@ -1169,17 +1169,16 @@ pub struct ImportSummary {
 
 /// Scan `source_root` for media files.
 ///
-/// `existing_hashes` — map of `content_hash → target_path` for files already in the DB
-/// with `status='moved'`.  Files whose hash is in this map are marked `Duplicate`.
+/// Returns one `ImportEntry` per media file found. Deduplication against
+/// already-imported files is deferred to the execute phase (no full file reads
+/// happen during scan — only metadata and a 16-byte magic header per file).
 ///
-/// Returns one `ImportEntry` per media file found (including duplicates, skipped, etc.).
+/// Returns one `ImportEntry` per media file found (including skipped, unknown-date, etc.).
 pub fn scan_source(
     source_root: &Path,
-    existing_hashes: &HashMap<String, String>,
     progress_cb: &mut dyn FnMut(usize),
 ) -> Result<Vec<ImportEntry>> {
     let mut entries: Vec<ImportEntry> = Vec::new();
-    let mut seen_hashes: HashMap<String, PathBuf> = HashMap::new(); // within-batch dedup
     let mut found = 0usize;
 
     // Collect quality-variant dirs first
@@ -1290,14 +1289,6 @@ pub fn scan_source(
             progress_cb(found);
         }
 
-        // Hash
-        let hash = match sha256_file(path) {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!("import: hash error {}: {e}", path.display());
-                continue;
-            }
-        };
         let file_size = path.metadata().map(|m| m.len()).unwrap_or(0);
 
         // EXIF
@@ -1347,18 +1338,11 @@ pub fn scan_source(
         let (derived_slug, caption_slug, slug_source) =
             derive_slug(path, source_root, filename, in_junk);
 
-        // Dedup
-        let (status, dup_target) = if let Some(existing_tgt) = existing_hashes.get(&hash) {
-            (ImportStatus::Duplicate, Some(format!("already imported: {existing_tgt}")))
-        } else if let Some(first_seen) = seen_hashes.get(&hash) {
-            let name = first_seen.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-            (ImportStatus::Duplicate, Some(format!("batch duplicate of: {name}")))
-        } else if derived_date.is_none() {
-            seen_hashes.insert(hash.clone(), path.to_path_buf());
-            (ImportStatus::UnknownDate, None)
+        // Status (dedup against DB is deferred to execute phase)
+        let status = if derived_date.is_none() {
+            ImportStatus::UnknownDate
         } else {
-            seen_hashes.insert(hash.clone(), path.to_path_buf());
-            (ImportStatus::Pending, None)
+            ImportStatus::Pending
         };
 
         // Extension / format mismatch (only for image files the crate can probe)
@@ -1366,7 +1350,7 @@ pub fn scan_source(
 
         entries.push(ImportEntry {
             source_path: path.to_path_buf(),
-            content_hash: hash,
+            content_hash: String::new(),
             file_size,
             ext,
             wrong_ext,
@@ -1377,7 +1361,7 @@ pub fn scan_source(
             caption_slug,
             slug_source,
             counter: None,
-            target_path: dup_target,
+            target_path: None,
             status,
         });
     }
@@ -1726,6 +1710,11 @@ pub fn assign_counters(
 
 /// Copy all `Pending` entries to target, insert/update DB rows, assign import tag.
 ///
+/// Deduplication happens here: each source file is stream-copied while its SHA-256
+/// is computed in one pass (one read of the source). The hash is then checked
+/// against already-imported files (DB) and within-batch duplicates before the
+/// copy is committed.
+///
 /// `import_date` — today's date as `"YYYY-MM-DD"`, used for the import tag name.
 /// `progress_cb(done, total)` — called after each successful copy.
 pub fn execute_import(
@@ -1735,9 +1724,14 @@ pub fn execute_import(
     import_date: &str,
     progress_cb: &mut dyn FnMut(usize, usize),
 ) -> Result<ImportSummary> {
-    let pending: Vec<&ImportEntry> = entries
+    // Load hashes of already-imported files for dedup.
+    let existing_hashes = load_existing_hashes(conn)?;
+
+    // Work with owned clones so we can fill in content_hash after streaming.
+    let mut pending: Vec<ImportEntry> = entries
         .iter()
         .filter(|e| e.status == ImportStatus::Pending && e.target_path.is_some())
+        .cloned()
         .collect();
 
     let total = pending.len();
@@ -1746,22 +1740,23 @@ pub fn execute_import(
         .iter()
         .filter(|e| e.status == ImportStatus::UnknownDate)
         .count();
-    summary.skipped_dup = entries
-        .iter()
-        .filter(|e| e.status == ImportStatus::Duplicate)
-        .count();
+    // No Duplicate entries from scan any more; they'll be counted below.
+
+    // Within-batch dedup: track hashes we've already imported this session.
+    let mut seen_hashes: HashMap<String, PathBuf> = HashMap::new();
 
     let mut imported_ids: Vec<String> = Vec::new();
 
-    for entry in &pending {
+    for entry in &mut pending {
         let rel_tgt = entry.target_path.as_ref().unwrap();
         let abs_tgt = target_root.join(rel_tgt);
 
-        // Target already exists?
+        // If target already exists on disk, check whether it's the same file.
         if abs_tgt.exists() {
             if let Ok(existing_hash) = sha256_file(&abs_tgt) {
-                if existing_hash == entry.content_hash {
-                    // Already there — just update DB
+                if existing_hashes.contains_key(&existing_hash) {
+                    // Already imported in a previous session — just re-register.
+                    entry.content_hash = existing_hash;
                     let id = upsert_media_row(conn, entry, rel_tgt, import_date)?;
                     imported_ids.push(id);
                     summary.skipped_dup += 1;
@@ -1779,11 +1774,65 @@ pub fn execute_import(
                 .with_context(|| format!("create dir {}", parent.display()))?;
         }
 
-        // Copy with hash verification
-        if let Err(e) = copy_and_verify(&entry.source_path, &abs_tgt, &entry.content_hash) {
-            eprintln!("import: copy error {}: {e}", entry.source_path.display());
-            summary.errors += 1;
+        // Stream-copy source → dest while computing source hash (one MTP read).
+        let source_hash = match stream_copy_and_hash(&entry.source_path, &abs_tgt) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("import: copy error {}: {e}", entry.source_path.display());
+                fs::remove_file(&abs_tgt).ok();
+                summary.errors += 1;
+                continue;
+            }
+        };
+
+        // Dedup: check against DB and within-batch.
+        if existing_hashes.contains_key(&source_hash) {
+            fs::remove_file(&abs_tgt).ok();
+            summary.skipped_dup += 1;
             continue;
+        }
+        if let Some(first_seen) = seen_hashes.get(&source_hash) {
+            let name = first_seen.file_name().and_then(|n| n.to_str()).unwrap_or("?");
+            eprintln!("import: batch duplicate of {name}, skipping {}", entry.source_path.display());
+            fs::remove_file(&abs_tgt).ok();
+            summary.skipped_dup += 1;
+            continue;
+        }
+
+        // Verify destination integrity.
+        let dest_hash = match sha256_file(&abs_tgt) {
+            Ok(h) => h,
+            Err(e) => {
+                eprintln!("import: verify error {}: {e}", abs_tgt.display());
+                fs::remove_file(&abs_tgt).ok();
+                summary.errors += 1;
+                continue;
+            }
+        };
+        if dest_hash != source_hash {
+            fs::remove_file(&abs_tgt).ok();
+            // Retry once.
+            let source_hash2 = match stream_copy_and_hash(&entry.source_path, &abs_tgt) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("import: retry copy error {}: {e}", entry.source_path.display());
+                    fs::remove_file(&abs_tgt).ok();
+                    summary.errors += 1;
+                    continue;
+                }
+            };
+            let dest_hash2 = sha256_file(&abs_tgt).unwrap_or_default();
+            if dest_hash2 != source_hash2 {
+                fs::remove_file(&abs_tgt).ok();
+                eprintln!("import: hash mismatch after retry: {}", entry.source_path.display());
+                summary.errors += 1;
+                continue;
+            }
+            entry.content_hash = source_hash2.clone();
+            seen_hashes.insert(source_hash2, entry.source_path.clone());
+        } else {
+            entry.content_hash = source_hash.clone();
+            seen_hashes.insert(source_hash, entry.source_path.clone());
         }
 
         let id = upsert_media_row(conn, entry, rel_tgt, import_date)?;
@@ -1800,20 +1849,25 @@ pub fn execute_import(
     Ok(summary)
 }
 
-fn copy_and_verify(src: &Path, dst: &Path, expected_hash: &str) -> Result<()> {
-    fs::copy(src, dst).with_context(|| format!("copy {} → {}", src.display(), dst.display()))?;
-    let actual = sha256_file(dst)?;
-    if actual != expected_hash {
-        fs::remove_file(dst).ok();
-        // Retry once
-        fs::copy(src, dst)?;
-        let actual2 = sha256_file(dst)?;
-        if actual2 != expected_hash {
-            fs::remove_file(dst).ok();
-            anyhow::bail!("hash mismatch after retry: {}", src.display());
+/// Stream-copy `src` to `dst` while computing the SHA-256 of `src` in one pass.
+/// Returns the hex-encoded SHA-256 of the source file.
+fn stream_copy_and_hash(src: &Path, dst: &Path) -> Result<String> {
+    use std::io::Write;
+    let mut hasher = Sha256::new();
+    let mut src_file =
+        fs::File::open(src).with_context(|| format!("open {}", src.display()))?;
+    let mut dst_file =
+        fs::File::create(dst).with_context(|| format!("create {}", dst.display()))?;
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = src_file.read(&mut buf)?;
+        if n == 0 {
+            break;
         }
+        hasher.update(&buf[..n]);
+        dst_file.write_all(&buf[..n])?;
     }
-    Ok(())
+    Ok(hex::encode(hasher.finalize()))
 }
 
 fn upsert_media_row(
