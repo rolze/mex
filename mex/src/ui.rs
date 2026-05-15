@@ -678,13 +678,21 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(list, chunks[1]);
 
     // Footer
-    let footer = Paragraph::new(Line::from(vec![
-        Span::styled("  y / Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-        Span::styled(" — confirm import    ", Style::default().fg(Color::White)),
-        Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-        Span::styled(" — cancel", Style::default().fg(Color::White)),
-    ]))
-    .block(Block::default().borders(Borders::ALL));
+    let footer_line = if pending > 0 {
+        Line::from(vec![
+            Span::styled("  y / Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(" — confirm import    ", Style::default().fg(Color::White)),
+            Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" — cancel", Style::default().fg(Color::White)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("  Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" — close  (nothing to import)", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    let footer = Paragraph::new(footer_line)
+        .block(Block::default().borders(Borders::ALL));
     frame.render_widget(footer, chunks[2]);
 }
 

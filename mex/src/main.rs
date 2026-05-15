@@ -157,9 +157,10 @@ fn run_loop(
                 Event::Key(key) => {
                     // Handle import-preview / import-done screens first.
                     match &app.import_state {
-                        app::ImportState::Preview { .. } => {
+                        app::ImportState::Preview { ref entries, .. } => {
+                            let has_pending = entries.iter().any(|e| e.status == crate::import::ImportStatus::Pending);
                             match key.code {
-                                KeyCode::Char('y') | KeyCode::Enter => {
+                                KeyCode::Char('y') | KeyCode::Enter if has_pending => {
                                     app.confirm_import();
                                     continue;
                                 }
