@@ -1731,7 +1731,7 @@ pub fn assign_counters(
 pub fn execute_import(
     entries: &[ImportEntry],
     target_root: &Path,
-    conn: &rusqlite::Connection,
+    conn: &mut rusqlite::Connection,
     import_date: &str,
     progress_cb: &mut dyn FnMut(usize, usize),
 ) -> Result<ImportSummary> {
@@ -1858,7 +1858,7 @@ fn upsert_media_row(
 }
 
 fn assign_import_tag(
-    conn: &rusqlite::Connection,
+    conn: &mut rusqlite::Connection,
     media_ids: &[String],
     import_date: &str,
 ) -> Result<()> {
@@ -1895,12 +1895,15 @@ fn assign_import_tag(
         }
     };
 
+    let tx = conn.transaction()?;
     for mid in media_ids {
-        conn.execute(
+        tx.execute(
             "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
             rusqlite::params![mid, tag_id],
         )?;
     }
+    tx.commit()?;
+
     Ok(())
 }
 
