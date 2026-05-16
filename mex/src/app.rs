@@ -1963,11 +1963,14 @@ impl App {
     /// Toggle all indices in `range` in the selection:
     /// if every index is already selected → remove all; otherwise insert all.
     fn toggle_range(&mut self, lo: usize, hi: usize) {
-        let all_selected = (lo..=hi).all(|i| self.selection.contains(&i));
+        let selectable: Vec<usize> = (lo..=hi)
+            .filter(|&i| self.filtered.get(i).map_or(false, |f| f.status != "trashed"))
+            .collect();
+        let all_selected = selectable.iter().all(|i| self.selection.contains(i));
         if all_selected {
-            for i in lo..=hi { self.selection.remove(&i); }
+            for i in selectable { self.selection.remove(&i); }
         } else {
-            for i in lo..=hi { self.selection.insert(i); }
+            for i in selectable { self.selection.insert(i); }
         }
     }
 

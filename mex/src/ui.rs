@@ -157,7 +157,7 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let folder_cell = truncate_front(folder, FOLDER_COL - 2); // -2 for marker + /
             let folder_name = format!("{:<width$}", folder_cell, width = FOLDER_COL - 2);
             // Dot only when the file is in the selection set (not just cursor position).
-            let show_dot = is_selected;
+            let show_dot = is_selected && !is_trashed;
             let marker_str = if show_dot { "•" } else if is_trashed { "🗑" } else { " " };
             let marker_fg = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else { Color::White };
 
