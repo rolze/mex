@@ -509,7 +509,7 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             if app.trashed_count > 0 {
                 spans.push(Span::styled(
                     format!("   [🗑 {} trashed]", app.trashed_count),
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                    Style::default().fg(Color::DarkGray),
                 ));
             }
             Line::from(spans)
@@ -521,7 +521,7 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             if app.trashed_count > 0 {
                 spans.push(Span::styled(
                     format!("   [🗑 {} trashed]", app.trashed_count),
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                    Style::default().fg(Color::DarkGray),
                 ));
             }
             Line::from(spans)
