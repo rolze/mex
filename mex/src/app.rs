@@ -1173,16 +1173,16 @@ impl App {
     /// `RemoveSlugMsg::Progress` after each file and `RemoveSlugMsg::Done` when
     /// finished.  The UI shows a full-screen progress overlay while running.
     pub fn remove_slug_selected(&mut self) {
-        let targets: Vec<(String, String)> = if self.selection.is_empty() {
+        let targets: Vec<String> = if self.selection.is_empty() {
             self.filtered
                 .get(self.selected)
-                .map(|f| vec![(f.id.clone(), f.derived_slug.clone())])
+                .map(|f| vec![f.id.clone()])
                 .unwrap_or_default()
         } else {
             let mut sel: Vec<usize> = self.selection.iter().copied().collect();
             sel.sort_unstable();
             sel.iter()
-                .filter_map(|&i| self.filtered.get(i).map(|f| (f.id.clone(), f.derived_slug.clone())))
+                .filter_map(|&i| self.filtered.get(i).map(|f| f.id.clone()))
                 .collect()
         };
 
@@ -1204,44 +1204,40 @@ impl App {
         self.remove_slug_rx = Some(rx);
 
         std::thread::spawn(move || {
-            let mut fixed = 0usize;
-            let mut skipped = 0usize;
-            let mut errors = 0usize;
-            let mut first_error: Option<String> = None;
+            let result = crate::db::remove_slug_batch(
+                &db_path,
+                &target_root,
+                &targets,
+                |done, current| {
+                    let _ = tx.send(RemoveSlugMsg::Progress {
+                        done,
+                        total,
+                        current: current.to_string(),
+                    });
+                },
+            );
 
-            for (done, (id, slug)) in targets.iter().enumerate() {
-                let current = id.clone();
-                let _ = tx.send(RemoveSlugMsg::Progress {
-                    done,
-                    total,
-                    current: current.clone(),
-                });
-
-                if slug.is_empty() {
-                    skipped += 1;
-                    continue;
-                }
-                match crate::db::remove_slug(&db_path, &target_root, id) {
-                    Ok(()) => fixed += 1,
-                    Err(e) => {
-                        eprintln!("remove-slug error for {id}: {e}");
-                        if first_error.is_none() {
-                            first_error = Some(e.to_string());
-                        }
-                        errors += 1;
+            let summary = match result {
+                Err(e) => format!("remove-slug: fatal error — {e}"),
+                Ok(stats) => {
+                    let fixed = stats.fixed;
+                    let skipped = stats.skipped;
+                    let errors = stats.errors.len();
+                    for (id, msg) in &stats.errors {
+                        eprintln!("remove-slug error for {id}: {msg}");
+                    }
+                    let first_error = stats.errors.into_iter().map(|(_, m)| m).next();
+                    if errors > 0 {
+                        let msg = first_error.unwrap_or_default();
+                        format!("remove-slug: {errors} error(s) — {msg}")
+                    } else if fixed == 0 {
+                        format!("remove-slug: {skipped} file(s) already clean")
+                    } else if skipped > 0 {
+                        format!("remove-slug: repaired {fixed} file(s), {skipped} already clean")
+                    } else {
+                        format!("remove-slug: repaired {fixed} file(s)")
                     }
                 }
-            }
-
-            let summary = if errors > 0 {
-                let msg = first_error.unwrap_or_default();
-                format!("remove-slug: {errors} error(s) — {msg}")
-            } else if fixed == 0 {
-                format!("remove-slug: {skipped} file(s) already have no slug")
-            } else if skipped > 0 {
-                format!("remove-slug: repaired {fixed} file(s), {skipped} skipped (no slug)")
-            } else {
-                format!("remove-slug: repaired {fixed} file(s)")
             };
             let _ = tx.send(RemoveSlugMsg::Done(summary));
         });
