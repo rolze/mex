@@ -542,31 +542,17 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::raw("_"));
         Line::from(spans)
     } else if !app.is_filter_active() {
-        if let Some(ref msg) = app.status_message {
-            let mut spans = vec![Span::styled(
-                msg.clone(),
-                Style::default().fg(Color::Yellow),
-            )];
-            if app.trashed_count > 0 {
-                spans.push(Span::styled(
-                    format!("   [🗑 {} trashed]", app.trashed_count),
-                    Style::default().fg(Color::DarkGray),
-                ));
-            }
-            Line::from(spans)
-        } else {
-            let mut spans = vec![Span::styled(
-                "Type to filter…  |  #tag  |  @type  |  Enter: preview  |  Ctrl+O: open  |  :: command  |  PgUp/PgDn: page",
+        let mut spans = vec![Span::styled(
+            "Type to filter…  |  #tag  |  @type  |  Enter: preview  |  Ctrl+O: open  |  :: command  |  PgUp/PgDn: page",
+            Style::default().fg(Color::DarkGray),
+        )];
+        if app.trashed_count > 0 {
+            spans.push(Span::styled(
+                format!("   [🗑 {} trashed]", app.trashed_count),
                 Style::default().fg(Color::DarkGray),
-            )];
-            if app.trashed_count > 0 {
-                spans.push(Span::styled(
-                    format!("   [🗑 {} trashed]", app.trashed_count),
-                    Style::default().fg(Color::DarkGray),
-                ));
-            }
-            Line::from(spans)
+            ));
         }
+        Line::from(spans)
     } else {
         // Build a boolean expression: text AND (@types OR …) AND (#tags OR …)
         // Styling: AND/OR/() = DarkGray, /text = White+Bold, @type = Magenta+Bold, #tag = Cyan+Bold
@@ -654,10 +640,26 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(spans)
     };
 
-    let para = Paragraph::new(line)
-        .block(Block::default().borders(Borders::ALL).title(title));
+    let block = Block::default().borders(Borders::ALL).title(title);
+    let inner = block.inner(area);
 
-    frame.render_widget(para, area);
+    frame.render_widget(block, area);
+    frame.render_widget(Paragraph::new(line), inner);
+
+    // Status message floats right-aligned, overlaying the content without
+    // overwriting the left-side filter text or hint.
+    if app.command.is_none() {
+        if let Some(ref msg) = app.status_message {
+            let status_line = Line::from(Span::styled(
+                msg.as_str(),
+                Style::default().fg(Color::Yellow),
+            ));
+            frame.render_widget(
+                Paragraph::new(status_line).alignment(Alignment::Right),
+                inner,
+            );
+        }
+    }
 }
 
 // ── Import UI ─────────────────────────────────────────────────────────────────
