@@ -3,7 +3,8 @@ use mex::{app, config, db, import, ui};
 use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        self, Event, KeyCode, KeyModifiers,
+        self, Event, KeyCode, KeyEventKind, KeyboardEnhancementFlags, KeyModifiers,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -207,6 +208,11 @@ fn main() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
+    // Enable Kitty keyboard protocol so Shift+Enter is distinguishable from Enter.
+    // Silently ignored by terminals that don't support it.
+    let _ = execute!(stdout, PushKeyboardEnhancementFlags(
+        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+    ));
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -216,6 +222,7 @@ fn main() -> Result<()> {
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
+        PopKeyboardEnhancementFlags,
         LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
@@ -256,6 +263,9 @@ fn run_loop(
         if event::poll(std::time::Duration::from_millis(16))? {
             match event::read()? {
                 Event::Key(key) => {
+                    // With keyboard enhancement enabled terminals also send Release
+                    // events; ignore them to avoid double-firing every binding.
+                    if key.kind == KeyEventKind::Release { continue; }
                     // Handle remove-slug progress lock screen first.
                     match &app.remove_slug_state {
                         app::RemoveSlugState::Running { .. } => {
