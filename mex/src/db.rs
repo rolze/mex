@@ -585,6 +585,55 @@ pub fn remove_slug(db_path: &str, target_root: &str, file_id: &str) -> Result<()
     Ok(())
 }
 
+/// Fix the OS mtime of a single imported media file on disk.
+///
+/// Re-derives the best timestamp using the same priority logic as the import
+/// execute phase ([`crate::import::best_mtime`]):
+/// 1. Full timestamp encoded in the original source filename.
+/// 2. `derived_date` at noon UTC (source mtime unavailable for repair).
+///
+/// Returns `Ok(true)` when the mtime was updated, `Ok(false)` when the file
+/// was skipped (no `derived_date` stored, or the target file does not exist on
+/// disk — both are non-fatal).
+pub fn fix_os_time(db_path: &str, target_root: &str, file_id: &str) -> Result<bool> {
+    use std::path::Path;
+
+    let conn = Connection::open(db_path)?;
+
+    let (target_path, derived_date, source_path): (String, Option<String>, String) = conn
+        .query_row(
+            "SELECT COALESCE(target_path,''), derived_date, COALESCE(source_path,'') \
+             FROM media WHERE id = ?1",
+            [file_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+
+    if derived_date.is_none() {
+        return Ok(false);
+    }
+
+    let filename_secs = {
+        let base = Path::new(&source_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        crate::import::find_filename_timestamp(base)
+    };
+
+    let ft = match crate::import::best_mtime(filename_secs, None, derived_date.as_deref()) {
+        Some(ft) => ft,
+        None => return Ok(false),
+    };
+
+    let abs_tgt = Path::new(target_root).join(&target_path);
+    if !abs_tgt.exists() {
+        return Ok(false);
+    }
+
+    filetime::set_file_mtime(&abs_tgt, ft)?;
+    Ok(true)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────

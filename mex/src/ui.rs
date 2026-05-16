@@ -1,4 +1,4 @@
-use crate::app::{App, ImportState, RemoveSlugState};
+use crate::app::{App, FixOsTimeState, ImportState, RemoveSlugState};
 use crate::db::folder_of;
 use crate::import::ImportStatus;
 use ratatui::{
@@ -42,6 +42,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Remove-slug progress overlay takes over the full screen while running.
     if let RemoveSlugState::Running { done, total, current } = &app.remove_slug_state {
+        let done = *done;
+        let total = *total;
+        let current = current.clone();
+        draw_remove_slug_progress(frame, app, area, done, total, &current);
+        return;
+    }
+
+    // Fix-os-time progress overlay takes over the full screen while running.
+    if let FixOsTimeState::Running { done, total, current } = &app.fix_os_time_state {
         let done = *done;
         let total = *total;
         let current = current.clone();

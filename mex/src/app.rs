@@ -10,7 +10,7 @@ use std::{
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["create-view", "fix-date", "fix-ext", "import", "q", "quit", "remove-slug", "tag", "untag"];
+const KNOWN_COMMANDS: &[&str] = &["create-view", "fix-date", "fix-ext", "fix-os-time", "import", "q", "quit", "remove-slug", "tag", "untag"];
 
 // ── Import state ──────────────────────────────────────────────────────────────
 
@@ -40,6 +40,21 @@ pub enum RemoveSlugState {
 }
 
 pub enum RemoveSlugMsg {
+    Progress { done: usize, total: usize, current: String },
+    Done(String),
+}
+
+// ── Fix-os-time state ─────────────────────────────────────────────────────────
+
+pub enum FixOsTimeState {
+    Idle,
+    /// Background repair in progress.
+    Running { done: usize, total: usize, current: String },
+    /// Finished; message shown until the next keypress.
+    Done(String),
+}
+
+pub enum FixOsTimeMsg {
     Progress { done: usize, total: usize, current: String },
     Done(String),
 }
@@ -119,6 +134,10 @@ pub struct App {
     pub remove_slug_state: RemoveSlugState,
     /// Receive channel for the background remove-slug thread.
     pub remove_slug_rx: Option<mpsc::Receiver<RemoveSlugMsg>>,
+    /// Fix-os-time repair state machine.
+    pub fix_os_time_state: FixOsTimeState,
+    /// Receive channel for the background fix-os-time thread.
+    pub fix_os_time_rx: Option<mpsc::Receiver<FixOsTimeMsg>>,
 }
 
 impl App {
@@ -186,6 +205,8 @@ impl App {
             import_list_height: 20,
             remove_slug_state: RemoveSlugState::Idle,
             remove_slug_rx: None,
+            fix_os_time_state: FixOsTimeState::Idle,
+            fix_os_time_rx: None,
         }
     }
 
@@ -660,6 +681,11 @@ impl App {
 
         if trimmed == "remove-slug" {
             self.remove_slug_selected();
+            return;
+        }
+
+        if trimmed == "fix-os-time" {
+            self.fix_os_time_selected();
             return;
         }
 
@@ -1215,7 +1241,111 @@ impl App {
         true
     }
 
-    // ── tag ──────────────────────────────────────────────────────────────────
+    // ── fix-os-time ───────────────────────────────────────────────────────────
+
+    /// Apply `:fix-os-time` to the selection set (or cursor file if nothing is
+    /// explicitly selected).
+    ///
+    /// Spawns a background thread that re-applies the same mtime logic as the
+    /// import execute phase to each target file's OS mtime on disk.
+    pub fn fix_os_time_selected(&mut self) {
+        let targets: Vec<String> = if self.selection.is_empty() {
+            self.filtered
+                .get(self.selected)
+                .map(|f| vec![f.id.clone()])
+                .unwrap_or_default()
+        } else {
+            let mut sel: Vec<usize> = self.selection.iter().copied().collect();
+            sel.sort_unstable();
+            sel.iter()
+                .filter_map(|&i| self.filtered.get(i).map(|f| f.id.clone()))
+                .collect()
+        };
+
+        if targets.is_empty() {
+            self.status_message = Some("fix-os-time: no file selected".into());
+            return;
+        }
+
+        let total = targets.len();
+        self.fix_os_time_state = FixOsTimeState::Running {
+            done: 0,
+            total,
+            current: String::new(),
+        };
+
+        let db_path = self.db_path.clone();
+        let target_root = self.target_root.clone();
+        let (tx, rx) = mpsc::channel::<FixOsTimeMsg>();
+        self.fix_os_time_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let mut updated = 0usize;
+            let mut skipped = 0usize;
+            let mut errors = 0usize;
+            let mut first_error: Option<String> = None;
+
+            for (done, id) in targets.iter().enumerate() {
+                let _ = tx.send(FixOsTimeMsg::Progress {
+                    done,
+                    total,
+                    current: id.clone(),
+                });
+
+                match crate::db::fix_os_time(&db_path, &target_root, id) {
+                    Ok(true) => updated += 1,
+                    Ok(false) => skipped += 1,
+                    Err(e) => {
+                        eprintln!("fix-os-time error for {id}: {e}");
+                        if first_error.is_none() {
+                            first_error = Some(e.to_string());
+                        }
+                        errors += 1;
+                    }
+                }
+            }
+
+            let summary = if errors > 0 {
+                let msg = first_error.unwrap_or_default();
+                format!("fix-os-time: {errors} error(s) — {msg}")
+            } else if updated == 0 {
+                format!("fix-os-time: {skipped} file(s) skipped (no date)")
+            } else if skipped > 0 {
+                format!("fix-os-time: updated {updated} file(s), {skipped} skipped (no date)")
+            } else {
+                format!("fix-os-time: updated {updated} file(s)")
+            };
+            let _ = tx.send(FixOsTimeMsg::Done(summary));
+        });
+    }
+
+    /// Dispatch a message received from the background fix-os-time thread.
+    pub fn on_fix_os_time_msg(&mut self, msg: FixOsTimeMsg) {
+        match msg {
+            FixOsTimeMsg::Progress { done, total, current } => {
+                self.fix_os_time_state = FixOsTimeState::Running { done, total, current };
+            }
+            FixOsTimeMsg::Done(summary) => {
+                self.fix_os_time_rx = None;
+                self.fix_os_time_state = FixOsTimeState::Done(summary.clone());
+                self.status_message = Some(summary);
+            }
+        }
+    }
+
+    /// Poll the fix-os-time background thread for new messages (non-blocking).
+    /// Returns `true` if a message was processed.
+    pub fn poll_fix_os_time(&mut self) -> bool {
+        let msg = match &self.fix_os_time_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(m) => m,
+                Err(_) => return false,
+            },
+            None => return false,
+        };
+        self.on_fix_os_time_msg(msg);
+        true
+    }
 
     /// Apply `:tag <name>[@<type>]` to the selection set (or cursor file if
     /// nothing is explicitly selected). When `tag_type` is `None`, reuses the
