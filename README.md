@@ -28,4 +28,12 @@ A personal, opinionated terminal media browser and importer written in **Rust + 
 
 ## Configuration
 
-Per-machine config in `~/.config/mex/config.toml` (`target_root`). The shared `.mex.db` is never written during configuration.
+Per-machine config in `~/.config/mex/config.toml`. The shared `.mex.db` is never written during configuration.
+
+| Key | Description |
+|---|---|
+| `target_root` | Absolute path to the local media root |
+| `views_root` | Absolute path where `:create-view` materialises view directories |
+| `db_path` | Path to the `.mex.db` SQLite database |
+
+On first run mex guides you through each setting interactively — no manual editing required. If no database is found, you are prompted for a path (default: `./.mex.db`); a fresh empty database is created automatically.
