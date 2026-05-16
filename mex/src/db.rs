@@ -396,7 +396,7 @@ pub fn fix_date(
 /// Read the hh:mm:ss components from a file's mtime (local time).
 /// Returns `None` if the file doesn't exist or metadata is unavailable.
 fn read_file_hms(path: &std::path::Path) -> Option<(u8, u8, u8)> {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::UNIX_EPOCH;
     let meta = std::fs::metadata(path).ok()?;
     let mtime = meta.modified().ok()?;
     let secs_since_epoch = mtime.duration_since(UNIX_EPOCH).ok()?.as_secs();
