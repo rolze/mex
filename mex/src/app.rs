@@ -2227,7 +2227,11 @@ pub fn filter_match_ranges(filename: &str, pattern: &str) -> Option<Vec<(usize, 
         let has_preceding_wildcard = i > 0;
         if has_preceding_wildcard {
             // The '*' separator requires at least 1 character gap.
-            pos += 1;
+            // Advance by a full Unicode scalar so we don't land inside a multi-byte char.
+            match filename[pos..].chars().next() {
+                Some(c) => pos += c.len_utf8(),
+                None => return None,
+            }
         }
 
         if seg.is_empty() {
@@ -2959,6 +2963,18 @@ mod tests {
         assert_eq!(ranges.len(), 2);
         assert_eq!(&"2005-family.mp4"[ranges[0].0..ranges[0].1], "2005");
         assert_eq!(&"2005-family.mp4"[ranges[1].0..ranges[1].1], "mp4");
+    }
+
+    #[test]
+    fn wildcard_multibyte_filename() {
+        // '…' is 3 bytes; the old `pos += 1` would panic at a non-char boundary.
+        assert!(filter_match_ranges("…nnen-0001.mov", "*mov").is_some());
+        assert!(filter_match_ranges("…nnen-0001.mov", "nnen*mov").is_some());
+        assert!(filter_match_ranges("…nnen-0001.mov", "*0001*mov").is_some());
+        // '…' counts as exactly one character — it satisfies the gap requirement.
+        assert!(filter_match_ranges("…mov", "*mov").is_some());
+        // No characters at all before "mov" — must still reject.
+        assert!(filter_match_ranges("mov", "*mov").is_none());
     }
 
     #[test]
