@@ -7,11 +7,13 @@ use std::path::PathBuf;
 /// Never written to `.mex.db` — the media DB is shared across devices.
 pub struct Config {
     pub target_root: String,
+    /// Root directory where `:create-view` materialises named view directories.
+    pub views_root: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { target_root: String::new() }
+        Self { target_root: String::new(), views_root: String::new() }
     }
 }
 
@@ -36,6 +38,9 @@ pub fn load_config() -> Config {
             if key == "target_root" {
                 cfg.target_root = val.to_string();
             }
+            if key == "views_root" {
+                cfg.views_root = val.to_string();
+            }
         }
     }
     cfg
@@ -49,7 +54,10 @@ pub fn save_config(cfg: &Config) -> Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("could not create config dir {}", parent.display()))?;
     }
-    let content = format!("target_root = {}\n", cfg.target_root);
+    let mut content = format!("target_root = {}\n", cfg.target_root);
+    if !cfg.views_root.is_empty() {
+        content.push_str(&format!("views_root = {}\n", cfg.views_root));
+    }
     std::fs::write(&path, content)
         .with_context(|| format!("could not write config file {}", path.display()))
 }
