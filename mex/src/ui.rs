@@ -45,7 +45,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let done = *done;
         let total = *total;
         let current = current.clone();
-        draw_remove_slug_progress(frame, app, area, done, total, &current);
+        draw_remove_slug_progress(frame, app, area, done, total, &current, "Repairing slugs…");
         return;
     }
 
@@ -54,7 +54,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let done = *done;
         let total = *total;
         let current = current.clone();
-        draw_remove_slug_progress(frame, app, area, done, total, &current);
+        draw_remove_slug_progress(frame, app, area, done, total, &current, "Fixing OS times…");
         return;
     }
 
@@ -806,6 +806,7 @@ fn draw_remove_slug_progress(
     done: usize,
     total: usize,
     current: &str,
+    title: &str,
 ) {
     let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
     let pct = if total > 0 { done * 100 / total } else { 0 };
@@ -826,7 +827,7 @@ fn draw_remove_slug_progress(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(" Repairing slugs… ")
+        .title(format!(" {title} "))
         .style(Style::default().fg(Color::Yellow));
     let para = Paragraph::new(text)
         .block(block)
