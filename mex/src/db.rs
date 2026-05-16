@@ -18,6 +18,10 @@ pub struct MediaFile {
     pub orig_filename: String,
     /// DB status value: `"moved"` (normal), `"trashed"` (soft-deleted), `"deleted"` (FS removed).
     pub status: String,
+    /// True when the physical file was found absent under `target_root` the last time the
+    /// preview was opened for this file.  Persisted in the DB so the indicator survives
+    /// across sessions.  Cleared automatically when the file is found again.
+    pub missing_on_disk: bool,
 }
 
 pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
@@ -27,7 +31,8 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
                       COALESCE(GROUP_CONCAT(t.name || CHAR(30) || t.type, CHAR(31)),''),
                       COALESCE(m.derived_slug,''), COALESCE(m.caption_slug,''),
                       COALESCE(m.os_date,''), COALESCE(m.source_path,''),
-                      COALESCE(m.status,'moved')
+                      COALESCE(m.status,'moved'),
+                      COALESCE(m.missing_on_disk,0)
                FROM media m
                LEFT JOIN media_tags mt ON mt.media_id = m.id
                LEFT JOIN tags t ON t.id = mt.tag_id
@@ -69,6 +74,7 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
             os_date: row.get(7)?,
             orig_filename,
             status: row.get(9)?,
+            missing_on_disk: row.get::<_, i64>(10)? != 0,
         })
     })?;
 
@@ -126,6 +132,7 @@ pub fn init_db(db_path: &str) -> Result<()> {
         );",
     )?;
     ensure_schema_v1(&conn)?;
+    ensure_schema_v2(&conn)?;
     Ok(())
 }
 
@@ -142,6 +149,34 @@ pub fn ensure_schema_v1(conn: &Connection) -> Result<()> {
              PRAGMA user_version = 1;",
         )?;
     }
+    Ok(())
+}
+
+/// Migrate the DB schema to version 2 (adds `missing_on_disk` column).
+///
+/// Safe to call on every connection open — it is a no-op when the DB is
+/// already at the current version.
+pub fn ensure_schema_v2(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < 2 {
+        conn.execute_batch(
+            "ALTER TABLE media ADD COLUMN missing_on_disk INTEGER NOT NULL DEFAULT 0;
+             PRAGMA user_version = 2;",
+        )?;
+    }
+    Ok(())
+}
+
+/// Set or clear the `missing_on_disk` flag for a single media file.
+///
+/// Called lazily when the terminal preview is opened for a file and mex checks
+/// whether the physical file exists under `target_root`.
+pub fn set_missing_on_disk(db_path: &str, media_id: &str, missing: bool) -> Result<()> {
+    let conn = Connection::open(db_path)?;
+    conn.execute(
+        "UPDATE media SET missing_on_disk = ?1 WHERE id = ?2",
+        rusqlite::params![missing as i64, media_id],
+    )?;
     Ok(())
 }
 
@@ -956,7 +991,8 @@ pub fn load_trashed_files(db_path: &str, limit: usize) -> Result<Vec<MediaFile>>
                 COALESCE(GROUP_CONCAT(t.name || CHAR(30) || t.type, CHAR(31)),''),
                 COALESCE(m.derived_slug,''), COALESCE(m.caption_slug,''),
                 COALESCE(m.os_date,''), COALESCE(m.source_path,''),
-                COALESCE(m.status,'trashed')
+                COALESCE(m.status,'trashed'),
+                COALESCE(m.missing_on_disk,0)
          FROM media m
          LEFT JOIN media_tags mt ON mt.media_id = m.id
          LEFT JOIN tags t ON t.id = mt.tag_id
@@ -999,6 +1035,7 @@ pub fn load_trashed_files(db_path: &str, limit: usize) -> Result<Vec<MediaFile>>
             os_date: row.get(7)?,
             orig_filename,
             status: row.get(9)?,
+            missing_on_disk: row.get::<_, i64>(10)? != 0,
         })
     })?;
 

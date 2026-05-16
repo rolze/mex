@@ -1,4 +1,4 @@
-use crate::db::MediaFile;
+use crate::db::{MediaFile, set_missing_on_disk};
 use crate::import::{ImportEntry, ImportMsg, ImportStatus};
 use image::DynamicImage;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
@@ -1775,10 +1775,49 @@ impl App {
         }
     }
 
+    /// Check whether the selected file exists on disk and update the
+    /// `missing_on_disk` flag (in memory + DB) if the status changed.
+    ///
+    /// Bidirectional: marks as missing when absent, clears when found again.
+    /// Silently no-ops if `target_root` is not configured or no file is selected.
+    fn check_and_update_missing(&mut self) {
+        let (id, abs_path, currently_missing) = match self.filtered.get(self.selected) {
+            Some(f) if !self.target_root.is_empty() => {
+                let abs = PathBuf::from(&self.target_root).join(&f.target_path);
+                (f.id.clone(), abs, f.missing_on_disk)
+            }
+            _ => return,
+        };
+
+        let exists = abs_path.exists();
+        let should_be_missing = !exists;
+
+        if should_be_missing == currently_missing {
+            return; // no change — skip DB write
+        }
+
+        // Update in-memory state for both `filtered` and `all_files`.
+        if let Some(f) = self.filtered.get_mut(self.selected) {
+            f.missing_on_disk = should_be_missing;
+        }
+        for f in self.all_files.iter_mut() {
+            if f.id == id {
+                f.missing_on_disk = should_be_missing;
+                break;
+            }
+        }
+
+        // Persist to DB (best-effort; ignore errors to keep the UI responsive).
+        let _ = set_missing_on_disk(&self.db_path, &id, should_be_missing);
+    }
+
     /// Load image for current selection and send to the background encoder thread.
     /// Skips everything if the same image is already loaded/in-flight (instant reopen).
     /// Non-image files (audio, video) or missing files gracefully clear the preview.
     pub fn refresh_image(&mut self) {
+        // Check whether the file exists on disk and update the missing flag lazily.
+        self.check_and_update_missing();
+
         // Build absolute path from target_root + selected file's target_path.
         let path = match self.filtered.get(self.selected) {
             Some(f) if !self.target_root.is_empty() => {
@@ -2149,7 +2188,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             })
             .collect();
         App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into())
@@ -2174,7 +2213,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             })
             .collect();
         // Extra placeholder rows (non-existent paths — preview will clear gracefully).
@@ -2188,7 +2227,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             });
         }
         App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into())
@@ -2374,7 +2413,7 @@ mod tests {
                     tag_types: vec![],
                     derived_slug,
                     caption_slug: String::new(),
-                    os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                    os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
                 });
                 idx += 1;
             }
@@ -2672,7 +2711,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             })
             .collect();
         App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into())
@@ -3028,7 +3067,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["travel".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -3049,7 +3088,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["alice".into()], tag_types: vec!["person".into()],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -3068,7 +3107,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["vacation".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -3087,7 +3126,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["alice".into()], tag_types: vec!["person".into()],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -3159,7 +3198,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["travel".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -3178,7 +3217,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["vacation".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -3197,7 +3236,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["vacation".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -3228,7 +3267,7 @@ mod tests {
                 derived_slug: String::new(),
                 caption_slug: String::new(),
                 os_date: String::new(),
-                orig_filename: String::new(), status: "moved".into(),
+                orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             })
             .collect();
         App::new("test.db".into(), root, views_root.to_string(), files, picker, image_state, "halfblocks".into())

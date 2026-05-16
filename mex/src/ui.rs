@@ -151,20 +151,31 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let is_cursor = i == app.selected;
             let is_selected = app.selection.contains(&i);
             let is_trashed = f.status == "trashed";
+            let is_missing = f.missing_on_disk && !is_trashed;
 
             let folder = folder_of(&f.target_path);
             // Reserve 1 char for the selection marker (between folder name and "/").
             let folder_cell = truncate_front(folder, FOLDER_COL - 2); // -2 for marker + /
             let folder_name = format!("{:<width$}", folder_cell, width = FOLDER_COL - 2);
-            // Dot only when the file is in the selection set (not just cursor position).
-            let show_dot = is_selected && !is_trashed;
-            let marker_str = if show_dot { "•" } else if is_trashed { "🗑" } else { " " };
-            let marker_fg = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else { Color::White };
+            // Marker priority: trashed > missing > selected > normal.
+            let show_dot = is_selected && !is_trashed && !is_missing;
+            let marker_str = if is_trashed { "🗑" } else if is_missing { "!" } else if show_dot { "•" } else { " " };
+            let marker_fg = if is_cursor {
+                Color::Black
+            } else if is_trashed {
+                Color::DarkGray
+            } else if is_missing {
+                Color::Rgb(220, 80, 80)
+            } else {
+                Color::White
+            };
 
             let base_style = if is_cursor {
                 Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
             } else if is_trashed {
                 Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)
+            } else if is_missing {
+                Style::default().fg(Color::Rgb(220, 100, 100)).bg(Color::Rgb(60, 15, 15))
             } else if is_selected {
                 Style::default().bg(Color::Rgb(50, 50, 90))
             } else {
@@ -180,9 +191,9 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let slug_hi: &str    = if !f.derived_slug.is_empty()  { &f.derived_slug  } else { "" };
             let caption_hi: &str = if !f.caption_slug.is_empty() { &f.caption_slug } else { "" };
 
-            let base_fg    = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else { Color::White };
-            let slug_fg    = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else { Color::Cyan };
-            let caption_fg = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else { Color::Yellow };
+            let base_fg    = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else if is_missing { Color::Rgb(220, 100, 100) } else { Color::White };
+            let slug_fg    = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else if is_missing { Color::Rgb(220, 100, 100) } else { Color::Cyan };
+            let caption_fg = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else if is_missing { Color::Rgb(220, 100, 100) } else { Color::Yellow };
 
             // Build fg highlight regions: (start_byte, end_byte, fg_color); slug before caption.
             let mut regions: Vec<(usize, usize, Color)> = Vec::new();
@@ -236,15 +247,16 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
                 }).collect()
             };
 
-            let tag_fg = if is_cursor { Color::Black } else { Color::Green };
+            let tag_fg = if is_cursor { Color::Black } else if is_missing { Color::Rgb(180, 60, 60) } else { Color::Green };
             let sep_fg = if is_cursor { Color::Black } else { Color::DarkGray };
             let (tag_span_vec, tags_used) = tag_spans(&f.tags, base_style, tag_fg, sep_fg, TAGS_COL);
             let tags_padding = TAGS_COL.saturating_sub(tags_used);
 
+            let folder_sep_fg = if is_cursor { Color::Black } else if is_missing { Color::Rgb(150, 50, 50) } else { Color::DarkGray };
             let mut spans = vec![
-                Span::styled(folder_name, base_style.fg(if is_cursor { Color::Black } else { Color::DarkGray })),
+                Span::styled(folder_name, base_style.fg(folder_sep_fg)),
                 Span::styled(marker_str, base_style.fg(marker_fg).add_modifier(Modifier::BOLD)),
-                Span::styled("/", base_style.fg(if is_cursor { Color::Black } else { Color::DarkGray })),
+                Span::styled("/", base_style.fg(folder_sep_fg)),
             ];
             spans.extend(filename_spans);
             spans.push(Span::raw(" "));
@@ -491,10 +503,33 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                 let suffix: String = suggestion.chars().skip(typed_chars).collect();
                 spans.push(Span::styled(suffix, Style::default().fg(Color::DarkGray)));
             }
-        } else if let Some(arg) = cmd.strip_prefix("import ") {
-            // Show dim "<path>" placeholder when no path has been typed yet.
-            if arg.trim().is_empty() {
-                spans.push(Span::styled("<path>", Style::default().fg(Color::DarkGray)));
+        } else {
+            // Show a dim param placeholder for commands that have required or optional
+            // params but no dynamic suggestions (or where suggestions are absent).
+            let dim = Style::default().fg(Color::DarkGray);
+            if let Some(arg) = cmd.strip_prefix("import ") {
+                if arg.trim().is_empty() {
+                    spans.push(Span::styled("<path>", dim));
+                }
+            } else if let Some(arg) = cmd.strip_prefix("create-view ") {
+                if arg.trim().is_empty() {
+                    spans.push(Span::styled("<name>", dim));
+                }
+            } else if let Some(arg) = cmd.strip_prefix("fix-date ") {
+                if arg.trim().is_empty() {
+                    spans.push(Span::styled("<yyyy-mm-dd>", dim));
+                }
+            } else if let Some(arg) = cmd.strip_prefix("tag ") {
+                // Fallback placeholder when the library has no tags (otherwise the
+                // autocomplete branch above already shows a dim suggestion suffix).
+                if arg.trim().is_empty() {
+                    spans.push(Span::styled("<name>", dim));
+                }
+            } else if let Some(arg) = cmd.strip_prefix("untag ") {
+                // [name …] is optional; show it only when nothing has been typed yet.
+                if arg.trim().is_empty() {
+                    spans.push(Span::styled("[name …]", dim));
+                }
             }
         }
 
