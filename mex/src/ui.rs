@@ -331,12 +331,18 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                        else if !file.derived_date.is_empty() { file.derived_date.as_str() }
                        else { "—" };
 
-        let orig_str = if !file.orig_filename.is_empty() { file.orig_filename.as_str() } else { "—" };
+        let orig_raw = if !file.orig_filename.is_empty() { file.orig_filename.as_str() } else { "—" };
+
+        // Label "File  " / "Orig  " = 6 chars; truncate paths to fit the column.
+        const LABEL_WIDTH: usize = 6;
+        let avail = (cols[0].width as usize).saturating_sub(LABEL_WIDTH);
+        let file_str = truncate_front(&file.target_path, avail);
+        let orig_str = truncate_front(orig_raw, avail);
 
         let left = Paragraph::new(vec![
             Line::from(vec![
                 Span::styled("File  ", Style::default().fg(Color::DarkGray)),
-                Span::raw(&file.target_path),
+                Span::raw(file_str),
             ]),
             Line::from(vec![
                 Span::styled("Date  ", Style::default().fg(Color::DarkGray)),
@@ -346,8 +352,7 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                 Span::styled("Orig  ", Style::default().fg(Color::DarkGray)),
                 Span::raw(orig_str),
             ]),
-        ])
-        .wrap(Wrap { trim: true });
+        ]);
         frame.render_widget(left, cols[0]);
 
         let slug_str = if !file.derived_slug.is_empty() { file.derived_slug.as_str() }
