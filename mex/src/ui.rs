@@ -214,15 +214,21 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let filter_matches: Vec<(usize, usize)> = if !is_cursor && !app.filter_text.is_empty() {
                 let needle = app.filter_text.to_lowercase();
                 let haystack = filename_padded.to_lowercase();
-                let mut matches = Vec::new();
-                let mut search_from = 0;
-                while let Some(rel) = haystack[search_from..].find(&needle) {
-                    let start = search_from + rel;
-                    let end = start + needle.len();
-                    matches.push((start, end));
-                    search_from = end;
+                if needle.contains('*') {
+                    // Wildcard: highlight the matched segments from the first valid match.
+                    crate::app::filter_match_ranges(&haystack, &needle).unwrap_or_default()
+                } else {
+                    // Plain text: highlight every occurrence.
+                    let mut matches = Vec::new();
+                    let mut search_from = 0;
+                    while let Some(rel) = haystack[search_from..].find(&needle) {
+                        let start = search_from + rel;
+                        let end = start + needle.len();
+                        matches.push((start, end));
+                        search_from = end;
+                    }
+                    matches
                 }
-                matches
             } else {
                 Vec::new()
             };

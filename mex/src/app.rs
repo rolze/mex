@@ -1712,7 +1712,7 @@ impl App {
                 .iter()
                 .filter(|f| {
                     let text_match = text_needle.is_empty()
-                        || f.target_path.to_lowercase().contains(&text_needle);
+                        || text_filter_matches(&f.target_path.to_lowercase(), &text_needle);
                     let type_match = self.tag_type_filters.is_empty()
                         || self.tag_type_filters.iter().any(|ty| {
                             f.tag_types.iter().any(|ft| ft.eq_ignore_ascii_case(ty))
@@ -2124,6 +2124,79 @@ fn today_date() -> String {
         .unwrap_or_default()
         .as_secs();
     crate::import::secs_to_date_pub(secs)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Text filter helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns the byte ranges within `filename` that matched each non-wildcard
+/// segment of `pattern`.
+///
+/// Rules:
+/// - No `*` → returns the first occurrence of `pattern`, or `None`.
+/// - With `*` → `pattern` is split on `*`; each `*` gap requires at least one
+///   character in `filename` between the surrounding segments.  An empty
+///   leading/trailing segment (from `*pat` or `pat*`) still contributes the
+///   one-or-more-character requirement.
+///
+/// Both `filename` and `pattern` must already be lower-cased by the caller.
+pub fn filter_match_ranges(filename: &str, pattern: &str) -> Option<Vec<(usize, usize)>> {
+    if !pattern.contains('*') {
+        return filename
+            .find(pattern)
+            .map(|pos| vec![(pos, pos + pattern.len())]);
+    }
+
+    let segments: Vec<&str> = pattern.split('*').collect();
+    let mut pos = 0usize; // current scan position in filename
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+
+    for (i, &seg) in segments.iter().enumerate() {
+        let has_preceding_wildcard = i > 0;
+        if has_preceding_wildcard {
+            // The '*' separator requires at least 1 character gap.
+            pos += 1;
+        }
+
+        if seg.is_empty() {
+            // Leading, trailing, or consecutive wildcard — no literal to match.
+            continue;
+        }
+
+        if pos > filename.len() {
+            return None;
+        }
+
+        match filename[pos..].find(seg) {
+            Some(rel) => {
+                let start = pos + rel;
+                let end = start + seg.len();
+                ranges.push((start, end));
+                pos = end;
+            }
+            None => return None,
+        }
+    }
+
+    // A trailing '*' (last segment is empty) requires at least 1 more char.
+    if segments.last().map(|s| s.is_empty()).unwrap_or(false) && pos >= filename.len() {
+        return None;
+    }
+
+    Some(ranges)
+}
+
+/// Returns `true` when `filename` matches `pattern` under the wildcard rules
+/// described in [`filter_match_ranges`].
+///
+/// Both arguments must already be lower-cased by the caller.
+pub fn text_filter_matches(filename: &str, pattern: &str) -> bool {
+    if pattern.contains('*') {
+        filter_match_ranges(filename, pattern).is_some()
+    } else {
+        filename.contains(pattern)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2780,6 +2853,58 @@ mod tests {
         app.apply_filter();
         assert_eq!(app.filtered.len(), 1);
         assert_eq!(app.filtered[0].target_path, "vacation.jpg");
+    }
+
+    // ── Wildcard text filter ─────────────────────────────────────────────────
+
+    #[test]
+    fn wildcard_basic_match() {
+        assert!(filter_match_ranges("2005-family.mp4", "2005*mp4").is_some());
+    }
+
+    #[test]
+    fn wildcard_requires_gap() {
+        // No character between "2005" and "mp4" — must not match.
+        assert!(filter_match_ranges("2005mp4", "2005*mp4").is_none());
+    }
+
+    #[test]
+    fn wildcard_leading() {
+        // *mp4 requires at least 1 char before "mp4".
+        assert!(filter_match_ranges("video.mp4", "*mp4").is_some());
+        assert!(filter_match_ranges("mp4", "*mp4").is_none());
+    }
+
+    #[test]
+    fn wildcard_trailing() {
+        // 2005* requires at least 1 char after "2005".
+        assert!(filter_match_ranges("2005.jpg", "2005*").is_some());
+        assert!(filter_match_ranges("2005", "2005*").is_none());
+    }
+
+    #[test]
+    fn wildcard_returned_ranges() {
+        let ranges = filter_match_ranges("2005-family.mp4", "2005*mp4").unwrap();
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(&"2005-family.mp4"[ranges[0].0..ranges[0].1], "2005");
+        assert_eq!(&"2005-family.mp4"[ranges[1].0..ranges[1].1], "mp4");
+    }
+
+    #[test]
+    fn wildcard_no_star_plain_contains() {
+        // Without '*', behaviour is unchanged: any substring match.
+        assert!(text_filter_matches("holiday2005.mp4", "2005"));
+        assert!(!text_filter_matches("holiday2006.mp4", "2005"));
+    }
+
+    #[test]
+    fn wildcard_apply_filter_integration() {
+        let mut app = make_test_app(&["2005-family.mp4", "2006-family.mp4", "family2005mp4.jpg"]);
+        app.filter_text = "2005*mp4".into();
+        app.apply_filter();
+        // "2005-family.mp4" matches; "2005mp4" (no gap) and "2006*" do not.
+        assert_eq!(app.filtered.len(), 1);
+        assert_eq!(app.filtered[0].target_path, "2005-family.mp4");
     }
 
     #[test]
