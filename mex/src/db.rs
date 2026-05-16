@@ -489,6 +489,102 @@ pub fn fix_ext(db_path: &str, target_root: &str, file_id: &str, new_ext: &str) -
     Ok(())
 }
 
+/// Remove a bad slug from a single media file.
+///
+/// - Saves the current `derived_slug` as a tag with type `"slug"` (backup).
+/// - Rebuilds `target_path` in day format: `yyyy/yyyy-mm-dd-{counter:04}[-{caption}].{ext}`.
+/// - Renames the file on disk when present and the path differs.
+/// - Clears `derived_slug` in the DB and stores the updated `target_path`.
+///
+/// Returns an error if the new path already exists on disk (collision) or if the
+/// file has no `derived_slug` set (nothing to repair).
+pub fn remove_slug(db_path: &str, target_root: &str, file_id: &str) -> Result<()> {
+    use std::path::Path;
+
+    let conn = Connection::open(db_path)?;
+
+    let (target_path, derived_date, derived_slug, caption_slug, ext, counter): (
+        String,
+        String,
+        String,
+        String,
+        String,
+        u32,
+    ) = conn.query_row(
+        "SELECT target_path, COALESCE(derived_date,''), COALESCE(derived_slug,''), \
+                COALESCE(caption_slug,''), COALESCE(ext,''), COALESCE(counter,0) \
+         FROM media WHERE id = ?1",
+        [file_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+    )?;
+
+    if derived_slug.is_empty() {
+        anyhow::bail!("remove-slug: file has no derived_slug to remove");
+    }
+    if derived_date.len() < 10 {
+        anyhow::bail!("remove-slug: derived_date '{}' is too short to parse", derived_date);
+    }
+
+    let year  = &derived_date[..4];
+    let month = &derived_date[5..7];
+    let day   = &derived_date[8..10];
+
+    let caption_part = if caption_slug.is_empty() {
+        String::new()
+    } else {
+        format!("-{caption_slug}")
+    };
+    let new_basename = format!("{year}-{month}-{day}-{counter:04}{caption_part}.{ext}");
+    let new_target_path = format!("{year}/{new_basename}");
+
+    let old_abs = Path::new(target_root).join(&target_path);
+    let new_abs = Path::new(target_root).join(&new_target_path);
+
+    if old_abs != new_abs && new_abs.exists() {
+        anyhow::bail!(
+            "remove-slug: target already exists: {}",
+            new_abs.display()
+        );
+    }
+
+    if old_abs != new_abs && old_abs.exists() {
+        if let Some(parent) = new_abs.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&old_abs, &new_abs)?;
+    }
+
+    // Save old slug as a tag of type "slug".
+    let existing_tag: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM tags WHERE name = ?1 AND type = 'slug'",
+            rusqlite::params![derived_slug],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let tag_id: i64 = match existing_tag {
+        Some(id) => id,
+        None => {
+            conn.execute(
+                "INSERT INTO tags (name, type) VALUES (?1, 'slug')",
+                rusqlite::params![derived_slug],
+            )?;
+            conn.last_insert_rowid()
+        }
+    };
+    conn.execute(
+        "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
+        rusqlite::params![file_id, tag_id],
+    )?;
+
+    conn.execute(
+        "UPDATE media SET derived_slug = NULL, target_path = ?1 WHERE id = ?2",
+        rusqlite::params![new_target_path, file_id],
+    )?;
+
+    Ok(())
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────

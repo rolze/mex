@@ -10,7 +10,7 @@ use std::{
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["fix-date", "fix-ext", "import", "q", "quit", "tag", "untag"];
+const KNOWN_COMMANDS: &[&str] = &["fix-date", "fix-ext", "import", "q", "quit", "remove-slug", "tag", "untag"];
 
 // ── Import state ──────────────────────────────────────────────────────────────
 
@@ -627,6 +627,11 @@ impl App {
             return;
         }
 
+        if trimmed == "remove-slug" {
+            self.remove_slug_selected();
+            return;
+        }
+
         if let Some(path_arg) = trimmed.strip_prefix("import") {
             let path_str = path_arg.trim();
             self.start_import(path_str);
@@ -993,6 +998,71 @@ impl App {
             format!("fix-ext: {already_ok} file(s) already correct")
         } else {
             format!("fix-ext: fixed {fixed} file(s)")
+        });
+    }
+
+    // ── remove-slug ──────────────────────────────────────────────────────────
+
+    /// Apply `:remove-slug` to the selection set (or cursor file if nothing is
+    /// explicitly selected).
+    ///
+    /// For each file:
+    /// - The current `derived_slug` is saved as a tag of type `"slug"`.
+    /// - The target path is rebuilt in day format (`yyyy-mm-dd-{counter}`).
+    /// - The file is renamed on disk and the DB row is updated.
+    pub fn remove_slug_selected(&mut self) {
+        let targets: Vec<(String, String)> = if self.selection.is_empty() {
+            self.filtered
+                .get(self.selected)
+                .map(|f| vec![(f.id.clone(), f.derived_slug.clone())])
+                .unwrap_or_default()
+        } else {
+            let mut sel: Vec<usize> = self.selection.iter().copied().collect();
+            sel.sort_unstable();
+            sel.iter()
+                .filter_map(|&i| self.filtered.get(i).map(|f| (f.id.clone(), f.derived_slug.clone())))
+                .collect()
+        };
+
+        if targets.is_empty() {
+            self.status_message = Some("remove-slug: no file selected".into());
+            return;
+        }
+
+        let mut fixed = 0usize;
+        let mut skipped = 0usize;
+        let mut errors = 0usize;
+        let mut first_error: Option<String> = None;
+
+        for (id, slug) in &targets {
+            if slug.is_empty() {
+                skipped += 1;
+                continue;
+            }
+            match crate::db::remove_slug(&self.db_path, &self.target_root, id) {
+                Ok(()) => fixed += 1,
+                Err(e) => {
+                    eprintln!("remove-slug error for {id}: {e}");
+                    if first_error.is_none() {
+                        first_error = Some(e.to_string());
+                    }
+                    errors += 1;
+                }
+            }
+        }
+
+        if let Err(e) = self.reload() {
+            self.status_message = Some(format!("remove-slug: reload failed: {e}"));
+            return;
+        }
+
+        self.status_message = Some(if errors > 0 {
+            let msg = first_error.unwrap_or_default();
+            format!("remove-slug: {errors} error(s) — {msg}")
+        } else if fixed == 0 {
+            format!("remove-slug: {skipped} file(s) already have no slug")
+        } else {
+            format!("remove-slug: repaired {fixed} file(s){}", if skipped > 0 { format!(", {skipped} skipped (no slug)") } else { String::new() })
         });
     }
 
