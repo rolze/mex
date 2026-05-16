@@ -30,12 +30,75 @@ fn find_db() -> Option<String> {
     None
 }
 
-/// Resolve and validate target_root from local config. If missing or pointing
-/// to a non-existent directory, prompt the user to enter a new path.
-/// Returns the full validated Config or exits if the user cancels.
-fn resolve_config() -> config::Config {
-    let mut cfg = config::load_config();
+/// Resolve the path to `.mex.db`, prompting the user when necessary.
+///
+/// Priority:
+/// 1. `cfg.db_path` is set and the file exists → use it.
+/// 2. `cfg.db_path` is set but the file is missing → re-prompt (pre-filled).
+/// 3. `cfg.db_path` is empty → try `find_db()` discovery; if found, adopt silently.
+/// 4. Still nothing → prompt with default `./.mex.db` (creates a fresh DB).
+///
+/// The resolved path is written back into `cfg` and persisted to the config
+/// file. `db::init_db()` is then called by the caller to create/migrate the
+/// schema, which turns a brand-new file into a valid empty database.
+fn resolve_db_path(cfg: &mut config::Config) -> String {
+    loop {
+        // Case 1 & 2: config already has a value.
+        if !cfg.db_path.is_empty() {
+            if Path::new(&cfg.db_path).exists() {
+                eprintln!("mex: database:   {}", cfg.db_path);
+                return cfg.db_path.clone();
+            }
+            // File missing — re-prompt.
+            let reason = format!("database file not found: {}", cfg.db_path);
+            match config::prompt_db_path(&cfg.db_path, &reason) {
+                Some(path) => {
+                    cfg.db_path = path;
+                    if let Err(e) = config::save_config(cfg) {
+                        eprintln!("mex: warning — could not save config: {e}");
+                    }
+                    continue;
+                }
+                None => {
+                    eprintln!("mex: no database configured; exiting.");
+                    std::process::exit(1);
+                }
+            }
+        }
 
+        // Case 3: auto-discover via filesystem walk.
+        if let Some(found) = find_db() {
+            eprintln!("mex: database:   {found} (auto-discovered)");
+            cfg.db_path = found.clone();
+            if let Err(e) = config::save_config(cfg) {
+                eprintln!("mex: warning — could not save config: {e}");
+            }
+            return found;
+        }
+
+        // Case 4: nothing found — prompt with default.
+        let reason = "no database found";
+        match config::prompt_db_path("", reason) {
+            Some(path) => {
+                cfg.db_path = path;
+                if let Err(e) = config::save_config(cfg) {
+                    eprintln!("mex: warning — could not save config: {e}");
+                }
+                eprintln!("mex: database:   {}", cfg.db_path);
+                return cfg.db_path.clone();
+            }
+            None => {
+                eprintln!("mex: no database configured; exiting.");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+/// Resolve and validate target_root and views_root from the already-loaded
+/// config. If either is missing or invalid, prompt the user to enter a new
+/// path. Returns the updated Config or exits if the user cancels.
+fn resolve_config_roots(mut cfg: config::Config) -> config::Config {
     // Resolve target_root (required — must exist on disk).
     loop {
         match config::validate_target_root(&cfg.target_root) {
@@ -94,11 +157,9 @@ fn resolve_config() -> config::Config {
 }
 
 fn main() -> Result<()> {
-    let db_path = find_db().context(
-        "Could not find .mex.db. Run mex from the repository root or the mex/ sub-directory.",
-    )?;
-
-    let cfg = resolve_config();
+    let mut cfg = config::load_config();
+    let db_path = resolve_db_path(&mut cfg);
+    let cfg = resolve_config_roots(cfg);
     let target_root = cfg.target_root;
     let views_root = cfg.views_root;
     db::init_db(&db_path).context("Failed to initialise DB")?;
