@@ -29,6 +29,21 @@ pub enum ImportState {
     Done(String),
 }
 
+// ── Remove-slug state ─────────────────────────────────────────────────────────
+
+pub enum RemoveSlugState {
+    Idle,
+    /// Background repair in progress.
+    Running { done: usize, total: usize, current: String },
+    /// Finished; message shown until the next keypress.
+    Done(String),
+}
+
+pub enum RemoveSlugMsg {
+    Progress { done: usize, total: usize, current: String },
+    Done(String),
+}
+
 const CACHE_MAX: usize = 30;
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
 
@@ -98,6 +113,10 @@ pub struct App {
     pub import_rx: Option<mpsc::Receiver<ImportMsg>>,
     /// Height of the import preview list (visible rows); updated each frame.
     pub import_list_height: usize,
+    /// Remove-slug repair state machine.
+    pub remove_slug_state: RemoveSlugState,
+    /// Receive channel for the background remove-slug thread.
+    pub remove_slug_rx: Option<mpsc::Receiver<RemoveSlugMsg>>,
 }
 
 impl App {
@@ -161,6 +180,8 @@ impl App {
             import_state: ImportState::Idle,
             import_rx: None,
             import_list_height: 20,
+            remove_slug_state: RemoveSlugState::Idle,
+            remove_slug_rx: None,
         }
     }
 
@@ -1006,10 +1027,9 @@ impl App {
     /// Apply `:remove-slug` to the selection set (or cursor file if nothing is
     /// explicitly selected).
     ///
-    /// For each file:
-    /// - The current `derived_slug` is saved as a tag of type `"slug"`.
-    /// - The target path is rebuilt in day format (`yyyy-mm-dd-{counter}`).
-    /// - The file is renamed on disk and the DB row is updated.
+    /// Spawns a background thread that processes one file at a time, sending
+    /// `RemoveSlugMsg::Progress` after each file and `RemoveSlugMsg::Done` when
+    /// finished.  The UI shows a full-screen progress overlay while running.
     pub fn remove_slug_selected(&mut self) {
         let targets: Vec<(String, String)> = if self.selection.is_empty() {
             self.filtered
@@ -1029,41 +1049,89 @@ impl App {
             return;
         }
 
-        let mut fixed = 0usize;
-        let mut skipped = 0usize;
-        let mut errors = 0usize;
-        let mut first_error: Option<String> = None;
+        let total = targets.len();
+        self.remove_slug_state = RemoveSlugState::Running {
+            done: 0,
+            total,
+            current: String::new(),
+        };
 
-        for (id, slug) in &targets {
-            if slug.is_empty() {
-                skipped += 1;
-                continue;
-            }
-            match crate::db::remove_slug(&self.db_path, &self.target_root, id) {
-                Ok(()) => fixed += 1,
-                Err(e) => {
-                    eprintln!("remove-slug error for {id}: {e}");
-                    if first_error.is_none() {
-                        first_error = Some(e.to_string());
+        let db_path = self.db_path.clone();
+        let target_root = self.target_root.clone();
+        let (tx, rx) = mpsc::channel::<RemoveSlugMsg>();
+        self.remove_slug_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let mut fixed = 0usize;
+            let mut skipped = 0usize;
+            let mut errors = 0usize;
+            let mut first_error: Option<String> = None;
+
+            for (done, (id, slug)) in targets.iter().enumerate() {
+                let current = id.clone();
+                let _ = tx.send(RemoveSlugMsg::Progress {
+                    done,
+                    total,
+                    current: current.clone(),
+                });
+
+                if slug.is_empty() {
+                    skipped += 1;
+                    continue;
+                }
+                match crate::db::remove_slug(&db_path, &target_root, id) {
+                    Ok(()) => fixed += 1,
+                    Err(e) => {
+                        eprintln!("remove-slug error for {id}: {e}");
+                        if first_error.is_none() {
+                            first_error = Some(e.to_string());
+                        }
+                        errors += 1;
                     }
-                    errors += 1;
                 }
             }
-        }
 
-        if let Err(e) = self.reload() {
-            self.status_message = Some(format!("remove-slug: reload failed: {e}"));
-            return;
-        }
-
-        self.status_message = Some(if errors > 0 {
-            let msg = first_error.unwrap_or_default();
-            format!("remove-slug: {errors} error(s) — {msg}")
-        } else if fixed == 0 {
-            format!("remove-slug: {skipped} file(s) already have no slug")
-        } else {
-            format!("remove-slug: repaired {fixed} file(s){}", if skipped > 0 { format!(", {skipped} skipped (no slug)") } else { String::new() })
+            let summary = if errors > 0 {
+                let msg = first_error.unwrap_or_default();
+                format!("remove-slug: {errors} error(s) — {msg}")
+            } else if fixed == 0 {
+                format!("remove-slug: {skipped} file(s) already have no slug")
+            } else if skipped > 0 {
+                format!("remove-slug: repaired {fixed} file(s), {skipped} skipped (no slug)")
+            } else {
+                format!("remove-slug: repaired {fixed} file(s)")
+            };
+            let _ = tx.send(RemoveSlugMsg::Done(summary));
         });
+    }
+
+    /// Dispatch a message received from the background remove-slug thread.
+    pub fn on_remove_slug_msg(&mut self, msg: RemoveSlugMsg) {
+        match msg {
+            RemoveSlugMsg::Progress { done, total, current } => {
+                self.remove_slug_state = RemoveSlugState::Running { done, total, current };
+            }
+            RemoveSlugMsg::Done(summary) => {
+                self.remove_slug_rx = None;
+                let _ = self.reload();
+                self.remove_slug_state = RemoveSlugState::Done(summary.clone());
+                self.status_message = Some(summary);
+            }
+        }
+    }
+
+    /// Poll the remove-slug background thread for new messages (non-blocking).
+    /// Returns `true` if a message was processed.
+    pub fn poll_remove_slug(&mut self) -> bool {
+        let msg = match &self.remove_slug_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(m) => m,
+                Err(_) => return false,
+            },
+            None => return false,
+        };
+        self.on_remove_slug_msg(msg);
+        true
     }
 
     // ── tag ──────────────────────────────────────────────────────────────────
