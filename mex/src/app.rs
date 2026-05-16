@@ -1745,6 +1745,36 @@ impl App {
         // On close: keep image_state alive so reopening is instant (no re-encode).
     }
 
+    /// Open the file under the cursor in the system default viewer/player via
+    /// `xdg-open`, detached (mex keeps running). Sets `status_message` on error.
+    pub fn open_in_external_viewer(&mut self) {
+        let path = match self.filtered.get(self.selected) {
+            Some(f) if !self.target_root.is_empty() => {
+                PathBuf::from(&self.target_root).join(&f.target_path)
+            }
+            _ => {
+                self.status_message = Some("open: no file selected".into());
+                return;
+            }
+        };
+        if !path.exists() {
+            self.status_message = Some(format!("open: file not found: {}", path.display()));
+            return;
+        }
+        match std::process::Command::new("xdg-open")
+            .arg(&path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => {}
+            Err(e) => {
+                self.status_message = Some(format!("open: xdg-open failed: {e}"));
+            }
+        }
+    }
+
     /// Load image for current selection and send to the background encoder thread.
     /// Skips everything if the same image is already loaded/in-flight (instant reopen).
     /// Non-image files (audio, video) or missing files gracefully clear the preview.
