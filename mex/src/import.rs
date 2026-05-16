@@ -356,6 +356,8 @@ const JUNK_WORDS: &[&str] = &[
     "the", "and", "und", "mit", "an", "im", "oder", "der", "die", "das", "ein", "eine",
     // Camera / app prefixes that produce no useful slug
     "save", "snap", "pano", "vid", "mvi", "burst",
+    // Android Camera folder — produces a meaningless "camera" slug
+    "camera",
     // Common stop words (German + English) that slip through as 2-3 char tokens
     "in", "on", "at", "zu", "am", "bei", "auf", "aus", "vor", "vom", "from",
     // Generic file/download names
