@@ -9,11 +9,15 @@ pub struct Config {
     pub target_root: String,
     /// Root directory where `:create-view` materialises named view directories.
     pub views_root: String,
+    /// Absolute (or relative) path to the `.mex.db` SQLite database.
+    /// Resolved once at startup and persisted so subsequent launches don't
+    /// need filesystem discovery.
+    pub db_path: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { target_root: String::new(), views_root: String::new() }
+        Self { target_root: String::new(), views_root: String::new(), db_path: String::new() }
     }
 }
 
@@ -41,6 +45,9 @@ pub fn load_config() -> Config {
             if key == "views_root" {
                 cfg.views_root = val.to_string();
             }
+            if key == "db_path" {
+                cfg.db_path = val.to_string();
+            }
         }
     }
     cfg
@@ -56,6 +63,7 @@ pub fn save_config(cfg: &Config) -> Result<()> {
     }
     let mut content = format!("target_root = {}\n", cfg.target_root);
     content.push_str(&format!("views_root = {}\n", cfg.views_root));
+    content.push_str(&format!("db_path = {}\n", cfg.db_path));
     std::fs::write(&path, content)
         .with_context(|| format!("could not write config file {}", path.display()))
 }
@@ -140,4 +148,35 @@ pub fn validate_views_root(root: &str) -> Result<(), String> {
         return Err("views root is not configured".into());
     }
     Ok(())
+}
+
+/// Interactive prompt asking the user to confirm or enter the path to the
+/// `.mex.db` database file. Runs *before* the alternate screen / raw mode.
+///
+/// `current` — already-configured value (may be empty on first run).
+/// `reason`  — explains why we are asking (e.g. "db not found").
+///
+/// When `current` is empty the default `./.mex.db` is offered.
+/// Returns `Some(path)` on success, `None` if the user cancels.
+pub fn prompt_db_path(current: &str, reason: &str) -> Option<String> {
+    eprintln!("mex: {reason}");
+    if !current.is_empty() {
+        eprintln!("  current: {current}");
+        eprint!("  new path (Enter to keep current, Ctrl-C to quit): ");
+    } else {
+        eprint!("  db path [default: ./.mex.db]: ");
+    }
+    io::stderr().flush().ok();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok()?;
+    let trimmed = input.trim().to_string();
+
+    if trimmed.is_empty() && !current.is_empty() {
+        Some(current.to_string())
+    } else if trimmed.is_empty() {
+        Some("./.mex.db".to_string()) // accept the default
+    } else {
+        Some(trimmed)
+    }
 }
