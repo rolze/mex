@@ -550,7 +550,7 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             Line::from(spans)
         } else {
             let mut spans = vec![Span::styled(
-                "Type to filter…  |  #tag  |  @type  |  Enter: preview  |  :: command  |  PgUp/PgDn: page",
+                "Type to filter…  |  #tag  |  @type  |  Enter: preview  |  Ctrl+O: open  |  :: command  |  PgUp/PgDn: page",
                 Style::default().fg(Color::DarkGray),
             )];
             if app.trashed_count > 0 {
