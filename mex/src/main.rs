@@ -474,6 +474,8 @@ fn run_loop(
                         }
                     }
 
+                    (KeyModifiers::CONTROL, KeyCode::Char('c')) => app.copy_path_to_clipboard(),
+
                     // All other printable chars → command buffer or filter
                     (_, KeyCode::Char(c)) => {
                         if app.command.is_some() {
