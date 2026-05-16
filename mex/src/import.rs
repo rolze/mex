@@ -557,7 +557,7 @@ pub fn derive_caption_slug(filename: &str, folder_slug: Option<&str>) -> Option<
     }
     // Strip trailing tokens that duplicate folder slug suffix
     let mut fs3 = fs.clone();
-    while !cs.is_empty() && !fs3.is_empty() && cs.last().unwrap() == fs3.last().unwrap() {
+    while cs.last().is_some() && cs.last().map(|s| s.as_str()) == fs3.last().copied() {
         cs.pop();
         fs3.pop();
     }
@@ -1687,8 +1687,10 @@ pub fn assign_counters(
             counters.insert(date_prefix.clone(), db_max.max(fs_max) + 1);
         }
 
-        let counter = counters[&date_prefix];
-        *counters.get_mut(&date_prefix).unwrap() += 1;
+        let counter = *counters.get(&date_prefix).unwrap_or(&1);
+        if let Some(c) = counters.get_mut(&date_prefix) {
+            *c += 1;
+        }
 
         let ext = &entries[idx].ext;
         let ext_with_dot = format!(".{ext}");
@@ -1754,7 +1756,10 @@ pub fn execute_import(
     let mut imported_ids: Vec<String> = Vec::new();
 
     for entry in &pending {
-        let rel_tgt = entry.target_path.as_ref().unwrap();
+        let rel_tgt = match entry.target_path.as_ref() {
+            Some(t) => t,
+            None => continue,
+        };
         let abs_tgt = target_root.join(rel_tgt);
 
         // Target already exists?
@@ -2115,5 +2120,23 @@ mod tests {
         assert_eq!(extract_slug("snap202405051452"), None);
         // hex garbage filtered
         assert_eq!(extract_slug("5554ba2b-20ff-4d67-8d75-9ba83036495d"), None);
+    }
+
+    #[test]
+    fn test_derive_caption_slug_robustness() {
+        // No match
+        assert_eq!(derive_caption_slug("paris.jpg", Some("london")), Some("paris".into()));
+        // Match prefix
+        assert_eq!(derive_caption_slug("paris-party.jpg", Some("paris")), Some("party".into()));
+        // Match suffix
+        assert_eq!(derive_caption_slug("party-paris.jpg", Some("paris")), Some("party".into()));
+        // Full match (leading/trailing)
+        assert_eq!(derive_caption_slug("paris-summer-2000.jpg", Some("paris-2000")), Some("summer".into()));
+        // No tokens remain
+        assert_eq!(derive_caption_slug("paris.jpg", Some("paris")), None);
+        // Empty folder slug
+        assert_eq!(derive_caption_slug("paris.jpg", Some("")), Some("paris".into()));
+        // Folder slug with no meaningful tokens
+        assert_eq!(derive_caption_slug("paris.jpg", Some("---")), Some("paris".into()));
     }
 }
