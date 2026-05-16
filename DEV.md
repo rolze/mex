@@ -39,7 +39,7 @@ brew install chafa
 ```bash
 cd mex/
 cargo build           # debug build
-cargo run             # run against ../.mex.db (auto-detected relative path)
+cargo run             # run against .mex.db (auto-detected relative path)
 ```
 
 Release build (faster startup and rendering):
@@ -48,3 +48,15 @@ Release build (faster startup and rendering):
 cargo build --release
 ./target/release/mex
 ```
+
+## One-off commands
+
+### Backfill partial hashes
+
+Computes and stores partial hashes for files that are missing them in the database:
+
+```bash
+cargo run --bin migrate-partial-hashes -- [--db .mex.db] [--root /media/root]
+```
+
+Both flags are optional; defaults are auto-detected from the current directory.
