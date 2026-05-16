@@ -36,6 +36,7 @@ fn find_db() -> Option<String> {
 fn resolve_config() -> config::Config {
     let mut cfg = config::load_config();
 
+    // Resolve target_root (required — must exist on disk).
     loop {
         match config::validate_target_root(&cfg.target_root) {
             Ok(()) => {
@@ -60,12 +61,32 @@ fn resolve_config() -> config::Config {
         }
     }
 
-    // If views_root is configured, ensure the directory exists.
-    if !cfg.views_root.is_empty() {
-        if let Err(e) = std::fs::create_dir_all(&cfg.views_root) {
-            eprintln!("mex: warning — could not create views_root {}: {e}", cfg.views_root);
-        } else {
-            eprintln!("mex: views root:  {}", cfg.views_root);
+    // Resolve views_root (required — created on disk if absent).
+    loop {
+        match config::validate_views_root(&cfg.views_root) {
+            Ok(()) => {
+                if let Err(e) = std::fs::create_dir_all(&cfg.views_root) {
+                    eprintln!("mex: warning — could not create views_root {}: {e}", cfg.views_root);
+                } else {
+                    eprintln!("mex: views root:  {}", cfg.views_root);
+                }
+                break;
+            }
+            Err(reason) => {
+                let new_root = config::prompt_views_root(&cfg.views_root, &reason);
+                match new_root {
+                    Some(path) => {
+                        cfg.views_root = path;
+                        if let Err(e) = config::save_config(&cfg) {
+                            eprintln!("mex: warning — could not save config: {e}");
+                        }
+                    }
+                    None => {
+                        eprintln!("mex: no views root configured; exiting.");
+                        std::process::exit(1);
+                    }
+                }
+            }
         }
     }
 
