@@ -230,14 +230,16 @@ pub fn assign_tag(
         }
     };
 
-    let tx = conn.transaction()?;
-    for media_id in media_ids {
-        tx.execute(
-            "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
-            rusqlite::params![media_id, tag_id],
-        )?;
+    if !media_ids.is_empty() {
+        let tx = conn.transaction()?;
+        {
+            let mut stmt = tx.prepare_cached("INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)")?;
+            for media_id in media_ids {
+                stmt.execute(rusqlite::params![media_id, tag_id])?;
+            }
+        }
+        tx.commit()?;
     }
-    tx.commit()?;
 
     Ok(effective_type)
 }
