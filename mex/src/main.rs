@@ -149,9 +149,24 @@ fn run_loop(
         // Poll import background thread (scan progress, copy progress, done).
         app.poll_import();
 
+        // Poll remove-slug background thread.
+        app.poll_remove_slug();
+
         if event::poll(std::time::Duration::from_millis(16))? {
             match event::read()? {
                 Event::Key(key) => {
+                    // Handle remove-slug progress lock screen first.
+                    match &app.remove_slug_state {
+                        app::RemoveSlugState::Running { .. } => {
+                            continue; // swallow all keys while repair is running
+                        }
+                        app::RemoveSlugState::Done(_) => {
+                            app.remove_slug_state = app::RemoveSlugState::Idle;
+                            // fall through so the keypress also registers normally
+                        }
+                        app::RemoveSlugState::Idle => {}
+                    }
+
                     // Handle import-preview / import-done screens first.
                     match &app.import_state {
                         app::ImportState::Preview { ref entries, .. } => {

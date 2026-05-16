@@ -1,4 +1,4 @@
-use crate::app::{App, ImportState};
+use crate::app::{App, ImportState, RemoveSlugState};
 use crate::db::folder_of;
 use crate::import::ImportStatus;
 use ratatui::{
@@ -38,6 +38,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             return;
         }
         _ => {}
+    }
+
+    // Remove-slug progress overlay takes over the full screen while running.
+    if let RemoveSlugState::Running { done, total, current } = &app.remove_slug_state {
+        let done = *done;
+        let total = *total;
+        let current = current.clone();
+        draw_remove_slug_progress(frame, app, area, done, total, &current);
+        return;
     }
 
     // Outer: filter bar at bottom (3 lines) + main content
@@ -780,4 +789,39 @@ fn draw_import_copying(
     frame.render_widget(para, area);
 }
 
+/// Full-screen overlay shown while `:remove-slug` is running in the background.
+fn draw_remove_slug_progress(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    done: usize,
+    total: usize,
+    current: &str,
+) {
+    let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
+    let pct = if total > 0 { done * 100 / total } else { 0 };
+
+    let bar_width = (area.width as usize).saturating_sub(8).min(50);
+    let filled = if total > 0 { bar_width * done / total } else { 0 };
+    let bar: String = "█".repeat(filled) + &"░".repeat(bar_width - filled);
+
+    let file_line = if current.is_empty() {
+        String::new()
+    } else {
+        format!("\n  → {current}")
+    };
+
+    let text = format!(
+        "{spinner}  {done} / {total}  ({pct}%)\n  {bar}{file_line}"
+    );
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Repairing slugs… ")
+        .style(Style::default().fg(Color::Yellow));
+    let para = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center);
+    frame.render_widget(para, area);
+}
 
