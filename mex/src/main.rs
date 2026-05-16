@@ -186,6 +186,9 @@ fn run_loop(
         // Poll remove-slug background thread.
         app.poll_remove_slug();
 
+        // Poll fix-os-time background thread.
+        app.poll_fix_os_time();
+
         if event::poll(std::time::Duration::from_millis(16))? {
             match event::read()? {
                 Event::Key(key) => {
@@ -199,6 +202,18 @@ fn run_loop(
                             // fall through so the keypress also registers normally
                         }
                         app::RemoveSlugState::Idle => {}
+                    }
+
+                    // Handle fix-os-time progress lock screen.
+                    match &app.fix_os_time_state {
+                        app::FixOsTimeState::Running { .. } => {
+                            continue; // swallow all keys while repair is running
+                        }
+                        app::FixOsTimeState::Done(_) => {
+                            app.fix_os_time_state = app::FixOsTimeState::Idle;
+                            // fall through so the keypress also registers normally
+                        }
+                        app::FixOsTimeState::Idle => {}
                     }
 
                     // Handle import-preview / import-done screens first.

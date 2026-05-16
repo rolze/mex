@@ -1682,15 +1682,32 @@ fn find_unix_ms_secs(s: &str) -> Option<i64> {
 /// 3. `derived_date` at noon UTC (12:00:00) — avoids ±12 h timezone flip.
 /// 4. `None` — derived_date is unknown; caller leaves mtime untouched.
 fn best_mtime_for_entry(entry: &ImportEntry) -> Option<FileTime> {
+    best_mtime(entry.filename_secs, entry.source_mtime_secs, entry.derived_date.as_deref())
+}
+
+/// Core mtime-selection logic shared by the import execute phase and the
+/// `:fix-os-time` repair command.
+///
+/// Priority:
+/// 1. `filename_secs` — full timestamp encoded in the original filename.
+/// 2. `source_mtime_secs` — source OS mtime when its `YYYY-MM` prefix matches
+///    `derived_date` (preserves exact day+time for year-month-precision dates).
+/// 3. `derived_date` at noon UTC — avoids ±12 h timezone flip.
+/// 4. `None` — derived_date is unknown; caller leaves mtime untouched.
+pub fn best_mtime(
+    filename_secs: Option<i64>,
+    source_mtime_secs: Option<i64>,
+    derived_date: Option<&str>,
+) -> Option<FileTime> {
     // Priority 1: filename carries a full datetime.
-    if let Some(secs) = entry.filename_secs {
+    if let Some(secs) = filename_secs {
         return Some(FileTime::from_unix_time(secs, 0));
     }
 
-    let derived = entry.derived_date.as_deref()?; // at least YYYY-MM-DD
+    let derived = derived_date?; // at least YYYY-MM-DD
 
     // Priority 2: source mtime whose YYYY-MM prefix agrees with derived_date.
-    if let Some(src_secs) = entry.source_mtime_secs {
+    if let Some(src_secs) = source_mtime_secs {
         let src_date = secs_to_date(src_secs as u64);
         // Compare the first 7 chars "YYYY-MM" of both dates.
         if src_date.len() >= 7 && derived.len() >= 7 && src_date[..7] == derived[..7] {
