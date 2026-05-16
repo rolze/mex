@@ -9,7 +9,7 @@ A personal, opinionated terminal media browser and importer written in **Rust + 
 - **Filters** the list live by filename text, tags (`#tag`), and tag types (`@type`) — combined with AND/OR logic.
 - **Selects** files individually or in groups (Shift-arrows, Shift-Home/End) for bulk tagging or view creation.
 - **Tags** files with typed, autocompleted tags (`:tag name@type` / `:untag`).
-- **Creates views** on demand as hard-linked directory trees (`:vc <name>`) for album sharing without copying files.
+- **Creates views** on demand as hard-linked directory trees (`:create-view <name>`) for album sharing without copying files.
 - **Fixes** metadata in-place: `:fix-date` to correct date prefixes and `:fix-ext` to repair wrong file extensions.
 - **Previews** images inline using Kitty / Sixel / iTerm2 / halfblock protocols — auto-detected, overridable via `MEX_PROTOCOL`.
 
