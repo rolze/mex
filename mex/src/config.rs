@@ -55,9 +55,7 @@ pub fn save_config(cfg: &Config) -> Result<()> {
             .with_context(|| format!("could not create config dir {}", parent.display()))?;
     }
     let mut content = format!("target_root = {}\n", cfg.target_root);
-    if !cfg.views_root.is_empty() {
-        content.push_str(&format!("views_root = {}\n", cfg.views_root));
-    }
+    content.push_str(&format!("views_root = {}\n", cfg.views_root));
     std::fs::write(&path, content)
         .with_context(|| format!("could not write config file {}", path.display()))
 }
@@ -90,6 +88,33 @@ pub fn prompt_target_root(current: &str, reason: &str) -> Option<String> {
     }
 }
 
+/// Interactive prompt asking the user to enter (or confirm) the views root
+/// path. Mirrors `prompt_target_root`.
+///
+/// Returns `Some(path)` on success, `None` if the user cancels.
+pub fn prompt_views_root(current: &str, reason: &str) -> Option<String> {
+    eprintln!("mex: {reason}");
+    if !current.is_empty() {
+        eprintln!("  current: {current}");
+        eprint!("  new path (Enter to keep current, Ctrl-C to quit): ");
+    } else {
+        eprint!("  views root path: ");
+    }
+    io::stderr().flush().ok();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok()?;
+    let trimmed = input.trim().to_string();
+
+    if trimmed.is_empty() && !current.is_empty() {
+        Some(current.to_string())
+    } else if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 /// Check whether `target_root` is usable (non-empty, exists, is a directory,
 /// is readable). Returns `Ok(())` on success or an error message string.
 pub fn validate_target_root(root: &str) -> Result<(), String> {
@@ -104,5 +129,15 @@ pub fn validate_target_root(root: &str) -> Result<(), String> {
         return Err(format!("path is not a directory: {root}"));
     }
     std::fs::read_dir(p).map_err(|e| format!("cannot read directory {root}: {e}"))?;
+    Ok(())
+}
+
+/// Check whether `views_root` is configured (non-empty). The directory is
+/// created at startup so existence is not checked here.
+/// Returns `Ok(())` on success or an error message string.
+pub fn validate_views_root(root: &str) -> Result<(), String> {
+    if root.is_empty() {
+        return Err("views root is not configured".into());
+    }
     Ok(())
 }
