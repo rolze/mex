@@ -1510,7 +1510,7 @@ impl App {
             }
             Ok(n) => {
                 self.selection.clear();
-                if let Err(e) = self.reload() {
+                if let Err(e) = self.reload_preserve_cursor() {
                     self.status_message = Some(format!("trash: reload failed: {e}"));
                     return;
                 }
@@ -1532,7 +1532,7 @@ impl App {
                 self.status_message = Some(format!("keep: {e}"));
             }
             Ok(_) => {
-                if let Err(e) = self.reload() {
+                if let Err(e) = self.reload_preserve_cursor() {
                     self.status_message = Some(format!("keep: reload failed: {e}"));
                     return;
                 }
@@ -1684,6 +1684,26 @@ impl App {
         self.all_tags = tag_set.into_iter().collect();
         self.all_tag_types = type_set.into_iter().collect();
         self.apply_filter();
+        Ok(())
+    }
+
+    /// Reload and restore the cursor to the file it was on before the reload.
+    ///
+    /// Looks up the current file's `id`, reloads, then finds that id in the
+    /// new filtered list and moves the cursor there (falling back to the last
+    /// item if the file has been removed from the filtered view).
+    pub fn reload_preserve_cursor(&mut self) -> anyhow::Result<()> {
+        let saved_id = self.filtered.get(self.selected).map(|f| f.id.clone());
+        self.reload()?;
+        if let Some(id) = saved_id {
+            if let Some(new_idx) = self.filtered.iter().position(|f| f.id == id) {
+                self.selected = new_idx;
+            } else {
+                // File left the filtered view — land on the nearest still-valid index.
+                self.selected = self.selected.min(self.filtered.len().saturating_sub(1));
+            }
+            self.ensure_visible();
+        }
         Ok(())
     }
 
