@@ -32,15 +32,15 @@ fn find_db() -> Option<String> {
 
 /// Resolve and validate target_root from local config. If missing or pointing
 /// to a non-existent directory, prompt the user to enter a new path.
-/// Returns the validated target_root or exits if the user cancels.
-fn resolve_target_root() -> String {
+/// Returns the full validated Config or exits if the user cancels.
+fn resolve_config() -> config::Config {
     let mut cfg = config::load_config();
 
     loop {
         match config::validate_target_root(&cfg.target_root) {
             Ok(()) => {
                 eprintln!("mex: media root: {}", cfg.target_root);
-                return cfg.target_root;
+                break;
             }
             Err(reason) => {
                 let new_root = config::prompt_target_root(&cfg.target_root, &reason);
@@ -59,6 +59,17 @@ fn resolve_target_root() -> String {
             }
         }
     }
+
+    // If views_root is configured, ensure the directory exists.
+    if !cfg.views_root.is_empty() {
+        if let Err(e) = std::fs::create_dir_all(&cfg.views_root) {
+            eprintln!("mex: warning — could not create views_root {}: {e}", cfg.views_root);
+        } else {
+            eprintln!("mex: views root:  {}", cfg.views_root);
+        }
+    }
+
+    cfg
 }
 
 fn main() -> Result<()> {
@@ -66,8 +77,8 @@ fn main() -> Result<()> {
         "Could not find .mex.db. Run mex from the repository root or the mex/ sub-directory.",
     )?;
 
-    let target_root = resolve_target_root();
-    let cfg = config::load_config();
+    let cfg = resolve_config();
+    let target_root = cfg.target_root;
     let views_root = cfg.views_root;
     db::init_db(&db_path).context("Failed to initialise DB")?;
     let files = db::load_files(&db_path).context("Failed to load files from DB")?;
