@@ -1775,6 +1775,35 @@ impl App {
         }
     }
 
+    /// Copy the full absolute path of the cursor file to the system clipboard.
+    /// Priority: `wl-copy` (Wayland) → `xclip` (X11) → `xsel` (X11) → OSC 52.
+    /// Sets `status_message` to report success or failure.
+    pub fn copy_path_to_clipboard(&mut self) {
+        let path = match self.filtered.get(self.selected) {
+            Some(f) if !self.target_root.is_empty() => {
+                PathBuf::from(&self.target_root).join(&f.target_path)
+            }
+            _ => {
+                self.status_message = Some("copy: no file selected".into());
+                return;
+            }
+        };
+        let path_str = path.to_string_lossy().into_owned();
+
+        let ok = try_clipboard_tool("wl-copy", &[&path_str])
+            || try_clipboard_tool("xclip", &["-selection", "clipboard", &path_str])
+            || try_clipboard_tool("xsel", &["--clipboard", "--input", &path_str])
+            || osc52_copy(&path_str);
+
+        if ok {
+            self.status_message = Some(format!("copied: {path_str}"));
+        } else {
+            self.status_message = Some(
+                "copy: no clipboard tool — run: sudo apt install xclip  or  sudo apt install wl-clipboard".into(),
+            );
+        }
+    }
+
     /// Check whether the selected file exists on disk and update the
     /// `missing_on_disk` flag (in memory + DB) if the status changed.
     ///
@@ -2114,6 +2143,48 @@ fn is_valid_date(s: &str) -> bool {
     let month: u8 = s[5..7].parse().unwrap_or(0);
     let day: u8 = s[8..10].parse().unwrap_or(0);
     month >= 1 && month <= 12 && day >= 1 && day <= 31
+}
+
+/// Spawn a clipboard tool with the given args (input as final arg).
+/// Returns true if the tool was found and exited successfully.
+fn try_clipboard_tool(tool: &str, args: &[&str]) -> bool {
+    std::process::Command::new(tool)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Write an OSC 52 escape sequence to stdout, asking the terminal to set its
+/// clipboard.  Works in Kitty, WezTerm, Alacritty, iTerm2, and tmux (with
+/// `set-clipboard on`).  Returns true if the write succeeded.
+fn osc52_copy(text: &str) -> bool {
+    use std::io::Write;
+    let b64 = base64_encode(text.as_bytes());
+    // ESC ] 52 ; c ; <base64> BEL
+    let seq = format!("\x1b]52;c;{b64}\x07");
+    std::io::stdout().write_all(seq.as_bytes()).is_ok()
+        && std::io::stdout().flush().is_ok()
+}
+
+/// Minimal base64 encoder (RFC 4648, no padding issues for our use-case).
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
+        out.push(if chunk.len() > 1 { TABLE[((n >> 6) & 0x3f) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[(n & 0x3f) as usize] as char } else { '=' });
+    }
+    out
 }
 
 /// Return today's date as `"YYYY-MM-DD"` using standard Unix time.
