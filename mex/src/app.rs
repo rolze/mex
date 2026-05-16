@@ -10,7 +10,7 @@ use std::{
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["fix-date", "fix-ext", "import", "q", "quit", "remove-slug", "tag", "untag"];
+const KNOWN_COMMANDS: &[&str] = &["create-view", "fix-date", "fix-ext", "import", "q", "quit", "remove-slug", "tag", "untag"];
 
 // ── Import state ──────────────────────────────────────────────────────────────
 
@@ -50,6 +50,8 @@ const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
 pub struct App {
     pub db_path: String,
     pub target_root: String,
+    /// Root directory where `:create-view` materialises named view directories.
+    pub views_root: String,
     pub all_files: Vec<MediaFile>,
     pub filtered: Vec<MediaFile>,
     pub selected: usize,
@@ -123,6 +125,7 @@ impl App {
     pub fn new(
         db_path: String,
         target_root: String,
+        views_root: String,
         files: Vec<MediaFile>,
         image_picker: Picker,
         image_state: ThreadProtocol,
@@ -146,6 +149,7 @@ impl App {
         Self {
             db_path,
             target_root,
+            views_root,
             all_files: files,
             filtered,
             selected: 0,
@@ -637,6 +641,12 @@ impl App {
             return;
         }
 
+        if let Some(name_arg) = trimmed.strip_prefix("create-view") {
+            let name = name_arg.trim();
+            self.create_view(name);
+            return;
+        }
+
         if let Some(date_arg) = trimmed.strip_prefix("fix-date") {
             let date_str = date_arg.trim();
             self.fix_date_selected(date_str);
@@ -683,6 +693,77 @@ impl App {
 
         if !trimmed.is_empty() {
             self.status_message = Some(format!("Unknown command: {trimmed}"));
+        }
+    }
+
+    // ── create-view ───────────────────────────────────────────────────────────
+
+    /// Materialise the current selection (or full filtered list) as a flat
+    /// directory of hard links under `<views_root>/<name>/`.
+    pub fn create_view(&mut self, name: &str) {
+        if self.views_root.is_empty() {
+            self.status_message = Some(
+                "create-view: views_root is not configured in ~/.config/mex/config.toml".into(),
+            );
+            return;
+        }
+        if name.is_empty() {
+            self.status_message = Some("create-view: usage: create-view <name>".into());
+            return;
+        }
+
+        // Determine source files.
+        let files: Vec<&crate::db::MediaFile> = if self.selection.is_empty() {
+            self.filtered.iter().collect()
+        } else {
+            let mut idxs: Vec<usize> = self.selection.iter().copied().collect();
+            idxs.sort_unstable();
+            idxs.iter()
+                .filter_map(|&i| self.filtered.get(i))
+                .collect()
+        };
+
+        if files.is_empty() {
+            self.status_message = Some("create-view: nothing to link (list is empty)".into());
+            return;
+        }
+
+        let view_dir = std::path::Path::new(&self.views_root).join(name);
+
+        if view_dir.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&view_dir) {
+                self.status_message = Some(format!("create-view: could not remove existing view: {e}"));
+                return;
+            }
+        }
+        if let Err(e) = std::fs::create_dir_all(&view_dir) {
+            self.status_message = Some(format!("create-view: could not create view directory: {e}"));
+            return;
+        }
+
+        let mut linked = 0usize;
+        let mut errors = 0usize;
+        for file in &files {
+            let src = std::path::Path::new(&self.target_root).join(&file.target_path);
+            let basename = src.file_name().unwrap_or_default();
+            let dst = view_dir.join(basename);
+            if let Err(e) = std::fs::hard_link(&src, &dst) {
+                eprintln!("create-view: hard_link {:?} -> {:?}: {e}", src, dst);
+                errors += 1;
+            } else {
+                linked += 1;
+            }
+        }
+
+        if errors == 0 {
+            self.status_message = Some(format!(
+                "View '{name}' created: {linked} file(s) → {}",
+                view_dir.display()
+            ));
+        } else {
+            self.status_message = Some(format!(
+                "View '{name}': {linked} linked, {errors} error(s) — check stderr"
+            ));
         }
     }
 
@@ -1649,7 +1730,7 @@ mod tests {
                 os_date: String::new(), orig_filename: String::new(),
             })
             .collect();
-        App::new("test.db".into(), root, files, picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into())
     }
 
     /// Build a test App with extra non-image rows appended for navigation tests.
@@ -1688,7 +1769,7 @@ mod tests {
                 os_date: String::new(), orig_filename: String::new(),
             });
         }
-        App::new("test.db".into(), root, files, picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into())
     }
 
     // ── Dispatch-count tests ────────────────────────────────────────────────
@@ -1876,7 +1957,7 @@ mod tests {
                 idx += 1;
             }
         }
-        App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into())
     }
 
     // ── Home (non-selecting) ────────────────────────────────────────────────
@@ -2172,7 +2253,7 @@ mod tests {
                 os_date: String::new(), orig_filename: String::new(),
             })
             .collect();
-        App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into())
     }
 
     #[test]
@@ -2332,7 +2413,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let image_state = ThreadProtocol::new(tx, None);
         let picker = Picker::halfblocks();
-        App::new("test.db".into(), String::new(), vec![], picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), String::new(), String::new(), vec![], picker, image_state, "halfblocks".into())
     }
 
     #[test]
@@ -2528,7 +2609,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
         app.enter_command_mode();
         "tag tr".chars().for_each(|c| app.push_command_char(c));
         let suggestions = app.tag_arg_suggestions();
@@ -2549,7 +2630,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
         app.enter_command_mode();
         "tag newtag@per".chars().for_each(|c| app.push_command_char(c));
         let suggestions = app.tag_arg_suggestions();
@@ -2568,7 +2649,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
         app.enter_command_mode();
         "tag vac".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -2587,7 +2668,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
         app.enter_command_mode();
         "tag newtag@per".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -2659,7 +2740,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
         app.command = Some("untag tr".into());
         let suggestions = app.tag_arg_suggestions();
         assert!(suggestions.contains(&"travel".to_string()));
@@ -2678,7 +2759,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
         app.enter_command_mode();
         "untag vac".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -2697,10 +2778,104 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
         app.enter_command_mode();
         "untag vacation tri".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
         assert_eq!(app.command.as_deref(), Some("untag vacation trip "));
+    }
+
+    // ── create-view ───────────────────────────────────────────────────────────
+
+    fn make_test_app_with_views_root(image_names: &[&str], views_root: &str) -> App {
+        use std::sync::mpsc;
+        let (tx, _rx) = mpsc::channel();
+        let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let root = test_media_root();
+        let files: Vec<crate::db::MediaFile> = image_names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| crate::db::MediaFile {
+                id: i.to_string(),
+                target_path: name.to_string(),
+                derived_date: "2024-01-01".into(),
+                ext: name.rsplit('.').next().unwrap_or("").into(),
+                tags: vec![],
+                tag_types: vec![],
+                derived_slug: String::new(),
+                caption_slug: String::new(),
+                os_date: String::new(),
+                orig_filename: String::new(),
+            })
+            .collect();
+        App::new("test.db".into(), root, views_root.to_string(), files, picker, image_state, "halfblocks".into())
+    }
+
+    #[test]
+    fn create_view_no_views_root_configured() {
+        let mut app = make_test_app_with_views_root(&["rolze.jpg"], "");
+        app.create_view("myview");
+        let msg = app.status_message.as_deref().unwrap_or("");
+        assert!(msg.contains("views_root"), "expected views_root error, got: {msg}");
+    }
+
+    #[test]
+    fn create_view_empty_name() {
+        let tmp = std::env::temp_dir().join("mex_test_views_empty_name");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let views_root = tmp.to_string_lossy().into_owned();
+        let mut app = make_test_app_with_views_root(&["rolze.jpg"], &views_root);
+        app.create_view("");
+        let msg = app.status_message.as_deref().unwrap_or("");
+        assert!(msg.contains("usage"), "expected usage error, got: {msg}");
+    }
+
+    #[test]
+    fn create_view_happy_path() {
+        let tmp = std::env::temp_dir().join("mex_test_views_happy");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let views_root = tmp.to_string_lossy().into_owned();
+        let mut app = make_test_app_with_views_root(&["rolze.jpg"], &views_root);
+        app.create_view("testview");
+        let msg = app.status_message.as_deref().unwrap_or("");
+        assert!(msg.contains("testview"), "expected success message with view name, got: {msg}");
+        let link = tmp.join("testview").join("rolze.jpg");
+        assert!(link.exists(), "hard link should exist at {}", link.display());
+        // Cleanup
+        let _ = std::fs::remove_dir_all(tmp.join("testview"));
+    }
+
+    #[test]
+    fn create_view_overwrites_existing() {
+        let tmp = std::env::temp_dir().join("mex_test_views_overwrite");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let views_root = tmp.to_string_lossy().into_owned();
+        // Create a stale file in the view dir
+        let view_dir = tmp.join("myview");
+        std::fs::create_dir_all(&view_dir).unwrap();
+        std::fs::write(view_dir.join("stale.txt"), b"old").unwrap();
+        let mut app = make_test_app_with_views_root(&["rolze.jpg"], &views_root);
+        app.create_view("myview");
+        assert!(!view_dir.join("stale.txt").exists(), "stale file should be gone");
+        assert!(view_dir.join("rolze.jpg").exists(), "new link should exist");
+        // Cleanup
+        let _ = std::fs::remove_dir_all(tmp.join("myview"));
+    }
+
+    #[test]
+    fn create_view_uses_selection_when_non_empty() {
+        let tmp = std::env::temp_dir().join("mex_test_views_selection");
+        std::fs::create_dir_all(&tmp).unwrap();
+        let views_root = tmp.to_string_lossy().into_owned();
+        let mut app = make_test_app_with_views_root(&["rolze.jpg", "bg.png"], &views_root);
+        // Select only index 1 (bg.png)
+        app.selection.insert(1);
+        app.create_view("selview");
+        let view_dir = tmp.join("selview");
+        assert!(!view_dir.join("rolze.jpg").exists(), "unselected file must not be linked");
+        assert!(view_dir.join("bg.png").exists(), "selected file must be linked");
+        // Cleanup
+        let _ = std::fs::remove_dir_all(tmp.join("selview"));
     }
 }

@@ -67,6 +67,8 @@ fn main() -> Result<()> {
     )?;
 
     let target_root = resolve_target_root();
+    let cfg = config::load_config();
+    let views_root = cfg.views_root;
     db::init_db(&db_path).context("Failed to initialise DB")?;
     let files = db::load_files(&db_path).context("Failed to load files from DB")?;
 
@@ -106,7 +108,7 @@ fn main() -> Result<()> {
 
     let image_state = ThreadProtocol::new(tx_worker, None);
 
-    let mut app = app::App::new(db_path, target_root, files, picker, image_state, protocol_name);
+    let mut app = app::App::new(db_path, target_root, views_root, files, picker, image_state, protocol_name);
 
     // Terminal setup
     enable_raw_mode()?;
