@@ -250,6 +250,9 @@ fn run_loop(
         // Poll fix-os-time background thread.
         app.poll_fix_os_time();
 
+        // Poll empty-trash background thread.
+        app.poll_empty_trash();
+
         if event::poll(std::time::Duration::from_millis(16))? {
             match event::read()? {
                 Event::Key(key) => {
@@ -275,6 +278,48 @@ fn run_loop(
                             // fall through so the keypress also registers normally
                         }
                         app::FixOsTimeState::Idle => {}
+                    }
+
+                    // Handle empty-trash preview / deleting screens.
+                    match &app.empty_trash_state {
+                        app::EmptyTrashState::Preview { ref files, .. } => {
+                            let total = files.len();
+                            match key.code {
+                                KeyCode::Char('y') | KeyCode::Enter if total > 0 => {
+                                    app.confirm_empty_trash();
+                                    continue;
+                                }
+                                KeyCode::Esc => {
+                                    app.cancel_empty_trash();
+                                    continue;
+                                }
+                                KeyCode::Down => {
+                                    app.empty_trash_scroll_down();
+                                    continue;
+                                }
+                                KeyCode::Up => {
+                                    app.empty_trash_scroll_up();
+                                    continue;
+                                }
+                                KeyCode::PageDown => {
+                                    app.empty_trash_page_down();
+                                    continue;
+                                }
+                                KeyCode::PageUp => {
+                                    app.empty_trash_page_up();
+                                    continue;
+                                }
+                                _ => continue, // swallow all other keys on preview
+                            }
+                        }
+                        app::EmptyTrashState::Deleting { .. } => {
+                            continue; // swallow all keys while deletion is running
+                        }
+                        app::EmptyTrashState::Done(_) => {
+                            app.empty_trash_state = app::EmptyTrashState::Idle;
+                            // fall through
+                        }
+                        app::EmptyTrashState::Idle => {}
                     }
 
                     // Handle import-preview / import-done screens first.
@@ -387,6 +432,10 @@ fn run_loop(
                         }
                     }
                     (_, KeyCode::Char(' ')) if app.command.is_none() => app.toggle_selection(),
+
+                    // Trash / Keep
+                    (_, KeyCode::Delete) if app.command.is_none() => app.trash_selected(),
+                    (_, KeyCode::Insert) if app.command.is_none() => app.keep_selected(),
 
                     // Backspace: pop from command buffer or filter
                     (_, KeyCode::Backspace) => {
