@@ -16,6 +16,8 @@ pub struct MediaFile {
     pub os_date: String,
     /// Original filename (basename of `source_path`) before import. Empty if not set.
     pub orig_filename: String,
+    /// DB status value: `"moved"` (normal), `"trashed"` (soft-deleted), `"deleted"` (FS removed).
+    pub status: String,
 }
 
 pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
@@ -24,7 +26,8 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
     let sql = "SELECT m.id, m.target_path, COALESCE(m.derived_date,''), m.ext,
                       COALESCE(GROUP_CONCAT(t.name || CHAR(30) || t.type, CHAR(31)),''),
                       COALESCE(m.derived_slug,''), COALESCE(m.caption_slug,''),
-                      COALESCE(m.os_date,''), COALESCE(m.source_path,'')
+                      COALESCE(m.os_date,''), COALESCE(m.source_path,''),
+                      COALESCE(m.status,'moved')
                FROM media m
                LEFT JOIN media_tags mt ON mt.media_id = m.id
                LEFT JOIN tags t ON t.id = mt.tag_id
@@ -65,6 +68,7 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
             caption_slug: row.get(6)?,
             os_date: row.get(7)?,
             orig_filename,
+            status: row.get(9)?,
         })
     })?;
 
@@ -632,6 +636,169 @@ pub fn fix_os_time(db_path: &str, target_root: &str, file_id: &str) -> Result<bo
 
     filetime::set_file_mtime(&abs_tgt, ft)?;
     Ok(true)
+}
+
+/// Mark media files as trashed (`status = 'trashed'`).
+///
+/// Returns the number of rows updated.
+pub fn trash_files(db_path: &str, media_ids: &[String]) -> Result<usize> {
+    if media_ids.is_empty() {
+        return Ok(0);
+    }
+    let conn = Connection::open(db_path)?;
+    let ph: String = std::iter::repeat("?").take(media_ids.len()).collect::<Vec<_>>().join(",");
+    let updated = conn.execute(
+        &format!("UPDATE media SET status = 'trashed' WHERE id IN ({ph})"),
+        rusqlite::params_from_iter(media_ids),
+    )?;
+    Ok(updated)
+}
+
+/// Restore trashed media files to normal (`status = 'moved'`).
+///
+/// Returns the number of rows updated.
+pub fn keep_files(db_path: &str, media_ids: &[String]) -> Result<usize> {
+    if media_ids.is_empty() {
+        return Ok(0);
+    }
+    let conn = Connection::open(db_path)?;
+    let ph: String = std::iter::repeat("?").take(media_ids.len()).collect::<Vec<_>>().join(",");
+    let updated = conn.execute(
+        &format!("UPDATE media SET status = 'moved' WHERE id IN ({ph})"),
+        rusqlite::params_from_iter(media_ids),
+    )?;
+    Ok(updated)
+}
+
+/// Load up to `limit` trashed files (`status = 'trashed'`), ordered by `target_path`.
+pub fn load_trashed_files(db_path: &str, limit: usize) -> Result<Vec<MediaFile>> {
+    let conn = Connection::open(db_path)?;
+
+    let sql = format!(
+        "SELECT m.id, m.target_path, COALESCE(m.derived_date,''), m.ext,
+                COALESCE(GROUP_CONCAT(t.name || CHAR(30) || t.type, CHAR(31)),''),
+                COALESCE(m.derived_slug,''), COALESCE(m.caption_slug,''),
+                COALESCE(m.os_date,''), COALESCE(m.source_path,''),
+                COALESCE(m.status,'trashed')
+         FROM media m
+         LEFT JOIN media_tags mt ON mt.media_id = m.id
+         LEFT JOIN tags t ON t.id = mt.tag_id
+         WHERE m.status = 'trashed'
+         GROUP BY m.id
+         ORDER BY m.target_path
+         LIMIT {limit}"
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |row| {
+        let tags_str: String = row.get(4)?;
+        let (tags, tag_types) = if tags_str.is_empty() {
+            (vec![], vec![])
+        } else {
+            tags_str.split('\x1f')
+                .map(|pair| {
+                    if let Some(sep) = pair.find('\x1e') {
+                        (pair[..sep].to_string(), pair[sep + 1..].to_string())
+                    } else {
+                        (pair.to_string(), String::new())
+                    }
+                })
+                .unzip()
+        };
+        let source_path: String = row.get(8)?;
+        let orig_filename = std::path::Path::new(&source_path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        Ok(MediaFile {
+            id: row.get(0)?,
+            target_path: row.get(1)?,
+            derived_date: row.get(2)?,
+            ext: row.get(3)?,
+            tags,
+            tag_types,
+            derived_slug: row.get(5)?,
+            caption_slug: row.get(6)?,
+            os_date: row.get(7)?,
+            orig_filename,
+            status: row.get(9)?,
+        })
+    })?;
+
+    let mut files = Vec::new();
+    for r in rows {
+        files.push(r?);
+    }
+    Ok(files)
+}
+
+/// Delete the given trashed files from the filesystem and mark them `status = 'deleted'` in DB.
+///
+/// Each file is processed independently; FS errors are non-fatal and counted.
+/// Returns `(deleted, errors)`.
+pub fn delete_trashed_from_fs(
+    db_path: &str,
+    target_root: &str,
+    media_ids: &[String],
+) -> Result<(usize, usize)> {
+    if media_ids.is_empty() {
+        return Ok((0, 0));
+    }
+
+    let conn = Connection::open(db_path)?;
+    let ph: String = std::iter::repeat("?").take(media_ids.len()).collect::<Vec<_>>().join(",");
+
+    let target_paths: Vec<(String, String)> = {
+        let sql = format!("SELECT id, target_path FROM media WHERE id IN ({ph})");
+        let mut stmt = conn.prepare(&sql)?;
+        let result: Vec<(String, String)> = stmt.query_map(rusqlite::params_from_iter(media_ids), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+        result
+    };
+
+    let mut deleted = 0usize;
+    let mut errors = 0usize;
+
+    for (id, target_path) in &target_paths {
+        let abs = std::path::Path::new(target_root).join(target_path);
+        if abs.exists() {
+            match std::fs::remove_file(&abs) {
+                Ok(()) => {
+                    conn.execute(
+                        "UPDATE media SET status = 'deleted' WHERE id = ?1",
+                        rusqlite::params![id],
+                    )?;
+                    deleted += 1;
+                }
+                Err(_) => {
+                    errors += 1;
+                }
+            }
+        } else {
+            // File already gone from disk — still mark as deleted in DB.
+            conn.execute(
+                "UPDATE media SET status = 'deleted' WHERE id = ?1",
+                rusqlite::params![id],
+            )?;
+            deleted += 1;
+        }
+    }
+
+    Ok((deleted, errors))
+}
+
+/// Count files with `status = 'trashed'`.
+pub fn count_trashed(db_path: &str) -> Result<usize> {
+    let conn = Connection::open(db_path)?;
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM media WHERE status = 'trashed'",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(n as usize)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

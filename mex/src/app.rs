@@ -10,7 +10,7 @@ use std::{
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["create-view", "fix-date", "fix-ext", "fix-os-time", "import", "q", "quit", "remove-slug", "tag", "untag"];
+const KNOWN_COMMANDS: &[&str] = &["create-view", "empty-trash", "fix-date", "fix-ext", "fix-os-time", "import", "q", "quit", "remove-slug", "tag", "untag"];
 
 // ── Import state ──────────────────────────────────────────────────────────────
 
@@ -57,6 +57,23 @@ pub enum FixOsTimeState {
 pub enum FixOsTimeMsg {
     Progress { done: usize, total: usize, current: String },
     Done(String),
+}
+
+// ── Empty-trash state ─────────────────────────────────────────────────────────
+
+pub enum EmptyTrashState {
+    Idle,
+    /// Waiting for user confirmation: shows up to 100 trashed files.
+    Preview { files: Vec<crate::db::MediaFile>, scroll: usize },
+    /// Background deletion in progress.
+    Deleting { done: usize, total: usize },
+    /// Finished; message shown until the next keypress.
+    Done(String),
+}
+
+pub enum EmptyTrashMsg {
+    Progress { done: usize, total: usize },
+    Done(usize, usize), // (deleted, errors)
 }
 
 const CACHE_MAX: usize = 30;
@@ -138,6 +155,12 @@ pub struct App {
     pub fix_os_time_state: FixOsTimeState,
     /// Receive channel for the background fix-os-time thread.
     pub fix_os_time_rx: Option<mpsc::Receiver<FixOsTimeMsg>>,
+    /// Empty-trash state machine.
+    pub empty_trash_state: EmptyTrashState,
+    /// Receive channel for the background empty-trash deletion thread.
+    pub empty_trash_rx: Option<mpsc::Receiver<EmptyTrashMsg>>,
+    /// Number of files currently with `status='trashed'`; updated on every reload.
+    pub trashed_count: usize,
 }
 
 impl App {
@@ -153,6 +176,7 @@ impl App {
         let filtered = files.clone();
         let mut tag_set: BTreeSet<String> = BTreeSet::new();
         let mut type_set: BTreeSet<String> = BTreeSet::new();
+        let mut trashed_count = 0usize;
         for f in &files {
             for tag in &f.tags {
                 tag_set.insert(tag.clone());
@@ -161,6 +185,9 @@ impl App {
                 if !ty.is_empty() {
                     type_set.insert(ty.clone());
                 }
+            }
+            if f.status == "trashed" {
+                trashed_count += 1;
             }
         }
         let all_tags: Vec<String> = tag_set.into_iter().collect();
@@ -207,6 +234,9 @@ impl App {
             remove_slug_rx: None,
             fix_os_time_state: FixOsTimeState::Idle,
             fix_os_time_rx: None,
+            empty_trash_state: EmptyTrashState::Idle,
+            empty_trash_rx: None,
+            trashed_count,
         }
     }
 
@@ -686,6 +716,11 @@ impl App {
 
         if trimmed == "fix-os-time" {
             self.fix_os_time_selected();
+            return;
+        }
+
+        if trimmed == "empty-trash" {
+            self.start_empty_trash();
             return;
         }
 
@@ -1432,12 +1467,207 @@ impl App {
         }
     }
 
+    // ── Trash / Keep ─────────────────────────────────────────────────────────
+
+    /// Maximum files that can be trashed in a single operation (guardrail).
+    const MAX_TRASH_BATCH: usize = 100;
+
+    /// Mark the cursor file (or selection) as trashed. Clears the selection.
+    /// Refuses if the selection exceeds `MAX_TRASH_BATCH` to prevent accidents.
+    pub fn trash_selected(&mut self) {
+        let ids: Vec<String> = if self.selection.is_empty() {
+            self.filtered
+                .get(self.selected)
+                .filter(|f| f.status != "trashed")
+                .map(|f| vec![f.id.clone()])
+                .unwrap_or_default()
+        } else {
+            let mut sel: Vec<usize> = self.selection.iter().copied().collect();
+            sel.sort_unstable();
+            sel.iter()
+                .filter_map(|&i| self.filtered.get(i))
+                .filter(|f| f.status != "trashed")
+                .map(|f| f.id.clone())
+                .collect()
+        };
+
+        if ids.is_empty() {
+            return;
+        }
+
+        if ids.len() > Self::MAX_TRASH_BATCH {
+            self.status_message = Some(format!(
+                "trash: too many files selected ({} > {} max) — deselect some first",
+                ids.len(),
+                Self::MAX_TRASH_BATCH,
+            ));
+            return;
+        }
+
+        match crate::db::trash_files(&self.db_path, &ids) {
+            Err(e) => {
+                self.status_message = Some(format!("trash: {e}"));
+            }
+            Ok(n) => {
+                self.selection.clear();
+                if let Err(e) = self.reload() {
+                    self.status_message = Some(format!("trash: reload failed: {e}"));
+                    return;
+                }
+                self.status_message = Some(format!("trashed {n} file(s)"));
+            }
+        }
+    }
+
+    /// Restore the cursor file from trash to normal (`status = 'moved'`).
+    /// Since trashed files cannot be selected, this always operates on the cursor only.
+    pub fn keep_selected(&mut self) {
+        let id = match self.filtered.get(self.selected) {
+            Some(f) if f.status == "trashed" => f.id.clone(),
+            _ => return,
+        };
+
+        match crate::db::keep_files(&self.db_path, &[id]) {
+            Err(e) => {
+                self.status_message = Some(format!("keep: {e}"));
+            }
+            Ok(_) => {
+                if let Err(e) = self.reload() {
+                    self.status_message = Some(format!("keep: reload failed: {e}"));
+                    return;
+                }
+                self.status_message = Some("restored file from trash".into());
+            }
+        }
+    }
+
+    // ── Empty-trash ───────────────────────────────────────────────────────────
+
+    /// Load up to 100 trashed files and enter the preview state.
+    pub fn start_empty_trash(&mut self) {
+        match crate::db::load_trashed_files(&self.db_path, 100) {
+            Err(e) => {
+                self.status_message = Some(format!("empty-trash: {e}"));
+            }
+            Ok(files) if files.is_empty() => {
+                self.status_message = Some("empty-trash: trash is empty".into());
+            }
+            Ok(files) => {
+                self.empty_trash_state = EmptyTrashState::Preview { files, scroll: 0 };
+            }
+        }
+    }
+
+    /// Confirm empty-trash: spawn background thread to delete the files.
+    pub fn confirm_empty_trash(&mut self) {
+        let files = match &self.empty_trash_state {
+            EmptyTrashState::Preview { files, .. } => files.clone(),
+            _ => return,
+        };
+
+        let ids: Vec<String> = files.iter().map(|f| f.id.clone()).collect();
+        let total = ids.len();
+        self.empty_trash_state = EmptyTrashState::Deleting { done: 0, total };
+
+        let db_path = self.db_path.clone();
+        let target_root = self.target_root.clone();
+        let (tx, rx) = mpsc::channel::<EmptyTrashMsg>();
+        self.empty_trash_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            // Delete one by one so we can report progress.
+            let mut done = 0usize;
+            let mut errors = 0usize;
+            for id in &ids {
+                let _ = tx.send(EmptyTrashMsg::Progress { done, total });
+                match crate::db::delete_trashed_from_fs(&db_path, &target_root, &[id.clone()]) {
+                    Ok((d, e)) => { done += d; errors += e; }
+                    Err(_) => { errors += 1; }
+                }
+            }
+            let _ = tx.send(EmptyTrashMsg::Done(done, errors));
+        });
+    }
+
+    /// Cancel the empty-trash preview.
+    pub fn cancel_empty_trash(&mut self) {
+        self.empty_trash_state = EmptyTrashState::Idle;
+    }
+
+    /// Scroll the empty-trash preview list down by one line.
+    pub fn empty_trash_scroll_down(&mut self) {
+        if let EmptyTrashState::Preview { files, scroll } = &mut self.empty_trash_state {
+            let max = files.len().saturating_sub(1);
+            if *scroll < max { *scroll += 1; }
+        }
+    }
+
+    /// Scroll the empty-trash preview list up by one line.
+    pub fn empty_trash_scroll_up(&mut self) {
+        if let EmptyTrashState::Preview { scroll, .. } = &mut self.empty_trash_state {
+            if *scroll > 0 { *scroll -= 1; }
+        }
+    }
+
+    /// Scroll the empty-trash preview list down by one page.
+    pub fn empty_trash_page_down(&mut self) {
+        if let EmptyTrashState::Preview { files, scroll } = &mut self.empty_trash_state {
+            let page = self.import_list_height.max(1);
+            let max = files.len().saturating_sub(1);
+            *scroll = (*scroll + page).min(max);
+        }
+    }
+
+    /// Scroll the empty-trash preview list up by one page.
+    pub fn empty_trash_page_up(&mut self) {
+        if let EmptyTrashState::Preview { scroll, .. } = &mut self.empty_trash_state {
+            let page = self.import_list_height.max(1);
+            *scroll = scroll.saturating_sub(page);
+        }
+    }
+
+    /// Handle a message from the background empty-trash thread.
+    fn on_empty_trash_msg(&mut self, msg: EmptyTrashMsg) {
+        match msg {
+            EmptyTrashMsg::Progress { done, total } => {
+                self.empty_trash_state = EmptyTrashState::Deleting { done, total };
+            }
+            EmptyTrashMsg::Done(deleted, errors) => {
+                self.empty_trash_rx = None;
+                let summary = if errors == 0 {
+                    format!("empty-trash: deleted {deleted} file(s)")
+                } else {
+                    format!("empty-trash: deleted {deleted} file(s), {errors} error(s)")
+                };
+                self.empty_trash_state = EmptyTrashState::Idle;
+                self.status_message = Some(summary.clone());
+                // Reload the list so deleted files are no longer shown.
+                let _ = self.reload();
+            }
+        }
+    }
+
+    /// Poll the empty-trash background thread for new messages (non-blocking).
+    /// Returns `true` if a message was processed.
+    pub fn poll_empty_trash(&mut self) -> bool {
+        let msg = match &self.empty_trash_rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(m) => m,
+                Err(_) => return false,
+            },
+            None => return false,
+        };
+        self.on_empty_trash_msg(msg);
+        true
+    }
+
     /// Reload `all_files` from the DB and re-apply the current filter.
     pub fn reload(&mut self) -> anyhow::Result<()> {
         self.all_files = crate::db::load_files(&self.db_path)?;
         // Rebuild the tag and type sets from the fresh data.
         let mut tag_set: BTreeSet<String> = BTreeSet::new();
         let mut type_set: BTreeSet<String> = BTreeSet::new();
+        self.trashed_count = 0;
         for f in &self.all_files {
             for tag in &f.tags {
                 tag_set.insert(tag.clone());
@@ -1446,6 +1676,9 @@ impl App {
                 if !ty.is_empty() {
                     type_set.insert(ty.clone());
                 }
+            }
+            if f.status == "trashed" {
+                self.trashed_count += 1;
             }
         }
         self.all_tags = tag_set.into_iter().collect();
@@ -1587,8 +1820,12 @@ impl App {
     // ── Selection ────────────────────────────────────────────────────────────
 
     /// Toggle the current cursor row in/out of the selection set.
+    /// Trashed files cannot be selected.
     pub fn toggle_selection(&mut self) {
         if self.filtered.is_empty() {
+            return;
+        }
+        if self.filtered.get(self.selected).map(|f| f.status == "trashed").unwrap_or(false) {
             return;
         }
         if self.selection.contains(&self.selected) {
@@ -1604,17 +1841,19 @@ impl App {
         self.shift_last_landed = None;
     }
 
-    /// Select all files in the current (filtered) result set.
-    /// If every file is already selected, deselects all instead.
+    /// Select all non-trashed files in the current (filtered) result set.
+    /// If every selectable file is already selected, deselects all instead.
     pub fn select_all_or_none(&mut self) {
-        let n = self.filtered.len();
-        if n == 0 {
+        let selectable: Vec<usize> = (0..self.filtered.len())
+            .filter(|&i| self.filtered.get(i).map(|f| f.status != "trashed").unwrap_or(false))
+            .collect();
+        if selectable.is_empty() {
             return;
         }
-        if (0..n).all(|i| self.selection.contains(&i)) {
+        if selectable.iter().all(|i| self.selection.contains(i)) {
             self.selection.clear();
         } else {
-            self.selection.extend(0..n);
+            self.selection.extend(selectable);
         }
         self.shift_last_landed = None;
     }
@@ -1656,6 +1895,10 @@ impl App {
     }
 
     fn toggle_index(&mut self, idx: usize) {
+        // Trashed files cannot be selected.
+        if self.filtered.get(idx).map(|f| f.status == "trashed").unwrap_or(false) {
+            return;
+        }
         if self.selection.contains(&idx) {
             self.selection.remove(&idx);
         } else {
@@ -1857,7 +2100,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(),
+                os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             })
             .collect();
         App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into())
@@ -1882,7 +2125,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(),
+                os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             })
             .collect();
         // Extra placeholder rows (non-existent paths — preview will clear gracefully).
@@ -1896,7 +2139,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(),
+                os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             });
         }
         App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into())
@@ -2082,7 +2325,7 @@ mod tests {
                     tag_types: vec![],
                     derived_slug,
                     caption_slug: String::new(),
-                    os_date: String::new(), orig_filename: String::new(),
+                    os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
                 });
                 idx += 1;
             }
@@ -2380,7 +2623,7 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(),
+                os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             })
             .collect();
         App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into())
@@ -2736,7 +2979,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["travel".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2757,7 +3000,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["alice".into()], tag_types: vec!["person".into()],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2776,7 +3019,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["vacation".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2795,7 +3038,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["alice".into()], tag_types: vec!["person".into()],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2867,7 +3110,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["travel".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2886,7 +3129,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["vacation".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2905,7 +3148,7 @@ mod tests {
             crate::db::MediaFile {
                 id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
                 ext: "jpg".into(), tags: vec!["vacation".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(),
+                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(),
             }
         ];
         let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
@@ -2936,7 +3179,7 @@ mod tests {
                 derived_slug: String::new(),
                 caption_slug: String::new(),
                 os_date: String::new(),
-                orig_filename: String::new(),
+                orig_filename: String::new(), status: "moved".into(),
             })
             .collect();
         App::new("test.db".into(), root, views_root.to_string(), files, picker, image_state, "halfblocks".into())

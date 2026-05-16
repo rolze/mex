@@ -1,4 +1,4 @@
-use crate::app::{App, FixOsTimeState, ImportState, RemoveSlugState};
+use crate::app::{App, EmptyTrashState, FixOsTimeState, ImportState, RemoveSlugState};
 use crate::db::folder_of;
 use crate::import::ImportStatus;
 use ratatui::{
@@ -56,6 +56,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let current = current.clone();
         draw_remove_slug_progress(frame, app, area, done, total, &current, "Fixing OS times…");
         return;
+    }
+
+    // Empty-trash preview / deleting overlay takes over the full screen.
+    match &app.empty_trash_state {
+        EmptyTrashState::Preview { .. } => {
+            draw_empty_trash_preview(frame, app, area);
+            return;
+        }
+        EmptyTrashState::Deleting { done, total } => {
+            let done = *done;
+            let total = *total;
+            draw_empty_trash_deleting(frame, app, area, done, total);
+            return;
+        }
+        _ => {}
     }
 
     // Outer: filter bar at bottom (3 lines) + main content
@@ -135,6 +150,7 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(i, f)| {
             let is_cursor = i == app.selected;
             let is_selected = app.selection.contains(&i);
+            let is_trashed = f.status == "trashed";
 
             let folder = folder_of(&f.target_path);
             // Reserve 1 char for the selection marker (between folder name and "/").
@@ -142,11 +158,13 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let folder_name = format!("{:<width$}", folder_cell, width = FOLDER_COL - 2);
             // Dot only when the file is in the selection set (not just cursor position).
             let show_dot = is_selected;
-            let marker_str = if show_dot { "•" } else { " " };
-            let marker_fg = if is_cursor { Color::Black } else { Color::White };
+            let marker_str = if show_dot { "•" } else if is_trashed { "🗑" } else { " " };
+            let marker_fg = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else { Color::White };
 
             let base_style = if is_cursor {
                 Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else if is_trashed {
+                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)
             } else if is_selected {
                 Style::default().bg(Color::Rgb(50, 50, 90))
             } else {
@@ -162,9 +180,9 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let slug_hi: &str    = if !f.derived_slug.is_empty()  { &f.derived_slug  } else { "" };
             let caption_hi: &str = if !f.caption_slug.is_empty() { &f.caption_slug } else { "" };
 
-            let base_fg    = if is_cursor { Color::Black } else { Color::White };
-            let slug_fg    = if is_cursor { Color::Black } else { Color::Cyan };
-            let caption_fg = if is_cursor { Color::Black } else { Color::Yellow };
+            let base_fg    = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else { Color::White };
+            let slug_fg    = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else { Color::Cyan };
+            let caption_fg = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else { Color::Yellow };
 
             // Build fg highlight regions: (start_byte, end_byte, fg_color); slug before caption.
             let mut regions: Vec<(usize, usize, Color)> = Vec::new();
@@ -484,15 +502,29 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(spans)
     } else if !app.is_filter_active() {
         if let Some(ref msg) = app.status_message {
-            Line::from(Span::styled(
+            let mut spans = vec![Span::styled(
                 msg.clone(),
                 Style::default().fg(Color::Yellow),
-            ))
+            )];
+            if app.trashed_count > 0 {
+                spans.push(Span::styled(
+                    format!("   [🗑 {} trashed]", app.trashed_count),
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                ));
+            }
+            Line::from(spans)
         } else {
-            Line::from(Span::styled(
+            let mut spans = vec![Span::styled(
                 "Type to filter…  |  #tag  |  @type  |  Enter: preview  |  :: command  |  PgUp/PgDn: page",
                 Style::default().fg(Color::DarkGray),
-            ))
+            )];
+            if app.trashed_count > 0 {
+                spans.push(Span::styled(
+                    format!("   [🗑 {} trashed]", app.trashed_count),
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                ));
+            }
+            Line::from(spans)
         }
     } else {
         // Build a boolean expression: text AND (@types OR …) AND (#tags OR …)
@@ -835,3 +867,95 @@ fn draw_remove_slug_progress(
     frame.render_widget(para, area);
 }
 
+/// Full-screen preview of trashed files to be permanently deleted by `:empty-trash`.
+fn draw_empty_trash_preview(frame: &mut Frame, app: &mut App, area: Rect) {
+    let (files, scroll) = match &app.empty_trash_state {
+        EmptyTrashState::Preview { files, scroll } => (files.clone(), *scroll),
+        _ => return,
+    };
+
+    let total = files.len();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4), // header
+            Constraint::Min(1),    // list
+            Constraint::Length(3), // footer
+        ])
+        .split(area);
+
+    // Header
+    let header = Paragraph::new(vec![
+        Line::from(Span::styled(
+            format!("  ⚠  {total} file(s) will be permanently deleted from disk."),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            "  Files are kept in DB as deleted (dedup guard). This cannot be undone.",
+            Style::default().fg(Color::Yellow),
+        )),
+    ])
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Empty Trash ")
+            .style(Style::default().fg(Color::Red)),
+    );
+    frame.render_widget(header, chunks[0]);
+
+    // File list
+    let list_height = chunks[1].height.saturating_sub(2) as usize;
+    app.import_list_height = list_height;
+
+    let width = chunks[1].width.saturating_sub(4) as usize;
+    let items: Vec<ListItem> = files
+        .iter()
+        .skip(scroll)
+        .take(list_height)
+        .map(|f| {
+            let path = truncate_front(&f.target_path, width);
+            ListItem::new(Line::from(Span::styled(
+                format!("  🗑  {path}"),
+                Style::default().fg(Color::DarkGray),
+            )))
+        })
+        .collect();
+
+    let scroll_end = (scroll + list_height).min(total);
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
+        " {scroll_end}/{total}  ↑↓/PgDn/PgUp "
+    )));
+    frame.render_widget(list, chunks[1]);
+
+    // Footer
+    let footer = Paragraph::new(Line::from(vec![
+        Span::styled("  y / Enter", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        Span::styled(" — confirm permanent deletion    ", Style::default().fg(Color::White)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(" — cancel", Style::default().fg(Color::White)),
+    ]))
+    .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(footer, chunks[2]);
+}
+
+/// Full-screen overlay shown while `:empty-trash` is deleting files.
+fn draw_empty_trash_deleting(frame: &mut Frame, app: &App, area: Rect, done: usize, total: usize) {
+    let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
+    let pct = if total > 0 { done * 100 / total } else { 0 };
+
+    let bar_width = (area.width as usize).saturating_sub(8).min(50);
+    let filled = if total > 0 { bar_width * done / total } else { 0 };
+    let bar: String = "█".repeat(filled) + &"░".repeat(bar_width - filled);
+
+    let text = format!("{spinner}  {done} / {total}  ({pct}%)\n  {bar}");
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Empty Trash — Deleting… ")
+        .style(Style::default().fg(Color::Red));
+    let para = Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center);
+    frame.render_widget(para, area);
+}

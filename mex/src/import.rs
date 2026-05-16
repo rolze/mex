@@ -1870,7 +1870,7 @@ pub fn assign_counters(
             let pattern = format!("{year}/{date_prefix}-%");
             let db_max: u32 = conn
                 .query_row(
-                    "SELECT COALESCE(MAX(counter), 0) FROM media WHERE target_path LIKE ?1 AND status='moved'",
+                    "SELECT COALESCE(MAX(counter), 0) FROM media WHERE target_path LIKE ?1 AND status IN ('moved','trashed','deleted')",
                     rusqlite::params![pattern],
                     |row| row.get::<_, u32>(0),
                 )
@@ -2277,7 +2277,7 @@ pub fn load_existing_hashes(conn: &rusqlite::Connection) -> Result<HashMap<(u64,
     let mut stmt = conn.prepare(
         "SELECT file_size, partial_hash, COALESCE(target_path, '') \
          FROM media \
-         WHERE status='moved' AND partial_hash IS NOT NULL AND file_size IS NOT NULL",
+         WHERE status IN ('moved','trashed','deleted') AND partial_hash IS NOT NULL AND file_size IS NOT NULL",
     )?;
     let map: Result<HashMap<(u64, String), String>, _> = stmt
         .query_map([], |row| {
