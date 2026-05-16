@@ -13,7 +13,7 @@ use ratatui_image::{StatefulImage, thread::ThreadProtocol};
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    let area = frame.size();
+    let area = frame.area();
 
     // Import screens take over the full area (except filter bar).
     match &app.import_state {
