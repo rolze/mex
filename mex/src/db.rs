@@ -493,100 +493,377 @@ pub fn fix_ext(db_path: &str, target_root: &str, file_id: &str, new_ext: &str) -
     Ok(())
 }
 
-/// Remove a bad slug from a single media file.
+/// Per-file result produced by [`remove_slug_batch`].
+#[derive(Debug)]
+pub struct RemoveSlugBatchStats {
+    pub fixed: usize,
+    pub skipped: usize,
+    /// Per-file errors: `(file_id, message)`.
+    pub errors: Vec<(String, String)>,
+}
+
+/// Remove bad slugs from a batch of media files and assign fresh day-precision counters.
 ///
-/// - Saves the current `derived_slug` as a tag with type `"slug"` (backup).
-/// - Rebuilds `target_path` in day format: `yyyy/yyyy-mm-dd-{counter:04}[-{caption}].{ext}`.
-/// - Renames the file on disk when present and the path differs.
-/// - Clears `derived_slug` in the DB and stores the updated `target_path`.
+/// All counter values for the batch are pre-computed **before** any file is renamed, so
+/// selecting every file from a given day correctly restarts the counter at 0001.
 ///
-/// Returns an error if the new path already exists on disk (collision) or if the
-/// file has no `derived_slug` set (nothing to repair).
-pub fn remove_slug(db_path: &str, target_root: &str, file_id: &str) -> Result<()> {
-    use std::path::Path;
+/// Counter logic (mirrors `assign_counters` in import):
+/// - For each unique `yyyy-mm-dd` day prefix in the batch, query `MAX(counter)` from the
+///   DB and scan the filesystem, **excluding every file that is part of the current
+///   batch** from both queries.  This ensures idempotent re-runs: files that were
+///   repaired with wrong counters by a previous run are re-numbered from scratch.
+/// - Counters are then assigned sequentially (files sorted by date, then current path)
+///   starting at `max + 1`.
+///
+/// Caption rule (mirrors import): when `caption_slug` is non-empty, the counter-free
+/// form `yyyy/yyyy-mm-dd-{caption}.ext` is preferred; a counter suffix is only added on
+/// collision with a non-batch path.
+///
+/// Files whose path and slug are already correct are counted as `skipped` (no-op).
+/// Per-file errors (collision, FS failure) are collected in `stats.errors`; the rest of
+/// the batch continues.
+///
+/// `on_progress(index, file_id)` is called before each file is processed.
+pub fn remove_slug_batch(
+    db_path: &str,
+    target_root: &str,
+    file_ids: &[String],
+    on_progress: impl Fn(usize, &str),
+) -> Result<RemoveSlugBatchStats> {
+    use std::{
+        collections::{HashMap, HashSet},
+        path::Path,
+    };
+
+    if file_ids.is_empty() {
+        return Ok(RemoveSlugBatchStats { fixed: 0, skipped: 0, errors: Vec::new() });
+    }
 
     let conn = Connection::open(db_path)?;
 
-    let (target_path, derived_date, derived_slug, caption_slug, ext, counter): (
-        String,
-        String,
-        String,
-        String,
-        String,
-        u32,
-    ) = conn.query_row(
-        "SELECT target_path, COALESCE(derived_date,''), COALESCE(derived_slug,''), \
-                COALESCE(caption_slug,''), COALESCE(ext,''), COALESCE(counter,0) \
-         FROM media WHERE id = ?1",
-        [file_id],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
-    )?;
-
-    if derived_slug.is_empty() {
-        anyhow::bail!("remove-slug: file has no derived_slug to remove");
-    }
-    if derived_date.len() < 10 {
-        anyhow::bail!("remove-slug: derived_date '{}' is too short to parse", derived_date);
+    // ── 1. Load all records ────────────────────────────────────────────────
+    struct Rec {
+        id: String,
+        target_path: String,
+        derived_date: String,
+        derived_slug: String,
+        caption_slug: String,
+        ext: String,
+        /// OS mtime stored at import time, e.g. `"2025-11-30 14:30:00"`.  Empty if unset.
+        os_date: String,
+        /// Basename of the original source path (pre-import filename).  Empty if unset.
+        source_basename: String,
     }
 
-    let year  = &derived_date[..4];
-    let month = &derived_date[5..7];
-    let day   = &derived_date[8..10];
+    let mut records: Vec<Rec> = Vec::with_capacity(file_ids.len());
+    for id in file_ids {
+        match conn.query_row(
+            "SELECT target_path, COALESCE(derived_date,''), COALESCE(derived_slug,''), \
+                    COALESCE(caption_slug,''), COALESCE(ext,''), \
+                    COALESCE(os_date,''), COALESCE(source_path,'') \
+             FROM media WHERE id = ?1",
+            [id.as_str()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            },
+        ) {
+            Ok((tp, dd, ds, cs, ex, od, sp)) => {
+                let source_basename = Path::new(&sp)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                records.push(Rec {
+                    id: id.clone(),
+                    target_path: tp,
+                    derived_date: dd,
+                    derived_slug: ds,
+                    caption_slug: cs,
+                    ext: ex,
+                    os_date: od,
+                    source_basename,
+                });
+            }
+            Err(e) => eprintln!("remove-slug: failed to load {id}: {e}"),
+        }
+    }
 
-    let caption_part = if caption_slug.is_empty() {
-        String::new()
-    } else {
-        format!("-{caption_slug}")
-    };
-    let new_basename = format!("{year}-{month}-{day}-{counter:04}{caption_part}.{ext}");
-    let new_target_path = format!("{year}/{new_basename}");
+    // Sort for chronological counter assignment within each day:
+    //   1. derived_date (day grouping)
+    //   2. os_date — OS mtime recorded at import; includes time-of-day, so sorts
+    //      chronologically when present (format `YYYY-MM-DD HH:MM:SS` sorts lexicographically).
+    //   3. source_basename — original pre-import filename; camera sequences like
+    //      `IMG_20251130_143022.jpg` or `DSC_0001.jpg` sort chronologically.
+    //   4. target_path — final tie-breaker for stability.
+    records.sort_by(|a, b| {
+        a.derived_date
+            .cmp(&b.derived_date)
+            .then(a.os_date.cmp(&b.os_date))
+            .then(a.source_basename.cmp(&b.source_basename))
+            .then(a.target_path.cmp(&b.target_path))
+    });
 
-    let old_abs = Path::new(target_root).join(&target_path);
-    let new_abs = Path::new(target_root).join(&new_target_path);
+    // ── 2. Build exclusion sets ────────────────────────────────────────────
+    let batch_ids: Vec<&str> = records.iter().map(|r| r.id.as_str()).collect();
+    let batch_basenames: HashSet<String> = records
+        .iter()
+        .filter_map(|r| {
+            Path::new(&r.target_path)
+                .file_name()?
+                .to_str()
+                .map(|s| s.to_string())
+        })
+        .collect();
+    let batch_old_paths: HashSet<&str> = records.iter().map(|r| r.target_path.as_str()).collect();
 
-    if old_abs != new_abs && new_abs.exists() {
-        anyhow::bail!(
-            "remove-slug: target already exists: {}",
-            new_abs.display()
+    // ── 3. Compute base counter per day prefix (excluding entire batch) ────
+    let mut day_next: HashMap<String, u32> = HashMap::new();
+    for rec in &records {
+        if rec.derived_date.len() < 10 {
+            continue;
+        }
+        let year = &rec.derived_date[..4];
+        let month = &rec.derived_date[5..7];
+        let day = &rec.derived_date[8..10];
+        let day_prefix = format!("{year}-{month}-{day}");
+        if day_next.contains_key(&day_prefix) {
+            continue;
+        }
+
+        // DB max excluding all batch IDs.
+        let db_pattern = format!("{year}/{day_prefix}-%");
+        let placeholders = (0..batch_ids.len())
+            .map(|i| format!("?{}", i + 2))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let db_query = format!(
+            "SELECT COALESCE(MAX(counter), 0) FROM media \
+             WHERE target_path LIKE ?1 AND status IN ('moved','trashed','deleted') \
+             AND id NOT IN ({placeholders})"
         );
+        let db_max: u32 = {
+            let mut stmt = conn.prepare(&db_query)?;
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+                vec![Box::new(db_pattern.clone())];
+            for id in &batch_ids {
+                params.push(Box::new(id.to_string()));
+            }
+            stmt.query_row(
+                params
+                    .iter()
+                    .map(|p| p.as_ref())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+                |row| row.get::<_, u32>(0),
+            )
+            .unwrap_or(0)
+        };
+
+        // FS max excluding all batch basenames.
+        let mut fs_max: u32 = 0;
+        let yr_dir = Path::new(target_root).join(year);
+        if let Ok(rd) = std::fs::read_dir(&yr_dir) {
+            for entry in rd.flatten() {
+                if let Some(name) = entry.file_name().to_str() {
+                    if batch_basenames.contains(name) {
+                        continue;
+                    }
+                    if name.starts_with(&format!("{day_prefix}-")) {
+                        let rest = &name[day_prefix.len() + 1..];
+                        let digits: String = rest.chars().take(4).collect();
+                        if digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()) {
+                            if let Ok(n) = digits.parse::<u32>() {
+                                if n > fs_max {
+                                    fs_max = n;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        day_next.insert(day_prefix, db_max.max(fs_max) + 1);
     }
 
-    if old_abs != new_abs && old_abs.exists() {
-        if let Some(parent) = new_abs.parent() {
-            std::fs::create_dir_all(parent)?;
+    // ── 4. Pre-assign all new paths ────────────────────────────────────────
+    // (no FS writes yet; `seen_new_paths` prevents intra-batch collisions)
+    struct Assignment {
+        new_target_path: String,
+        stored_counter: Option<u32>,
+    }
+    let mut assignments: Vec<Assignment> = Vec::with_capacity(records.len());
+    let mut seen_new_paths: HashSet<String> = HashSet::new();
+
+    for rec in &records {
+        if rec.derived_date.len() < 10 {
+            assignments.push(Assignment {
+                new_target_path: rec.target_path.clone(),
+                stored_counter: None,
+            });
+            continue;
         }
-        std::fs::rename(&old_abs, &new_abs)?;
+        let year = &rec.derived_date[..4];
+        let month = &rec.derived_date[5..7];
+        let day = &rec.derived_date[8..10];
+        let day_prefix = format!("{year}-{month}-{day}");
+
+        let assignment = if !rec.caption_slug.is_empty() {
+            let plain = format!("{year}/{day_prefix}-{}.{}", rec.caption_slug, rec.ext);
+            // Collision: claimed by another batch file, or occupied by a non-batch path.
+            let in_batch = seen_new_paths.contains(&plain);
+            let on_disk = if !in_batch {
+                let abs = Path::new(target_root).join(&plain);
+                abs.exists() && !batch_old_paths.contains(plain.as_str())
+            } else {
+                false
+            };
+            let in_db = if !in_batch && !on_disk {
+                let ph = (0..batch_ids.len())
+                    .map(|i| format!("?{}", i + 2))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let q = format!(
+                    "SELECT COUNT(*) FROM media WHERE target_path = ?1 AND id NOT IN ({ph}) \
+                     AND status IN ('moved','trashed','deleted')"
+                );
+                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+                    vec![Box::new(plain.clone())];
+                for id in &batch_ids {
+                    params.push(Box::new(id.to_string()));
+                }
+                conn.prepare(&q)
+                    .ok()
+                    .and_then(|mut s| {
+                        s.query_row(
+                            params
+                                .iter()
+                                .map(|p| p.as_ref())
+                                .collect::<Vec<_>>()
+                                .as_slice(),
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .ok()
+                    })
+                    .unwrap_or(0)
+                    > 0
+            } else {
+                false
+            };
+
+            if in_batch || on_disk || in_db {
+                let counter = *day_next.get(&day_prefix).unwrap_or(&1);
+                *day_next.get_mut(&day_prefix).unwrap() += 1;
+                let p = format!(
+                    "{year}/{day_prefix}-{}-{counter:04}.{}",
+                    rec.caption_slug, rec.ext
+                );
+                seen_new_paths.insert(p.clone());
+                Assignment { new_target_path: p, stored_counter: Some(counter) }
+            } else {
+                seen_new_paths.insert(plain.clone());
+                Assignment { new_target_path: plain, stored_counter: None }
+            }
+        } else {
+            let counter = *day_next.get(&day_prefix).unwrap_or(&1);
+            *day_next.get_mut(&day_prefix).unwrap() += 1;
+            let p = format!("{year}/{day_prefix}-{counter:04}.{}", rec.ext);
+            seen_new_paths.insert(p.clone());
+            Assignment { new_target_path: p, stored_counter: Some(counter) }
+        };
+
+        assignments.push(assignment);
     }
 
-    // Save old slug as a tag of type "slug".
-    let existing_tag: Option<i64> = conn
-        .query_row(
-            "SELECT id FROM tags WHERE name = ?1 AND type = 'slug'",
-            rusqlite::params![derived_slug],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let tag_id: i64 = match existing_tag {
-        Some(id) => id,
-        None => {
-            conn.execute(
-                "INSERT INTO tags (name, type) VALUES (?1, 'slug')",
-                rusqlite::params![derived_slug],
-            )?;
-            conn.last_insert_rowid()
+    // ── 5. Execute renames + DB updates ───────────────────────────────────
+    let mut stats = RemoveSlugBatchStats { fixed: 0, skipped: 0, errors: Vec::new() };
+
+    for (i, (rec, asgn)) in records.iter().zip(assignments.iter()).enumerate() {
+        on_progress(i, &rec.id);
+
+        if rec.derived_date.len() < 10 {
+            stats.errors.push((
+                rec.id.clone(),
+                format!("derived_date '{}' is too short to parse", rec.derived_date),
+            ));
+            continue;
         }
-    };
-    conn.execute(
-        "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
-        rusqlite::params![file_id, tag_id],
-    )?;
 
-    conn.execute(
-        "UPDATE media SET derived_slug = NULL, target_path = ?1 WHERE id = ?2",
-        rusqlite::params![new_target_path, file_id],
-    )?;
+        let old_abs = Path::new(target_root).join(&rec.target_path);
+        let new_abs = Path::new(target_root).join(&asgn.new_target_path);
 
-    Ok(())
+        if old_abs == new_abs && rec.derived_slug.is_empty() {
+            stats.skipped += 1;
+            continue;
+        }
+
+        if old_abs != new_abs && new_abs.exists() {
+            stats.errors.push((
+                rec.id.clone(),
+                format!("remove-slug: target already exists: {}", new_abs.display()),
+            ));
+            continue;
+        }
+
+        if old_abs != new_abs && old_abs.exists() {
+            if let Some(parent) = new_abs.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    stats.errors.push((rec.id.clone(), e.to_string()));
+                    continue;
+                }
+            }
+            if let Err(e) = std::fs::rename(&old_abs, &new_abs) {
+                stats.errors.push((rec.id.clone(), e.to_string()));
+                continue;
+            }
+        }
+
+        // Save old slug as a tag of type "slug".
+        if !rec.derived_slug.is_empty() {
+            let existing_tag: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM tags WHERE name = ?1 AND type = 'slug'",
+                    rusqlite::params![rec.derived_slug],
+                    |row| row.get(0),
+                )
+                .optional()
+                .unwrap_or(None);
+            let tag_id: i64 = match existing_tag {
+                Some(id) => id,
+                None => {
+                    conn.execute(
+                        "INSERT INTO tags (name, type) VALUES (?1, 'slug')",
+                        rusqlite::params![rec.derived_slug],
+                    )?;
+                    conn.last_insert_rowid()
+                }
+            };
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
+                rusqlite::params![rec.id, tag_id],
+            );
+        }
+
+        if let Err(e) = conn.execute(
+            "UPDATE media SET derived_slug = NULL, target_path = ?1, counter = ?2 WHERE id = ?3",
+            rusqlite::params![asgn.new_target_path, asgn.stored_counter, rec.id],
+        ) {
+            stats.errors.push((rec.id.clone(), e.to_string()));
+            continue;
+        }
+
+        stats.fixed += 1;
+    }
+
+    Ok(stats)
 }
 
 /// Fix the OS mtime of a single imported media file on disk.
