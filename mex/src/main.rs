@@ -419,6 +419,9 @@ fn run_loop(
                     (_, KeyCode::PageDown) => app.page_down(),
                     (_, KeyCode::PageUp)   => app.page_up(),
 
+                    // Open current file in system default viewer/player
+                    (KeyModifiers::SHIFT, KeyCode::Enter) => app.open_in_external_viewer(),
+
                     // Preview toggle / tag confirm / command execute
                     (_, KeyCode::Enter) => {
                         if app.tag_type_typing {
