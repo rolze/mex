@@ -9,6 +9,7 @@
 //!   4. `execute_import(entries, source_root, target_root, db_conn, import_date)`
 
 use anyhow::{Context, Result};
+use filetime::FileTime;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
@@ -1126,6 +1127,12 @@ pub struct ImportEntry {
     pub counter: Option<u32>,
     pub target_path: Option<String>,
     pub status: ImportStatus,
+    /// Raw Unix seconds from the source file's OS mtime (captured during scan).
+    pub source_mtime_secs: Option<i64>,
+    /// Full Unix-epoch seconds derived from the filename when a complete
+    /// datetime (not just a date) is embedded (e.g. 13-digit unix-ms,
+    /// `yyyyMMdd_HHmmss`, Nokia `DD-MM-YY_HHMM`, Picsart `YY-MM-DD_HH-MM-SS`).
+    pub filename_secs: Option<i64>,
 }
 
 #[derive(Debug, Default)]
@@ -1234,6 +1241,8 @@ pub fn scan_source(
                 counter: None,
                 target_path: None,
                 status: ImportStatus::Skipped,
+                source_mtime_secs: None,
+                filename_secs: None,
             });
             continue;
         }
@@ -1263,13 +1272,13 @@ pub fn scan_source(
         // Use walkdir's cached metadata — no extra stat() call over MTP.
         let meta = e.metadata().ok();
         let file_size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-        let mtime_d = meta.as_ref().and_then(|m| {
+        let source_mtime_secs: Option<i64> = meta.as_ref().and_then(|m| {
             m.modified().ok().and_then(|st| {
                 use std::time::UNIX_EPOCH;
-                let secs = st.duration_since(UNIX_EPOCH).ok()?.as_secs();
-                Some(secs_to_date(secs))
+                Some(st.duration_since(UNIX_EPOCH).ok()?.as_secs() as i64)
             })
         });
+        let mtime_d = source_mtime_secs.map(|s| secs_to_date(s as u64));
 
         // No file-content reads during scan (EXIF/XMP/magic header all require
         // opening the file, which is expensive over MTP and slow USB mounts).
@@ -1315,6 +1324,10 @@ pub fn scan_source(
             ImportStatus::Pending
         };
 
+        // Full timestamp from filename — used later to set destination mtime.
+        let (base, _) = split_ext(filename);
+        let filename_secs = find_filename_timestamp(base);
+
         entries.push(ImportEntry {
             source_path: path.to_path_buf(),
             content_hash: String::new(),
@@ -1331,6 +1344,8 @@ pub fn scan_source(
             counter: None,
             target_path: None,
             status,
+            source_mtime_secs,
+            filename_secs,
         });
     }
 
@@ -1462,6 +1477,239 @@ fn secs_to_date(secs: u64) -> String {
 }
 
 // ── Date consensus post-processing ───────────────────────────────────────────
+
+// ── Filename timestamp → Unix seconds ────────────────────────────────────────
+
+/// Convert a calendar datetime to Unix epoch seconds (UTC).
+/// Uses the Howard Hinnant days-from-civil algorithm.
+fn date_hms_to_secs(year: i64, month: i64, day: i64, h: i64, m: i64, s: i64) -> i64 {
+    let y = if month <= 2 { year - 1 } else { year };
+    let era: i64 = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe: i64 = y - era * 400;
+    let doy: i64 = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe: i64 = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days: i64 = era * 146097 + doe - 719468;
+    days * 86400 + h * 3600 + m * 60 + s
+}
+
+/// Try to parse a *complete* datetime (date + time component) from a filename
+/// stem and return Unix epoch seconds.
+///
+/// Patterns tried in priority order:
+/// 1. 13-digit Unix-ms anywhere in name (most precise).
+/// 2. `yyyyMMdd[_-T]HHmmss` — standard Android / DSLR.
+/// 3. `yyyyMMdd[_-T]HHmm`  — time to the minute.
+/// 4. `snap` prefix + `yyyyMMdd` + `HHmm`.
+/// 5. Nokia/Motorola `DD-MM-YY_HHMM`.
+/// 6. Picsart `YY-MM-DD_HH-MM-SS[-mmm]`.
+///
+/// Returns `None` if no full timestamp is found (date-only patterns are not
+/// sufficient). UUID stems bypass this function.
+pub fn find_filename_timestamp(base: &str) -> Option<i64> {
+    if is_uuid_stem(base) {
+        return None;
+    }
+
+    // 1. 13-digit Unix-ms anywhere in name.
+    if let Some(secs) = find_unix_ms_secs(base) {
+        return Some(secs);
+    }
+
+    let b = base.as_bytes();
+
+    // 2 & 3: yyyyMMdd[_-T]HHmmss or yyyyMMdd[_-T]HHmm
+    // Scan for yyyyMMdd (8 consecutive digits, plausible year).
+    let mut i = 0;
+    while i + 8 <= b.len() {
+        if is_4year(b, i) && all_digit(b, i, 8) {
+            let mm = parse_2digit_u(b, i + 4);
+            let dd_val = parse_2digit_u(b, i + 6);
+            let after_ok = i + 8 >= b.len() || !b[i + 8].is_ascii_digit();
+            if mm >= 1 && mm <= 12 && dd_val >= 1 && dd_val <= 31 && after_ok {
+                let yr = parse_4year(b, i) as i64;
+                // Check for separator + time
+                if i + 9 < b.len() && matches!(b[i + 8], b'_' | b'-' | b'T') {
+                    // HHmmss (6 digits)?
+                    if i + 15 <= b.len() && all_digit(b, i + 9, 6) {
+                        let at15_ok = i + 15 >= b.len() || !b[i + 15].is_ascii_digit();
+                        if at15_ok {
+                            let hh = parse_2digit_u(b, i + 9);
+                            let mn = parse_2digit_u(b, i + 11);
+                            let sc = parse_2digit_u(b, i + 13);
+                            if hh <= 23 && mn <= 59 && sc <= 59 {
+                                return Some(date_hms_to_secs(
+                                    yr, mm as i64, dd_val as i64,
+                                    hh as i64, mn as i64, sc as i64,
+                                ));
+                            }
+                        }
+                    }
+                    // HHmm (4 digits)?
+                    if i + 13 <= b.len() && all_digit(b, i + 9, 4) {
+                        let at13_ok = i + 13 >= b.len() || !b[i + 13].is_ascii_digit();
+                        if at13_ok {
+                            let hh = parse_2digit_u(b, i + 9);
+                            let mn = parse_2digit_u(b, i + 11);
+                            if hh <= 23 && mn <= 59 {
+                                return Some(date_hms_to_secs(
+                                    yr, mm as i64, dd_val as i64,
+                                    hh as i64, mn as i64, 0,
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // 4. snap / SnapWidget prefix + yyyyMMdd + HHmm  (e.g. snap202405051452)
+    {
+        let lower = base.to_lowercase();
+        if let Some(rest) = lower.strip_prefix("snap") {
+            if rest.len() >= 12 && rest[..12].bytes().all(|c| c.is_ascii_digit()) {
+                let rb = rest.as_bytes();
+                if let Some(date_str) = find_ymd_in(&rest[..8]) {
+                    let parts: Vec<&str> = date_str.splitn(3, '-').collect();
+                    if parts.len() == 3 {
+                        let yr: i64 = parts[0].parse().ok()?;
+                        let mo: i64 = parts[1].parse().ok()?;
+                        let dy: i64 = parts[2].parse().ok()?;
+                        let hh = parse_2digit_u(rb, 8) as i64;
+                        let mn = parse_2digit_u(rb, 10) as i64;
+                        if hh <= 23 && mn <= 59 {
+                            return Some(date_hms_to_secs(yr, mo, dy, hh, mn, 0));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Nokia/Motorola DD-MM-YY_HHMM
+    {
+        let bb = b;
+        if bb.len() >= 13
+            && bb[2] == b'-'
+            && bb[5] == b'-'
+            && bb[8] == b'_'
+            && [0, 1, 3, 4, 6, 7, 9, 10, 11, 12].iter().all(|&idx| bb[idx].is_ascii_digit())
+        {
+            if let (Some(dd_val), Some(mo), Some(yy), Some(hh), Some(mn)) = (
+                parse_2digit(bb, 0),
+                parse_2digit(bb, 3),
+                parse_2digit(bb, 6),
+                parse_2digit(bb, 9),
+                parse_2digit(bb, 11),
+            ) {
+                if mo >= 1 && mo <= 12 && dd_val >= 1 && dd_val <= 31 && hh <= 23 && mn <= 59 {
+                    let yr = if yy <= 30 { 2000 + yy as i64 } else { 1900 + yy as i64 };
+                    return Some(date_hms_to_secs(yr, mo as i64, dd_val as i64, hh as i64, mn as i64, 0));
+                }
+            }
+        }
+    }
+
+    // 6. Picsart YY-MM-DD_HH-MM-SS[-mmm]  (e.g. Picsart_24-11-24_00-15-22-784)
+    // Find the yy-mm-dd_hh-mm-ss pattern within the string.
+    {
+        // Look for pattern: 2 digits, '-', 2 digits, '-', 2 digits, '_', 2 digits, '-', 2 digits, '-', 2 digits
+        let mut j = 0usize;
+        while j + 17 <= b.len() {
+            let before_ok = j == 0 || !b[j - 1].is_ascii_digit();
+            if before_ok
+                && all_digit(b, j, 2)
+                && b[j + 2] == b'-'
+                && all_digit(b, j + 3, 2)
+                && b[j + 5] == b'-'
+                && all_digit(b, j + 6, 2)
+                && b[j + 8] == b'_'
+                && all_digit(b, j + 9, 2)
+                && b[j + 11] == b'-'
+                && all_digit(b, j + 12, 2)
+                && b[j + 14] == b'-'
+                && all_digit(b, j + 15, 2)
+            {
+                let yy = parse_2digit_u(b, j);
+                let mo = parse_2digit_u(b, j + 3);
+                let dy = parse_2digit_u(b, j + 6);
+                let hh = parse_2digit_u(b, j + 9);
+                let mn = parse_2digit_u(b, j + 12);
+                let sc = parse_2digit_u(b, j + 15);
+                let yr = if yy <= 30 { 2000 + yy } else { 1900 + yy };
+                if mo >= 1 && mo <= 12 && dy >= 1 && dy <= 31 && hh <= 23 && mn <= 59 && sc <= 59 {
+                    return Some(date_hms_to_secs(
+                        yr as i64, mo as i64, dy as i64,
+                        hh as i64, mn as i64, sc as i64,
+                    ));
+                }
+            }
+            j += 1;
+        }
+    }
+
+    None
+}
+
+/// Find a 13-digit Unix-ms timestamp and return epoch *seconds* (ms / 1000).
+fn find_unix_ms_secs(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    let mut i = 0usize;
+    while i + 13 <= b.len() {
+        let before_ok = i == 0 || !b[i - 1].is_ascii_digit();
+        if before_ok && b[i..i + 13].iter().all(|x| x.is_ascii_digit()) {
+            let after_ok = i + 13 >= b.len() || !b[i + 13].is_ascii_digit();
+            if after_ok {
+                let slice = std::str::from_utf8(&b[i..i + 13]).ok()?;
+                let ms: i64 = slice.parse().ok()?;
+                let secs = ms / 1000;
+                if secs >= 946_684_800 && secs <= 4_102_444_800 {
+                    return Some(secs);
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Choose the best `FileTime` to stamp on a newly-copied destination file.
+///
+/// Priority:
+/// 1. Full timestamp extracted from the filename (`filename_secs`).
+/// 2. Source OS mtime — when its `YYYY-MM` prefix matches the `derived_date`.
+/// 3. `derived_date` at noon UTC (12:00:00) — avoids ±12 h timezone flip.
+/// 4. `None` — derived_date is unknown; caller leaves mtime untouched.
+fn best_mtime_for_entry(entry: &ImportEntry) -> Option<FileTime> {
+    // Priority 1: filename carries a full datetime.
+    if let Some(secs) = entry.filename_secs {
+        return Some(FileTime::from_unix_time(secs, 0));
+    }
+
+    let derived = entry.derived_date.as_deref()?; // at least YYYY-MM-DD
+
+    // Priority 2: source mtime whose YYYY-MM prefix agrees with derived_date.
+    if let Some(src_secs) = entry.source_mtime_secs {
+        let src_date = secs_to_date(src_secs as u64);
+        // Compare the first 7 chars "YYYY-MM" of both dates.
+        if src_date.len() >= 7 && derived.len() >= 7 && src_date[..7] == derived[..7] {
+            return Some(FileTime::from_unix_time(src_secs, 0));
+        }
+    }
+
+    // Priority 3: derived_date at noon UTC.
+    if derived.len() >= 10 {
+        let year: i64 = derived[0..4].parse().ok()?;
+        let month: i64 = derived[5..7].parse().ok()?;
+        let day: i64 = derived[8..10].parse().ok()?;
+        let secs = date_hms_to_secs(year, month, day, 12, 0, 0);
+        return Some(FileTime::from_unix_time(secs, 0));
+    }
+
+    None
+}
+
 
 /// Normalize per-folder date months when the folder gives only a year.
 ///
@@ -1787,6 +2035,12 @@ pub fn execute_import(
         if let Some(key) = probe_key {
             entry.partial_hash = key.1.clone();
             seen_hashes.insert(key, entry.source_path.clone());
+        }
+
+        // Stamp the destination mtime with the best authoritative timestamp.
+        // Non-fatal: exFAT / WSL2 filesystems may reject mtime updates.
+        if let Some(ft) = best_mtime_for_entry(entry) {
+            filetime::set_file_mtime(&abs_tgt, ft).ok();
         }
 
         // Read EXIF from the locally-copied destination — free since dest is on local disk.
@@ -2165,6 +2419,136 @@ mod tests {
         // Revolut trailing timestamp
         let f = "Revolut_receipt_transaction_d46bace5-3508-47ea-82fd-cf7215ce5d95_1639813806453.jpg";
         assert_eq!(parse_date_filename(f), Some("2021-12-18".into()));
+    }
+
+    // ── mtime preservation ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_date_hms_to_secs_epoch() {
+        // Unix epoch
+        assert_eq!(date_hms_to_secs(1970, 1, 1, 0, 0, 0), 0);
+        // 2001-09-01 00:00:00 UTC = 999302400
+        assert_eq!(date_hms_to_secs(2001, 9, 1, 0, 0, 0), 999302400);
+        // noon on same day
+        assert_eq!(date_hms_to_secs(2001, 9, 1, 12, 0, 0), 999302400 + 43200);
+        // 2023-07-15 14:30:22 UTC
+        let secs = date_hms_to_secs(2023, 7, 15, 14, 30, 22);
+        // Must round-trip through secs_to_date
+        assert_eq!(secs_to_date(secs as u64), "2023-07-15");
+    }
+
+    #[test]
+    fn test_find_filename_timestamp_unix_ms() {
+        // Revolut: 1639813806453 ms → 1639813806 s
+        let f = "Revolut_receipt_1639813806453";
+        let secs = find_filename_timestamp(f).unwrap();
+        assert_eq!(secs_to_date(secs as u64), "2021-12-18");
+    }
+
+    #[test]
+    fn test_find_filename_timestamp_yyyymmdd_hhmmss() {
+        // Standard Android/DSLR: IMG_20230715_143022
+        let secs = find_filename_timestamp("IMG_20230715_143022").unwrap();
+        assert_eq!(secs_to_date(secs as u64), "2023-07-15");
+        let t = secs % 86400;
+        assert_eq!(t, 14 * 3600 + 30 * 60 + 22);
+    }
+
+    #[test]
+    fn test_find_filename_timestamp_yyyymmdd_hhmm() {
+        // Time to minute only: 20230715_1430
+        let secs = find_filename_timestamp("20230715_1430").unwrap();
+        assert_eq!(secs_to_date(secs as u64), "2023-07-15");
+        assert_eq!(secs % 86400, 14 * 3600 + 30 * 60);
+    }
+
+    #[test]
+    fn test_find_filename_timestamp_snap() {
+        // snap202405051452 → 2024-05-05 14:52
+        let secs = find_filename_timestamp("snap202405051452").unwrap();
+        assert_eq!(secs_to_date(secs as u64), "2024-05-05");
+        assert_eq!(secs % 86400, 14 * 3600 + 52 * 60);
+    }
+
+    #[test]
+    fn test_find_filename_timestamp_nokia() {
+        // Nokia DD-MM-YY_HHMM: 15-07-23_1430 → 2023-07-15 14:30
+        let secs = find_filename_timestamp("15-07-23_1430").unwrap();
+        assert_eq!(secs_to_date(secs as u64), "2023-07-15");
+        assert_eq!(secs % 86400, 14 * 3600 + 30 * 60);
+    }
+
+    #[test]
+    fn test_find_filename_timestamp_picsart() {
+        // Picsart_24-11-24_00-15-22-784 → 2024-11-24 00:15:22
+        let secs = find_filename_timestamp("Picsart_24-11-24_00-15-22-784").unwrap();
+        assert_eq!(secs_to_date(secs as u64), "2024-11-24");
+        assert_eq!(secs % 86400, 15 * 60 + 22);
+    }
+
+    #[test]
+    fn test_find_filename_timestamp_date_only_returns_none() {
+        // A filename with only a date (no time) should return None
+        assert!(find_filename_timestamp("2023-07-peaklens-0001-pklns").is_none());
+        assert!(find_filename_timestamp("IMG_20230715").is_none());
+    }
+
+    #[test]
+    fn test_best_mtime_priority1_filename_secs() {
+        let entry = ImportEntry {
+            source_path: "x.jpg".into(),
+            content_hash: String::new(), partial_hash: String::new(),
+            file_size: 0, ext: "jpg".into(), wrong_ext: None,
+            derived_date: Some("2023-07-01".into()), date_source: "filename".into(),
+            exif_raw: None, derived_slug: None, caption_slug: None,
+            slug_source: "none".into(), counter: None, target_path: None,
+            status: ImportStatus::Pending,
+            source_mtime_secs: Some(1_000_000_000),
+            filename_secs: Some(1_689_430_222), // 2023-07-15 14:30:22
+        };
+        let ft = best_mtime_for_entry(&entry).unwrap();
+        assert_eq!(ft.unix_seconds(), 1_689_430_222);
+    }
+
+    #[test]
+    fn test_best_mtime_priority2_source_mtime_agrees() {
+        // filename_secs absent; source mtime is 2023-07-15 (agrees with derived 2023-07-01 at YYYY-MM level)
+        let src_secs = date_hms_to_secs(2023, 7, 15, 14, 30, 0);
+        let entry = ImportEntry {
+            source_path: "x.jpg".into(),
+            content_hash: String::new(), partial_hash: String::new(),
+            file_size: 0, ext: "jpg".into(), wrong_ext: None,
+            derived_date: Some("2023-07-01".into()), date_source: "filename".into(),
+            exif_raw: None, derived_slug: None, caption_slug: None,
+            slug_source: "none".into(), counter: None, target_path: None,
+            status: ImportStatus::Pending,
+            source_mtime_secs: Some(src_secs),
+            filename_secs: None,
+        };
+        let ft = best_mtime_for_entry(&entry).unwrap();
+        // Should preserve the source mtime (day 15, not day 1)
+        assert_eq!(ft.unix_seconds(), src_secs);
+        assert_eq!(secs_to_date(ft.unix_seconds() as u64), "2023-07-15");
+    }
+
+    #[test]
+    fn test_best_mtime_priority3_derived_date_noon() {
+        // Source mtime disagrees (different month) → fall back to derived_date at noon
+        let src_secs = date_hms_to_secs(2022, 12, 1, 0, 0, 0); // Dec 2022 ≠ Jul 2023
+        let entry = ImportEntry {
+            source_path: "x.jpg".into(),
+            content_hash: String::new(), partial_hash: String::new(),
+            file_size: 0, ext: "jpg".into(), wrong_ext: None,
+            derived_date: Some("2023-07-01".into()), date_source: "filename".into(),
+            exif_raw: None, derived_slug: None, caption_slug: None,
+            slug_source: "none".into(), counter: None, target_path: None,
+            status: ImportStatus::Pending,
+            source_mtime_secs: Some(src_secs),
+            filename_secs: None,
+        };
+        let ft = best_mtime_for_entry(&entry).unwrap();
+        assert_eq!(secs_to_date(ft.unix_seconds() as u64), "2023-07-01");
+        assert_eq!(ft.unix_seconds() % 86400, 12 * 3600); // noon UTC
     }
 
     #[test]
