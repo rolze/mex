@@ -490,6 +490,19 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                     spans.push(Span::styled(suffix, Style::default().fg(Color::DarkGray)));
                 }
             }
+        } else if cmd.starts_with("import ") {
+            // Dim suffix for import-path autocomplete.
+            let typed_path = cmd.strip_prefix("import ").unwrap_or("");
+            if let Some(suggestion) = app.current_import_path_suggestion() {
+                let typed_chars = typed_path.chars().count();
+                let sug_chars = suggestion.chars().count();
+                if sug_chars > typed_chars {
+                    let suffix: String = suggestion.chars().skip(typed_chars).collect();
+                    spans.push(Span::styled(suffix, Style::default().fg(Color::DarkGray)));
+                }
+            } else if typed_path.trim().is_empty() {
+                spans.push(Span::styled("<path>", Style::default().fg(Color::DarkGray)));
+            }
         } else if let Some(suggestion) = app.current_tag_arg_suggestion() {
             // Show dim suffix for tag-arg autocomplete.
             // typed_tail = the portion of the command that the suggestion completes.
@@ -513,11 +526,7 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             // Show a dim param placeholder for commands that have required or optional
             // params but no dynamic suggestions (or where suggestions are absent).
             let dim = Style::default().fg(Color::DarkGray);
-            if let Some(arg) = cmd.strip_prefix("import ") {
-                if arg.trim().is_empty() {
-                    spans.push(Span::styled("<path>", dim));
-                }
-            } else if let Some(arg) = cmd.strip_prefix("create-view ") {
+            if let Some(arg) = cmd.strip_prefix("create-view ") {
                 if arg.trim().is_empty() {
                     spans.push(Span::styled("<name>", dim));
                 }
@@ -540,6 +549,23 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         spans.push(Span::raw("_"));
+
+        // Path-availability hint for `:import <path>` (shown after cursor).
+        if cmd.starts_with("import ") {
+            match &app.import_path_hint {
+                Some(crate::app::ImportPathHint::Valid) => {
+                    spans.push(Span::styled("  ✓", Style::default().fg(Color::Green)));
+                }
+                Some(crate::app::ImportPathHint::Missing) => {
+                    spans.push(Span::styled("  ✗", Style::default().fg(Color::Red)));
+                }
+                Some(crate::app::ImportPathHint::NotADir) => {
+                    spans.push(Span::styled("  ✗ not a dir", Style::default().fg(Color::Red)));
+                }
+                None => {}
+            }
+        }
+
         Line::from(spans)
     } else if !app.is_filter_active() {
         let mut spans = vec![Span::styled(
