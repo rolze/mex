@@ -165,6 +165,8 @@ fn main() -> Result<()> {
     let views_root = cfg.views_root;
     db::init_db(&db_path).context("Failed to initialise DB")?;
     let files = db::load_files(&db_path).context("Failed to load files from DB")?;
+    let import_source_dirs = db::load_recent_import_source_dirs(&db_path)
+        .unwrap_or_default();
 
     // Query terminal for graphics protocol/font-size (before entering alt screen).
     let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
@@ -202,7 +204,7 @@ fn main() -> Result<()> {
 
     let image_state = ThreadProtocol::new(tx_worker, None);
 
-    let mut app = app::App::new(db_path, target_root, views_root, files, picker, image_state, protocol_name);
+    let mut app = app::App::new(db_path, target_root, views_root, files, picker, image_state, protocol_name, import_source_dirs);
 
     // Terminal setup
     enable_raw_mode()?;

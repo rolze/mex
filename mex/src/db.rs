@@ -1106,6 +1106,85 @@ pub fn delete_trashed_from_fs(
     Ok((deleted, errors))
 }
 
+/// Return the import source directories used in previous import sessions,
+/// ordered by recency (most recent first), deduplicated.
+///
+/// Each `import-*` tag (type `mex`) covers exactly one `:import <path>` run.
+/// The common path prefix of all `source_path` values for a tag group equals
+/// the directory that was passed to `:import`.
+pub fn load_recent_import_source_dirs(db_path: &str) -> Result<Vec<String>> {
+    let conn = Connection::open(db_path)?;
+
+    // Collect (tag_name, max_moved_at, source_path) rows for all import sessions.
+    let mut stmt = conn.prepare(
+        "SELECT t.name, MAX(m.moved_at), m.source_path \
+         FROM tags t \
+         JOIN media_tags mt ON mt.tag_id = t.id \
+         JOIN media m ON m.id = mt.media_id \
+         WHERE t.type = 'mex' AND t.name LIKE 'import-%' AND m.source_path IS NOT NULL \
+         GROUP BY t.name, m.source_path \
+         ORDER BY MAX(m.moved_at) DESC",
+    )?;
+
+    // Group source_paths by tag_name; maintain insertion order (rows come ordered by recency).
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let tag_name: String = row.get(0)?;
+        let source_path: String = row.get(2)?;
+        if let Some(entry) = groups.iter_mut().find(|(t, _)| t == &tag_name) {
+            entry.1.push(source_path);
+        } else {
+            groups.push((tag_name, vec![source_path]));
+        }
+    }
+
+    // For each group, compute the longest common path prefix.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut result: Vec<String> = Vec::new();
+    for (_tag, paths) in groups {
+        if paths.is_empty() {
+            continue;
+        }
+        let root = common_path_prefix(&paths);
+        if !root.is_empty() && seen.insert(root.clone()) {
+            result.push(root);
+        }
+    }
+    Ok(result)
+}
+
+/// Compute the longest common filesystem-path prefix of a list of absolute paths.
+/// Returns the deepest directory that is an ancestor of all paths.
+fn common_path_prefix(paths: &[String]) -> String {
+    use std::path::Path;
+    if paths.is_empty() {
+        return String::new();
+    }
+    // Split each path into components and find common prefix component-by-component.
+    let first_comps: Vec<_> = Path::new(&paths[0]).components().collect();
+    let mut common_len = first_comps.len();
+    for path in paths.iter().skip(1) {
+        let comps: Vec<_> = Path::new(path).components().collect();
+        common_len = common_len.min(comps.len());
+        for (i, (a, b)) in first_comps.iter().zip(comps.iter()).enumerate() {
+            if a != b {
+                common_len = i;
+                break;
+            }
+        }
+    }
+    if common_len == 0 {
+        return String::new();
+    }
+    // Build the common prefix path from components.
+    let mut prefix = std::path::PathBuf::new();
+    for comp in first_comps.iter().take(common_len) {
+        prefix.push(comp);
+    }
+    prefix.to_string_lossy().into_owned()
+}
+
 /// Count files with `status = 'trashed'`.
 pub fn count_trashed(db_path: &str) -> Result<usize> {
     let conn = Connection::open(db_path)?;

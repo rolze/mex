@@ -6,6 +6,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     path::PathBuf,
     sync::mpsc,
+    time::Instant,
 };
 
 /// All command names recognised by the command bar, in alphabetical order.
@@ -13,6 +14,17 @@ use std::{
 const KNOWN_COMMANDS: &[&str] = &["create-view", "empty-trash", "fix-date", "fix-ext", "fix-os-time", "import", "q", "quit", "remove-slug", "tag", "untag"];
 
 // ── Import state ──────────────────────────────────────────────────────────────
+
+/// Live filesystem hint for the path typed in `:import <path>`.
+#[derive(Clone, PartialEq, Eq)]
+pub enum ImportPathHint {
+    /// Path exists and is a directory — ready to import.
+    Valid,
+    /// Path does not exist on the filesystem.
+    Missing,
+    /// Path exists but is not a directory.
+    NotADir,
+}
 
 pub enum ImportState {
     Idle,
@@ -161,6 +173,14 @@ pub struct App {
     pub empty_trash_rx: Option<mpsc::Receiver<EmptyTrashMsg>>,
     /// Number of files currently with `status='trashed'`; updated on every reload.
     pub trashed_count: usize,
+    /// Previously-used import source directories, ordered by recency (most recent first).
+    pub import_source_dirs: Vec<String>,
+    /// Debounced filesystem hint for the path currently typed in `:import <path>`.
+    /// `None` means not yet evaluated (hint pending) or path is empty.
+    pub import_path_hint: Option<ImportPathHint>,
+    /// Set to `Some(Instant)` whenever the import-path arg changes; cleared after
+    /// the debounce check fires in `tick()`.
+    pub import_path_changed_at: Option<Instant>,
 }
 
 impl App {
@@ -172,6 +192,7 @@ impl App {
         image_picker: Picker,
         image_state: ThreadProtocol,
         image_protocol_name: String,
+        import_source_dirs: Vec<String>,
     ) -> Self {
         let filtered = files.clone();
         let mut tag_set: BTreeSet<String> = BTreeSet::new();
@@ -237,6 +258,9 @@ impl App {
             empty_trash_state: EmptyTrashState::Idle,
             empty_trash_rx: None,
             trashed_count,
+            import_source_dirs,
+            import_path_hint: None,
+            import_path_changed_at: None,
         }
     }
 
@@ -516,6 +540,7 @@ impl App {
         if let Some(ref mut cmd) = self.command {
             cmd.push(c);
             self.command_suggestion_idx = 0;
+            self.on_import_path_changed();
         }
     }
 
@@ -525,6 +550,7 @@ impl App {
             Some(ref mut cmd) if !cmd.is_empty() => {
                 cmd.pop();
                 self.command_suggestion_idx = 0;
+                self.on_import_path_changed();
             }
             _ => self.command = None,
         }
@@ -533,6 +559,20 @@ impl App {
     pub fn cancel_command(&mut self) {
         self.command = None;
         self.command_suggestion_idx = 0;
+        self.import_path_hint = None;
+        self.import_path_changed_at = None;
+    }
+
+    /// Called whenever the import path argument may have changed.
+    /// Clears the hint and arms the debounce timer if in import-path context.
+    fn on_import_path_changed(&mut self) {
+        if self.command.as_deref().map(|c| c.starts_with("import ")).unwrap_or(false) {
+            self.import_path_hint = None;
+            self.import_path_changed_at = Some(Instant::now());
+        } else {
+            self.import_path_hint = None;
+            self.import_path_changed_at = None;
+        }
     }
 
     // ── Command-name autocompletion ──────────────────────────────────────────
@@ -615,14 +655,17 @@ impl App {
 
     /// Complete the command buffer to the highlighted suggestion.
     /// - Before any space: completes the command name.
+    /// - After `import `: completes the import source path.
     /// - After `tag `: completes the tag name or type argument.
     pub fn tab_complete_command(&mut self) {
-        let has_arg = self.command.as_deref().unwrap_or("").contains(' ');
-        if !has_arg {
+        let cmd = self.command.as_deref().unwrap_or("").to_string();
+        if !cmd.contains(' ') {
             if let Some(suggestion) = self.current_command_suggestion() {
                 self.command = Some(format!("{} ", suggestion));
                 self.command_suggestion_idx = 0;
             }
+        } else if cmd.starts_with("import ") {
+            self.tab_complete_import_path();
         } else {
             self.tab_complete_tag_arg();
         }
@@ -658,7 +701,10 @@ impl App {
     }
 
     pub fn cycle_command_suggestion_down(&mut self) {
-        let count = if self.command.as_deref().unwrap_or("").contains(' ') {
+        let cmd = self.command.as_deref().unwrap_or("");
+        let count = if cmd.starts_with("import ") {
+            self.import_path_suggestions().len()
+        } else if cmd.contains(' ') {
             self.tag_arg_suggestions().len()
         } else {
             self.command_name_suggestions().len()
@@ -669,7 +715,10 @@ impl App {
     }
 
     pub fn cycle_command_suggestion_up(&mut self) {
-        let count = if self.command.as_deref().unwrap_or("").contains(' ') {
+        let cmd = self.command.as_deref().unwrap_or("");
+        let count = if cmd.starts_with("import ") {
+            self.import_path_suggestions().len()
+        } else if cmd.contains(' ') {
             self.tag_arg_suggestions().len()
         } else {
             self.command_name_suggestions().len()
@@ -680,11 +729,66 @@ impl App {
         }
     }
 
+    // ── Import-path suggestion / autocomplete ────────────────────────────────
+
+    /// Returns recent import source directories that start with the typed prefix.
+    /// When no prefix is typed (empty arg), returns all known dirs.
+    pub fn import_path_suggestions(&self) -> Vec<&String> {
+        let prefix = self
+            .command
+            .as_deref()
+            .and_then(|c| c.strip_prefix("import "))
+            .unwrap_or("");
+        self.import_source_dirs
+            .iter()
+            .filter(|d| d.starts_with(prefix))
+            .collect()
+    }
+
+    /// The currently highlighted import-path suggestion.
+    pub fn current_import_path_suggestion(&self) -> Option<String> {
+        self.import_path_suggestions()
+            .into_iter()
+            .nth(self.command_suggestion_idx)
+            .cloned()
+    }
+
+    /// Fill in the highlighted import-path suggestion into the command buffer.
+    fn tab_complete_import_path(&mut self) {
+        if let Some(suggestion) = self.current_import_path_suggestion() {
+            self.command = Some(format!("import {suggestion}"));
+            self.command_suggestion_idx = 0;
+            // Immediately probe the completed path.
+            self.update_import_path_hint();
+        }
+    }
+
+    /// Check the current import path against the filesystem and store the result.
+    fn update_import_path_hint(&mut self) {
+        let path_str = self
+            .command
+            .as_deref()
+            .and_then(|c| c.strip_prefix("import "))
+            .map(str::trim)
+            .unwrap_or("");
+        if path_str.is_empty() {
+            self.import_path_hint = None;
+            return;
+        }
+        self.import_path_hint = Some(match std::fs::metadata(path_str) {
+            Ok(m) if m.is_dir() => ImportPathHint::Valid,
+            Ok(_) => ImportPathHint::NotADir,
+            Err(_) => ImportPathHint::Missing,
+        });
+    }
+
     /// Execute the current command. Sets `self.quit` for `:q` / `:quit`.
     /// Clears command mode regardless of outcome.
     pub fn execute_command(&mut self) {
         let cmd = self.command.take().unwrap_or_default();
         self.command_suggestion_idx = 0;
+        self.import_path_hint = None;
+        self.import_path_changed_at = None;
         let trimmed = cmd.trim();
 
         if trimmed == "q" || trimmed == "quit" {
@@ -1922,9 +2026,16 @@ impl App {
         }
     }
 
-    /// Advance spinner animation — call once per event-loop tick.
+    /// Advance spinner animation and handle debounced import-path hint — call once per event-loop tick.
     pub fn tick(&mut self) {
         self.spinner_frame = self.spinner_frame.wrapping_add(1);
+        // Debounced filesystem check for the import path hint.
+        if let Some(changed_at) = self.import_path_changed_at {
+            if changed_at.elapsed() >= std::time::Duration::from_millis(400) {
+                self.import_path_changed_at = None;
+                self.update_import_path_hint();
+            }
+        }
     }
 
     pub fn selected_file(&self) -> Option<&MediaFile> {
@@ -2339,7 +2450,7 @@ mod tests {
                 os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             })
             .collect();
-        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into(), vec![])
     }
 
     /// Build a test App with extra non-image rows appended for navigation tests.
@@ -2378,7 +2489,7 @@ mod tests {
                 os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             });
         }
-        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into(), vec![])
     }
 
     // ── Dispatch-count tests ────────────────────────────────────────────────
@@ -2566,7 +2677,7 @@ mod tests {
                 idx += 1;
             }
         }
-        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![])
     }
 
     // ── Home (non-selecting) ────────────────────────────────────────────────
@@ -2862,7 +2973,7 @@ mod tests {
                 os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             })
             .collect();
-        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![])
     }
 
     #[test]
@@ -3086,7 +3197,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let image_state = ThreadProtocol::new(tx, None);
         let picker = Picker::halfblocks();
-        App::new("test.db".into(), String::new(), String::new(), vec![], picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), String::new(), String::new(), vec![], picker, image_state, "halfblocks".into(), vec![])
     }
 
     #[test]
@@ -3282,7 +3393,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
         app.enter_command_mode();
         "tag tr".chars().for_each(|c| app.push_command_char(c));
         let suggestions = app.tag_arg_suggestions();
@@ -3303,7 +3414,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
         app.enter_command_mode();
         "tag newtag@per".chars().for_each(|c| app.push_command_char(c));
         let suggestions = app.tag_arg_suggestions();
@@ -3322,7 +3433,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
         app.enter_command_mode();
         "tag vac".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -3341,7 +3452,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
         app.enter_command_mode();
         "tag newtag@per".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -3413,7 +3524,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
         app.command = Some("untag tr".into());
         let suggestions = app.tag_arg_suggestions();
         assert!(suggestions.contains(&"travel".to_string()));
@@ -3432,7 +3543,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
         app.enter_command_mode();
         "untag vac".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -3451,7 +3562,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into());
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
         app.enter_command_mode();
         "untag vacation tri".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -3482,7 +3593,7 @@ mod tests {
                 orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             })
             .collect();
-        App::new("test.db".into(), root, views_root.to_string(), files, picker, image_state, "halfblocks".into())
+        App::new("test.db".into(), root, views_root.to_string(), files, picker, image_state, "halfblocks".into(), vec![])
     }
 
     #[test]
