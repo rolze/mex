@@ -1,5 +1,6 @@
 use crate::db::{MediaFile, set_missing_on_disk};
 use crate::import::{ImportEntry, ImportMsg, ImportStatus};
+use crate::player::{MpvController, RemoteController, VIDEO_EXTENSIONS, MPV_SOCKET};
 use image::DynamicImage;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
 use std::{
@@ -11,7 +12,7 @@ use std::{
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["create-view", "empty-trash", "fix-date", "fix-ext", "fix-os-time", "import", "q", "quit", "remove-slug", "tag", "untag"];
+const KNOWN_COMMANDS: &[&str] = &["create-view", "empty-trash", "fix-date", "fix-ext", "fix-os-time", "import", "q", "quit", "remove-slug", "tag", "untag", "view"];
 
 // ── Import state ──────────────────────────────────────────────────────────────
 
@@ -181,6 +182,8 @@ pub struct App {
     /// Set to `Some(Instant)` whenever the import-path arg changes; cleared after
     /// the debounce check fires in `tick()`.
     pub import_path_changed_at: Option<Instant>,
+    /// Remote controller for mpv (UC-13).
+    pub mpv: MpvController,
 }
 
 impl App {
@@ -261,6 +264,7 @@ impl App {
             import_source_dirs,
             import_path_hint: None,
             import_path_changed_at: None,
+            mpv: MpvController::new(MPV_SOCKET),
         }
     }
 
@@ -825,6 +829,11 @@ impl App {
 
         if trimmed == "empty-trash" {
             self.start_empty_trash();
+            return;
+        }
+
+        if trimmed == "view" {
+            self.view_selected();
             return;
         }
 
@@ -1876,6 +1885,108 @@ impl App {
             Err(e) => {
                 self.status_message = Some(format!("open: xdg-open failed: {e}"));
             }
+        }
+    }
+
+    /// Open the file under the cursor in the remote-controlled mpv instance via
+    /// `:view`. Only video files (by extension) are accepted; others show an error.
+    pub fn view_selected(&mut self) {
+        let path = match self.filtered.get(self.selected) {
+            Some(f) if !self.target_root.is_empty() => {
+                PathBuf::from(&self.target_root).join(&f.target_path)
+            }
+            _ => {
+                self.status_message = Some("view: no file selected".into());
+                return;
+            }
+        };
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+        if !VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+            self.status_message = Some(format!(
+                "view: not a video file (.{ext})"
+            ));
+            return;
+        }
+        if !path.exists() {
+            self.status_message = Some(format!("view: file not found: {}", path.display()));
+            return;
+        }
+        if let Err(e) = self.mpv.open_file(&path) {
+            self.status_message = Some(e.to_string());
+        }
+    }
+
+    /// Advance the cursor to the next video file in the filtered list and open
+    /// it in mpv. Wraps around at the end of the list.
+    pub fn view_next_video(&mut self) {
+        let start = self.selected;
+        let len = self.filtered.len();
+        if len == 0 { return; }
+        let mut idx = (start + 1) % len;
+        loop {
+            if let Some(f) = self.filtered.get(idx) {
+                let ext = std::path::Path::new(&f.target_path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or_default();
+                if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+                    self.selected = idx;
+                    self.ensure_visible();
+                    if self.preview_open { self.refresh_image(); }
+                    self.view_selected();
+                    return;
+                }
+            }
+            if idx == start { break; }
+            idx = (idx + 1) % len;
+        }
+        self.status_message = Some("view: no video file found in list".into());
+    }
+
+    /// Move the cursor to the previous video file in the filtered list and open
+    /// it in mpv. Wraps around at the start of the list.
+    pub fn view_prev_video(&mut self) {
+        let start = self.selected;
+        let len = self.filtered.len();
+        if len == 0 { return; }
+        let mut idx = if start == 0 { len - 1 } else { start - 1 };
+        loop {
+            if let Some(f) = self.filtered.get(idx) {
+                let ext = std::path::Path::new(&f.target_path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or_default();
+                if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+                    self.selected = idx;
+                    self.ensure_visible();
+                    if self.preview_open { self.refresh_image(); }
+                    self.view_selected();
+                    return;
+                }
+            }
+            if idx == start { break; }
+            idx = if idx == 0 { len - 1 } else { idx - 1 };
+        }
+        self.status_message = Some("view: no video file found in list".into());
+    }
+
+    /// Toggle play/pause in the running mpv instance.
+    pub fn mpv_play_pause(&mut self) {
+        if let Err(e) = self.mpv.play_pause() {
+            self.status_message = Some(e.to_string());
+        }
+    }
+
+    /// Stop playback in mpv (keeps mpv alive in idle mode).
+    pub fn mpv_stop(&mut self) {
+        if let Err(e) = self.mpv.stop() {
+            self.status_message = Some(e.to_string());
         }
     }
 

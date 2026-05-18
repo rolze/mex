@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use crossterm::{
     event::{
         self, Event, KeyCode, KeyEventKind, KeyboardEnhancementFlags, KeyModifiers,
-        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        MediaKeyCode, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -477,6 +477,14 @@ fn run_loop(
                     }
 
                     (KeyModifiers::CONTROL, KeyCode::Char('c')) => app.copy_path_to_clipboard(),
+
+                    // Multimedia keyboard keys — control the running mpv instance.
+                    (_, KeyCode::Media(MediaKeyCode::Play))
+                    | (_, KeyCode::Media(MediaKeyCode::Pause))
+                    | (_, KeyCode::Media(MediaKeyCode::PlayPause)) => app.mpv_play_pause(),
+                    (_, KeyCode::Media(MediaKeyCode::Stop)) => app.mpv_stop(),
+                    (_, KeyCode::Media(MediaKeyCode::TrackNext)) => app.view_next_video(),
+                    (_, KeyCode::Media(MediaKeyCode::TrackPrevious)) => app.view_prev_video(),
 
                     // All other printable chars → command buffer or filter
                     (_, KeyCode::Char(c)) => {
