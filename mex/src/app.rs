@@ -12,7 +12,7 @@ use std::{
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["create-view", "empty-trash", "fix-date", "fix-ext", "fix-os-time", "import", "q", "quit", "remove-slug", "tag", "untag", "view"];
+const KNOWN_COMMANDS: &[&str] = &["create-view", "empty-trash", "fix-date", "fix-ext", "fix-os-time", "import", "q", "quit", "remove-slug", "tag", "untag"];
 
 // ── Import state ──────────────────────────────────────────────────────────────
 
@@ -856,11 +856,6 @@ impl App {
 
         if trimmed == "empty-trash" {
             self.start_empty_trash();
-            return;
-        }
-
-        if trimmed == "view" {
-            self.view_selected();
             return;
         }
 
@@ -1915,8 +1910,8 @@ impl App {
         }
     }
 
-    /// Open the file under the cursor in the remote-controlled mpv instance via
-    /// `:view`. Only video files (by extension) are accepted; others show an error.
+    /// Open the file under the cursor in the remote-controlled mpv instance.
+    /// Only video files (by extension) are accepted; others show an error.
     pub fn view_selected(&mut self) {
         let path = match self.filtered.get(self.selected) {
             Some(f) if !self.target_root.is_empty() => {
