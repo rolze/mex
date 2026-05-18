@@ -501,7 +501,8 @@ impl App {
 
     /// Returns true when any filter is active (text, confirmed tags/types, or tag/type being typed).
     pub fn is_filter_active(&self) -> bool {
-        !self.filter_text.is_empty()
+        self.filter_mode
+            || !self.filter_text.is_empty()
             || !self.tag_filters.is_empty()
             || self.tag_typing
             || !self.tag_type_filters.is_empty()
