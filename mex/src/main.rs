@@ -510,8 +510,11 @@ fn run_loop(
                     // Letter shortcuts for mpv — fallback for terminals where media keys
                     // are not delivered (Windows, WSL2, most standard terminal emulators).
                     // Only active in normal mode (not command or filter input).
-                    (_, KeyCode::Char('p')) if app.command.is_none() && !app.filter_mode => app.mpv_play_pause(),
-                    (_, KeyCode::Char('s')) if app.command.is_none() && !app.filter_mode => app.mpv_stop(),
+                    // p: open cursor file in mpv (spawns mpv if needed; validates video ext)
+                    // s: toggle pause/resume — requires mpv to be running
+                    // j/k: next/prev video — require mpv to be running
+                    (_, KeyCode::Char('p')) if app.command.is_none() && !app.filter_mode => app.view_selected(),
+                    (_, KeyCode::Char('s')) if app.command.is_none() && !app.filter_mode => app.mpv_play_pause(),
                     (_, KeyCode::Char('j')) if app.command.is_none() && !app.filter_mode => app.view_next_video(),
                     (_, KeyCode::Char('k')) if app.command.is_none() && !app.filter_mode => app.view_prev_video(),
 

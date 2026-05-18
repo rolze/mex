@@ -26,6 +26,8 @@ pub trait RemoteController {
     fn stop(&self) -> anyhow::Result<()>;
     /// Toggle play / pause.
     fn play_pause(&self) -> anyhow::Result<()>;
+    /// Return true if the player socket is reachable right now.
+    fn is_connected(&self) -> bool;
 }
 
 // ── MpvController ─────────────────────────────────────────────────────────────
@@ -94,5 +96,9 @@ impl RemoteController for MpvController {
 
     fn play_pause(&self) -> anyhow::Result<()> {
         self.send_command(r#"{"command":["cycle","pause"]}"#)
+    }
+
+    fn is_connected(&self) -> bool {
+        UnixStream::connect(&self.socket_path).is_ok()
     }
 }
