@@ -472,7 +472,13 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
-    let title = if app.command.is_some() { " Command " } else { " Filter " };
+    let title = if app.command.is_some() {
+        " Command "
+    } else if app.filter_mode {
+        " /Filter "
+    } else {
+        " Filter "
+    };
 
     let line = if let Some(ref cmd) = app.command {
         let mut spans: Vec<Span> = vec![Span::styled(
@@ -665,7 +671,7 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         if app.filter_mode {
-            spans.push(Span::raw("│"));
+            spans.push(Span::styled("│", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
         }
         Line::from(spans)
     };
