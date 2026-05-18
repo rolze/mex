@@ -14,3 +14,6 @@ Each UC file is the source of truth for its feature. This index lists what exist
 | [UC-08](UC-08.md) | Smart import | Deduplicate, date, slug-normalise, and copy new media to target tree |
 | [UC-09](UC-09.md) | Assign / remove tags | Apply or remove tags on selected files via `:tag` / `:untag` |
 | [UC-10](UC-10.md) | Fix file extension | Repair mismatched extensions using magic-byte detection |
+| [UC-11](UC-11.md) | Trash & delete | Soft-delete files to trash; permanently delete with `:empty-trash` |
+| [UC-12](UC-12.md) | Open external viewer | Open the cursor file in the system default viewer/player |
+| [UC-13](UC-13.md) | mpv integration | Remote-control mpv for video playback; native Linux and WSL2 supported (see [INSTALL.md](../INSTALL.md)) |

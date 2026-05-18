@@ -157,12 +157,56 @@ fn resolve_config_roots(mut cfg: config::Config) -> config::Config {
     cfg
 }
 
+/// Resolve the mpv binary path, auto-detecting in WSL if not configured.
+///
+/// - If `cfg.mpv_path` is already set, accept as-is and log it.
+/// - On native Linux with an empty path: default to `"mpv"` silently.
+/// - On WSL with an empty path: call `detect_windows_mpv()`; adopt silently
+///   if found, otherwise prompt.
+fn resolve_mpv_path(cfg: &mut config::Config) {
+    use mex::player::{detect_windows_mpv, is_wsl};
+
+    if !cfg.mpv_path.is_empty() {
+        eprintln!("mex: mpv:        {}", cfg.mpv_path);
+        return;
+    }
+
+    if is_wsl() {
+        if let Some(found) = detect_windows_mpv() {
+            eprintln!("mex: mpv:        {found} (auto-detected)");
+            cfg.mpv_path = found;
+            if let Err(e) = config::save_config(cfg) {
+                eprintln!("mex: warning — could not save config: {e}");
+            }
+            return;
+        }
+        // Not found automatically — prompt
+        let suggestion = "/mnt/c/Program Files/MPV Player/mpv.exe";
+        match config::prompt_mpv_path(suggestion) {
+            Some(path) => {
+                cfg.mpv_path = path;
+                if let Err(e) = config::save_config(cfg) {
+                    eprintln!("mex: warning — could not save config: {e}");
+                }
+                eprintln!("mex: mpv:        {}", cfg.mpv_path);
+            }
+            None => {
+                cfg.mpv_path = "mpv".to_string();
+            }
+        }
+    } else {
+        cfg.mpv_path = "mpv".to_string();
+    }
+}
+
 fn main() -> Result<()> {
     let mut cfg = config::load_config();
     let db_path = resolve_db_path(&mut cfg);
-    let cfg = resolve_config_roots(cfg);
+    let mut cfg = resolve_config_roots(cfg);
+    resolve_mpv_path(&mut cfg);
     let target_root = cfg.target_root;
     let views_root = cfg.views_root;
+    let mpv_path = cfg.mpv_path;
     db::init_db(&db_path).context("Failed to initialise DB")?;
     let files = db::load_files(&db_path).context("Failed to load files from DB")?;
     let import_source_dirs = db::load_recent_import_source_dirs(&db_path)
@@ -204,7 +248,7 @@ fn main() -> Result<()> {
 
     let image_state = ThreadProtocol::new(tx_worker, None);
 
-    let mut app = app::App::new(db_path, target_root, views_root, files, picker, image_state, protocol_name, import_source_dirs);
+    let mut app = app::App::new(db_path, target_root, views_root, files, picker, image_state, protocol_name, import_source_dirs, mpv_path);
 
     // Terminal setup
     enable_raw_mode()?;

@@ -13,11 +13,16 @@ pub struct Config {
     /// Resolved once at startup and persisted so subsequent launches don't
     /// need filesystem discovery.
     pub db_path: String,
+    /// Path to the mpv binary.  Empty string means "not yet resolved" —
+    /// `main.rs` will fill it in at startup.  Typical values:
+    ///   - `"mpv"` on native Linux (name looked up via PATH)
+    ///   - `"/mnt/c/Program Files/MPV Player/mpv.exe"` on WSL2
+    pub mpv_path: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { target_root: String::new(), views_root: String::new(), db_path: String::new() }
+        Self { target_root: String::new(), views_root: String::new(), db_path: String::new(), mpv_path: String::new() }
     }
 }
 
@@ -48,6 +53,9 @@ pub fn load_config() -> Config {
             if key == "db_path" {
                 cfg.db_path = val.to_string();
             }
+            if key == "mpv_path" {
+                cfg.mpv_path = val.to_string();
+            }
         }
     }
     cfg
@@ -64,6 +72,7 @@ pub fn save_config(cfg: &Config) -> Result<()> {
     let mut content = format!("target_root = {}\n", cfg.target_root);
     content.push_str(&format!("views_root = {}\n", cfg.views_root));
     content.push_str(&format!("db_path = {}\n", cfg.db_path));
+    content.push_str(&format!("mpv_path = {}\n", cfg.mpv_path));
     std::fs::write(&path, content)
         .with_context(|| format!("could not write config file {}", path.display()))
 }
@@ -176,6 +185,35 @@ pub fn prompt_db_path(current: &str, reason: &str) -> Option<String> {
         Some(current.to_string())
     } else if trimmed.is_empty() {
         Some("./.mex.db".to_string()) // accept the default
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Interactive prompt asking the user to confirm or enter the path to the mpv binary.
+/// Runs *before* the alternate screen / raw mode.
+///
+/// `suggestion` — best guess at the correct path (shown as default).
+/// Returns `Some(path)` on success, `None` if the user cancels.
+pub fn prompt_mpv_path(suggestion: &str) -> Option<String> {
+    eprintln!("mex: mpv binary not configured");
+    if !suggestion.is_empty() {
+        eprint!("  mpv path [default: {suggestion}]: ");
+    } else {
+        eprint!("  mpv path [default: mpv]: ");
+    }
+    io::stderr().flush().ok();
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).ok()?;
+    let trimmed = input.trim().to_string();
+
+    if trimmed.is_empty() {
+        if !suggestion.is_empty() {
+            Some(suggestion.to_string())
+        } else {
+            Some("mpv".to_string())
+        }
     } else {
         Some(trimmed)
     }
