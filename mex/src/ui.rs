@@ -668,6 +668,9 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             if use_parens { spans.push(Span::styled(")", dim)); }
         }
 
+        if app.filter_mode {
+            spans.push(Span::raw("_"));
+        }
         Line::from(spans)
     };
 
