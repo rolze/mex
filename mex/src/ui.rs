@@ -587,9 +587,9 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(spans)
     } else {
         // Build a boolean expression: text AND (@types OR …) AND (#tags OR …)
-        // Styling: AND/OR/() = DarkGray, /text = White+Bold, @type = Magenta+Bold, #tag = Cyan+Bold
+        // Styling: AND/OR/() = DarkGray, /text = Bold (default fg), @type = Magenta+Bold, #tag = Cyan+Bold
         let dim   = Style::default().fg(Color::DarkGray);
-        let white = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
+        let white = Style::default().add_modifier(Modifier::BOLD);  // default fg = visible on any theme
         let cyan  = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
         let mag   = Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD);
 
@@ -671,7 +671,8 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         if app.filter_mode {
-            spans.push(Span::styled("│", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)));
+            // REVERSED = swap fg/bg → always visible as a block cursor on any terminal theme.
+            spans.push(Span::styled("│", Style::default().add_modifier(Modifier::REVERSED)));
         }
         Line::from(spans)
     };
