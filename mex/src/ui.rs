@@ -668,10 +668,6 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             if use_parens { spans.push(Span::styled(")", dim)); }
         }
 
-        if app.filter_mode {
-            // REVERSED = swap fg/bg → always visible as a block cursor on any terminal theme.
-            spans.push(Span::styled("│", Style::default().add_modifier(Modifier::REVERSED)));
-        }
         Line::from(spans)
     };
 
