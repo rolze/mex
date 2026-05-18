@@ -262,6 +262,9 @@ fn run_loop(
         // Poll empty-trash background thread.
         app.poll_empty_trash();
 
+        // Poll mpv event listener for live playback state.
+        app.poll_mpv_events();
+
         if event::poll(std::time::Duration::from_millis(16))? {
             match event::read()? {
                 Event::Key(key) => {

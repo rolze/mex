@@ -1,6 +1,6 @@
 use crate::db::{MediaFile, set_missing_on_disk};
 use crate::import::{ImportEntry, ImportMsg, ImportStatus};
-use crate::player::{MpvController, RemoteController, VIDEO_EXTENSIONS, MPV_SOCKET};
+use crate::player::{MpvController, MpvEvent, MpvStatus, RemoteController, VIDEO_EXTENSIONS, MPV_SOCKET};
 use image::DynamicImage;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
 use std::{
@@ -184,6 +184,10 @@ pub struct App {
     pub import_path_changed_at: Option<Instant>,
     /// Remote controller for mpv (UC-13).
     pub mpv: MpvController,
+    /// Live playback state mirrored from the background mpv event listener.
+    pub mpv_status: MpvStatus,
+    /// Receive channel for mpv property-change events from the background listener thread.
+    pub mpv_event_rx: mpsc::Receiver<MpvEvent>,
     /// True while the user is actively editing the filter (entered via `/`).
     /// When false, printable keys do not feed the filter.
     pub filter_mode: bool,
@@ -268,6 +272,12 @@ impl App {
             import_path_hint: None,
             import_path_changed_at: None,
             mpv: MpvController::new(MPV_SOCKET),
+            mpv_status: MpvStatus::Disconnected,
+            mpv_event_rx: {
+                let (tx, rx) = mpsc::channel();
+                crate::player::start_event_listener(MPV_SOCKET.into(), tx);
+                rx
+            },
             filter_mode: false,
         }
     }
@@ -1790,6 +1800,40 @@ impl App {
         };
         self.on_empty_trash_msg(msg);
         true
+    }
+
+    /// Drain all pending mpv property-change events and update `mpv_status`.
+    pub fn poll_mpv_events(&mut self) {
+        while let Ok(event) = self.mpv_event_rx.try_recv() {
+            match event {
+                MpvEvent::Disconnected => {
+                    self.mpv_status = MpvStatus::Disconnected;
+                }
+                MpvEvent::IdleActive(true) => {
+                    self.mpv_status = MpvStatus::Idle;
+                }
+                MpvEvent::IdleActive(false) => {
+                    // mpv became active — wait for filename before updating status.
+                }
+                MpvEvent::Filename(Some(name)) => {
+                    match &mut self.mpv_status {
+                        MpvStatus::Playing { filename, .. } => *filename = name,
+                        _ => self.mpv_status = MpvStatus::Playing { filename: name, paused: false },
+                    }
+                }
+                MpvEvent::Filename(None) => {
+                    // Filename cleared — if we were playing, fall back to Idle.
+                    if matches!(self.mpv_status, MpvStatus::Playing { .. }) {
+                        self.mpv_status = MpvStatus::Idle;
+                    }
+                }
+                MpvEvent::Paused(paused) => {
+                    if let MpvStatus::Playing { paused: ref mut p, .. } = self.mpv_status {
+                        *p = paused;
+                    }
+                }
+            }
+        }
     }
 
     /// Reload `all_files` from the DB and re-apply the current filter.
