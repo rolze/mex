@@ -662,7 +662,9 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             if use_parens { spans.push(Span::styled(")", dim)); }
         }
 
-        spans.push(Span::raw("_"));
+        if app.filter_mode {
+            spans.push(Span::raw("│"));
+        }
         Line::from(spans)
     };
 

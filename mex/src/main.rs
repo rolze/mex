@@ -382,9 +382,11 @@ fn run_loop(
                     // Any keypress clears a displayed status message.
                     app.status_message = None;
                     match (key.modifiers, key.code) {
-                    // Esc: cancel command → clear selection → close preview → clear filter
+                    // Esc: exit filter mode → cancel command → clear selection → close preview → clear filter
                     (_, KeyCode::Esc) => {
-                        if app.command.is_some() {
+                        if app.filter_mode {
+                            app.exit_filter_mode();
+                        } else if app.command.is_some() {
                             app.cancel_command();
                         } else if !app.selection.is_empty() {
                             app.clear_selection();
@@ -454,17 +456,17 @@ fn run_loop(
                     (_, KeyCode::Delete) if app.command.is_none() => app.trash_selected(),
                     (_, KeyCode::Insert) if app.command.is_none() => app.keep_selected(),
 
-                    // Backspace: pop from command buffer or filter
+                    // Backspace: pop from command buffer or filter (filter only in filter mode)
                     (_, KeyCode::Backspace) => {
                         if app.command.is_some() {
                             app.pop_command_char();
-                        } else {
+                        } else if app.filter_mode {
                             app.pop_filter_char();
                         }
                     }
 
-                    // Tab: complete current tag suggestion
-                    (_, KeyCode::Tab) => app.tab_complete(),
+                    // Tab: complete current tag/command suggestion (only in filter or command mode)
+                    (_, KeyCode::Tab) if app.filter_mode || app.command.is_some() => app.tab_complete(),
 
                     // ':' enters command mode (unless already in command mode, where it
                     // is a literal character — needed for paths like mtp:host=…)
@@ -473,6 +475,15 @@ fn run_loop(
                             app.push_command_char(':');
                         } else {
                             app.enter_command_mode();
+                        }
+                    }
+
+                    // '/' enters filter mode (or is a literal char in command mode).
+                    (_, KeyCode::Char('/')) => {
+                        if app.command.is_some() {
+                            app.push_command_char('/');
+                        } else {
+                            app.enter_filter_mode();
                         }
                     }
 
@@ -486,11 +497,18 @@ fn run_loop(
                     (_, KeyCode::Media(MediaKeyCode::TrackNext)) => app.view_next_video(),
                     (_, KeyCode::Media(MediaKeyCode::TrackPrevious)) => app.view_prev_video(),
 
-                    // All other printable chars → command buffer or filter
+                    // Printable chars:
+                    // - command mode → command buffer
+                    // - filter mode → filter (unchanged behaviour)
+                    // - # / @ from normal mode → auto-enter filter mode then feed char
+                    // - anything else in normal mode → ignored (freed for future bindings)
                     (_, KeyCode::Char(c)) => {
                         if app.command.is_some() {
                             app.push_command_char(c);
-                        } else {
+                        } else if app.filter_mode {
+                            app.push_filter_char(c);
+                        } else if c == '#' || c == '@' {
+                            app.enter_filter_mode();
                             app.push_filter_char(c);
                         }
                     }
