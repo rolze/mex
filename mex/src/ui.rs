@@ -1,6 +1,7 @@
 use crate::app::{App, EmptyTrashState, FixOsTimeState, ImportState, RemoveSlugState};
 use crate::db::folder_of;
 use crate::import::ImportStatus;
+use crate::player::MpvStatus;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -73,14 +74,23 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         _ => {}
     }
 
-    // Outer: filter bar at bottom (3 lines) + main content
+    // Outer: bottom bar (3 lines) + main content
     let outer_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(1), Constraint::Length(3)])
         .split(area);
 
     let main_area = outer_chunks[0];
-    let filter_area = outer_chunks[1];
+    let bottom_area = outer_chunks[1];
+
+    // Bottom: filter/command bar on left, status box on right.
+    let bottom_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(65), Constraint::Percentage(35)])
+        .split(bottom_area);
+
+    let filter_area = bottom_chunks[0];
+    let status_area = bottom_chunks[1];
 
     // Main: left list + right preview (conditionally)
     let main_chunks = if app.preview_open {
@@ -108,6 +118,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Import copy-progress is now a full-screen overlay (handled above in match).
 
     draw_filter(frame, app, filter_area);
+    draw_status_box(frame, app, status_area);
 }
 
 fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
@@ -684,21 +695,45 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(block, area);
     frame.render_widget(Paragraph::new(line), inner);
+}
 
-    // Status message floats right-aligned, overlaying the content without
-    // overwriting the left-side filter text or hint.
-    if app.command.is_none() {
-        if let Some(ref msg) = app.status_message {
-            let status_line = Line::from(Span::styled(
-                msg.as_str(),
-                Style::default().fg(Color::Yellow),
-            ));
-            frame.render_widget(
-                Paragraph::new(status_line).alignment(Alignment::Right),
-                inner,
-            );
-        }
+fn draw_status_box(frame: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default().borders(Borders::ALL).title(" Status ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Transient status message takes priority over live mpv state.
+    if let Some(ref msg) = app.status_message {
+        let available = inner.width as usize;
+        let truncated = truncate_end(msg, available);
+        frame.render_widget(
+            Paragraph::new(Span::styled(truncated, Style::default().fg(Color::Yellow))),
+            inner,
+        );
+        return;
     }
+
+    // Live mpv playback state.
+    let (icon, text, color): (&str, &str, Color) = match &app.mpv_status {
+        MpvStatus::Disconnected => ("", "—", Color::DarkGray),
+        MpvStatus::Idle => ("⏹", "idle", Color::DarkGray),
+        MpvStatus::Playing { filename, paused: false } => ("▶", filename.as_str(), Color::Green),
+        MpvStatus::Playing { filename, paused: true } => ("⏸", filename.as_str(), Color::Yellow),
+    };
+
+    let line = if icon.is_empty() {
+        Line::from(Span::styled(text, Style::default().fg(color)))
+    } else {
+        // Reserve 2 chars for "▶ " prefix; truncate filename to fit.
+        let available = (inner.width as usize).saturating_sub(2);
+        let truncated = truncate_end(text, available);
+        Line::from(vec![
+            Span::styled(format!("{icon} "), Style::default().fg(color)),
+            Span::styled(truncated, Style::default().fg(color)),
+        ])
+    };
+
+    frame.render_widget(Paragraph::new(line), inner);
 }
 
 // ── Import UI ─────────────────────────────────────────────────────────────────
