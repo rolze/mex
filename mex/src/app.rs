@@ -188,6 +188,9 @@ pub struct App {
     pub mpv_status: MpvStatus,
     /// Receive channel for mpv property-change events from the background listener thread.
     pub mpv_event_rx: mpsc::Receiver<MpvEvent>,
+    /// True when mpv reached the end of the current file naturally (not user-paused).
+    /// Reset when a new file starts loading or mpv becomes idle.
+    pub mpv_ended: bool,
     /// True while the user is actively editing the filter (entered via `/`).
     /// When false, printable keys do not feed the filter.
     pub filter_mode: bool,
@@ -279,6 +282,7 @@ impl App {
                 crate::player::start_event_listener(MPV_SOCKET.into(), tx);
                 rx
             },
+            mpv_ended: false,
             filter_mode: false,
         }
     }
@@ -1812,11 +1816,13 @@ impl App {
                 }
                 MpvEvent::IdleActive(true) => {
                     self.mpv_status = MpvStatus::Idle;
+                    self.mpv_ended = false;
                 }
                 MpvEvent::IdleActive(false) => {
                     // mpv became active — wait for filename before updating status.
                 }
                 MpvEvent::Filename(Some(name)) => {
+                    self.mpv_ended = false;
                     match &mut self.mpv_status {
                         MpvStatus::Playing { filename, .. } => *filename = name,
                         _ => self.mpv_status = MpvStatus::Playing { filename: name, paused: false },
@@ -1832,6 +1838,9 @@ impl App {
                     if let MpvStatus::Playing { paused: ref mut p, .. } = self.mpv_status {
                         *p = paused;
                     }
+                }
+                MpvEvent::EofReached(reached) => {
+                    self.mpv_ended = reached;
                 }
             }
         }
@@ -1994,6 +2003,8 @@ impl App {
             self.status_message = Some("mpv: not running".into());
             return;
         }
+        let was_ended = self.mpv_ended;
+        self.mpv_ended = false;
         let start = self.selected;
         let len = self.filtered.len();
         if len == 0 { return; }
@@ -2010,6 +2021,11 @@ impl App {
                     self.ensure_visible();
                     if self.preview_open { self.refresh_image(); }
                     self.view_selected();
+                    if was_ended {
+                        if let Err(e) = self.mpv.play() {
+                            self.status_message = Some(e.to_string());
+                        }
+                    }
                     return;
                 }
             }
@@ -2026,6 +2042,8 @@ impl App {
             self.status_message = Some("mpv: not running".into());
             return;
         }
+        let was_ended = self.mpv_ended;
+        self.mpv_ended = false;
         let start = self.selected;
         let len = self.filtered.len();
         if len == 0 { return; }
@@ -2042,6 +2060,11 @@ impl App {
                     self.ensure_visible();
                     if self.preview_open { self.refresh_image(); }
                     self.view_selected();
+                    if was_ended {
+                        if let Err(e) = self.mpv.play() {
+                            self.status_message = Some(e.to_string());
+                        }
+                    }
                     return;
                 }
             }
