@@ -593,9 +593,11 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         let and_sep = || Span::styled(" AND ", dim);
 
         // ── text ──────────────────────────────────────────────────────────────
-        if !app.filter_text.is_empty() {
+        // Show the / prefix whenever filter_mode is active (even with empty text)
+        // so the user has a clear visual cue that filter editing is active.
+        if app.filter_mode || !app.filter_text.is_empty() {
             spans.push(Span::styled(format!("/{}", app.filter_text), white));
-            need_and = true;
+            if !app.filter_text.is_empty() { need_and = true; }
         }
 
         // ── @type group ───────────────────────────────────────────────────────
