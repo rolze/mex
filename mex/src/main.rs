@@ -507,6 +507,14 @@ fn run_loop(
                     (_, KeyCode::Media(MediaKeyCode::TrackNext)) => app.view_next_video(),
                     (_, KeyCode::Media(MediaKeyCode::TrackPrevious)) => app.view_prev_video(),
 
+                    // Letter shortcuts for mpv — fallback for terminals where media keys
+                    // are not delivered (Windows, WSL2, most standard terminal emulators).
+                    // Only active in normal mode (not command or filter input).
+                    (_, KeyCode::Char('p')) if app.command.is_none() && !app.filter_mode => app.mpv_play_pause(),
+                    (_, KeyCode::Char('s')) if app.command.is_none() && !app.filter_mode => app.mpv_stop(),
+                    (_, KeyCode::Char('j')) if app.command.is_none() && !app.filter_mode => app.view_next_video(),
+                    (_, KeyCode::Char('k')) if app.command.is_none() && !app.filter_mode => app.view_prev_video(),
+
                     // Printable chars:
                     // - command mode → command buffer
                     // - filter mode → filter (unchanged behaviour)
