@@ -184,6 +184,9 @@ pub struct App {
     pub import_path_changed_at: Option<Instant>,
     /// Remote controller for mpv (UC-13).
     pub mpv: MpvController,
+    /// True while the user is actively editing the filter (entered via `/`).
+    /// When false, printable keys do not feed the filter.
+    pub filter_mode: bool,
 }
 
 impl App {
@@ -265,6 +268,7 @@ impl App {
             import_path_hint: None,
             import_path_changed_at: None,
             mpv: MpvController::new(MPV_SOCKET),
+            filter_mode: false,
         }
     }
 
@@ -336,6 +340,27 @@ impl App {
         }
     }
 
+    /// Enter text-filter editing mode. Subsequent printable keystrokes feed the filter.
+    pub fn enter_filter_mode(&mut self) {
+        self.filter_mode = true;
+    }
+
+    /// Exit filter editing mode, keeping any applied filter text and tags.
+    /// Cancels any incomplete (unconfirmed) tag / type input.
+    pub fn exit_filter_mode(&mut self) {
+        self.filter_mode = false;
+        if self.tag_typing {
+            self.tag_typing = false;
+            self.tag_input.clear();
+            self.suggestion_idx = 0;
+        }
+        if self.tag_type_typing {
+            self.tag_type_typing = false;
+            self.tag_type_input.clear();
+            self.type_suggestion_idx = 0;
+        }
+    }
+
     pub fn push_filter_char(&mut self, c: char) {
         self.status_message = None;
         if c == '#' {
@@ -396,6 +421,7 @@ impl App {
     }
 
     pub fn clear_filter(&mut self) {
+        self.filter_mode = false;
         self.filter_text.clear();
         self.tag_filters.clear();
         self.tag_typing = false;
@@ -3772,5 +3798,69 @@ mod tests {
         assert!(view_dir.join("bg.png").exists(), "selected file must be linked");
         // Cleanup
         let _ = std::fs::remove_dir_all(tmp.join("selview"));
+    }
+
+    // ── filter_mode tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn filter_mode_starts_false() {
+        let app = make_test_app(&["a.jpg"]);
+        assert!(!app.filter_mode);
+    }
+
+    #[test]
+    fn enter_filter_mode_sets_flag() {
+        let mut app = make_test_app(&["a.jpg"]);
+        app.enter_filter_mode();
+        assert!(app.filter_mode);
+    }
+
+    #[test]
+    fn exit_filter_mode_clears_flag_keeps_filter() {
+        let mut app = make_test_app(&["a.jpg"]);
+        app.enter_filter_mode();
+        app.push_filter_char('f');
+        app.push_filter_char('o');
+        app.push_filter_char('o');
+        app.exit_filter_mode();
+        assert!(!app.filter_mode);
+        assert_eq!(app.filter_text, "foo", "filter text must be preserved on exit");
+    }
+
+    #[test]
+    fn exit_filter_mode_cancels_partial_tag_input() {
+        let mut app = make_test_app(&["a.jpg"]);
+        app.enter_filter_mode();
+        app.push_filter_char('#');
+        app.push_filter_char('h');
+        assert!(app.tag_typing);
+        assert_eq!(app.tag_input, "h");
+        app.exit_filter_mode();
+        assert!(!app.filter_mode);
+        assert!(!app.tag_typing, "partial tag input must be cancelled on exit");
+        assert!(app.tag_input.is_empty());
+    }
+
+    #[test]
+    fn exit_filter_mode_cancels_partial_type_input() {
+        let mut app = make_test_app(&["a.jpg"]);
+        app.enter_filter_mode();
+        app.push_filter_char('@');
+        app.push_filter_char('e');
+        assert!(app.tag_type_typing);
+        app.exit_filter_mode();
+        assert!(!app.filter_mode);
+        assert!(!app.tag_type_typing);
+        assert!(app.tag_type_input.is_empty());
+    }
+
+    #[test]
+    fn clear_filter_also_clears_filter_mode() {
+        let mut app = make_test_app(&["a.jpg"]);
+        app.enter_filter_mode();
+        app.push_filter_char('x');
+        app.clear_filter();
+        assert!(!app.filter_mode);
+        assert!(app.filter_text.is_empty());
     }
 }
