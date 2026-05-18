@@ -12,6 +12,84 @@ use std::time::Duration;
 
 pub const MPV_SOCKET: &str = "/tmp/mex-mpv.sock";
 
+/// Name of the Windows named pipe used in WSL mode (becomes `\\.\pipe\mex-mpv`).
+const MPV_PIPE_NAME: &str = "mex-mpv";
+
+// ── WSL / Windows helpers ─────────────────────────────────────────────────────
+
+/// Returns `true` when mex is running inside WSL (any version).
+pub fn is_wsl() -> bool {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|s| s.to_lowercase().contains("microsoft"))
+        .unwrap_or(false)
+}
+
+/// Translate a Linux filesystem path to a Windows path string using `wslpath`.
+///
+/// Only called when `wsl_mode` is active (i.e. the mpv binary is a `.exe`).
+/// Falls back to the original string representation on any error.
+pub fn translate_path_for_player(path: &Path) -> String {
+    let output = std::process::Command::new("wslpath")
+        .arg("-w")
+        .arg(path)
+        .output();
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout).trim().to_owned()
+        }
+        _ => path.to_string_lossy().into_owned(),
+    }
+}
+
+/// Probe common locations for a Windows mpv binary accessible from WSL.
+///
+/// 1. Runs `cmd.exe /c where mpv` and converts the first result with `wslpath -u`.
+/// 2. Checks a list of well-known installation paths under `/mnt/c/`.
+///
+/// Returns the first path that exists on the Linux filesystem, or `None`.
+pub fn detect_windows_mpv() -> Option<String> {
+    // 1. Try Windows PATH via cmd.exe
+    if let Ok(out) = std::process::Command::new("cmd.exe")
+        .args(["/c", "where mpv 2>nul"])
+        .output()
+    {
+        if out.status.success() {
+            let win_path = String::from_utf8_lossy(&out.stdout);
+            let win_path = win_path.lines().next().unwrap_or("").trim();
+            if !win_path.is_empty() {
+                // Convert Windows path to WSL path
+                if let Ok(conv) = std::process::Command::new("wslpath")
+                    .arg("-u")
+                    .arg(win_path)
+                    .output()
+                {
+                    if conv.status.success() {
+                        let wsl_path = String::from_utf8_lossy(&conv.stdout).trim().to_owned();
+                        if std::path::Path::new(&wsl_path).exists() {
+                            return Some(wsl_path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Check known common install locations
+    let candidates = [
+        "/mnt/c/Program Files/MPV Player/mpv.exe",
+        "/mnt/c/Program Files/mpv/mpv.exe",
+        "/mnt/c/Program Files (x86)/mpv/mpv.exe",
+        "/mnt/c/tools/mpv/mpv.exe",
+    ];
+    for &path in &candidates {
+        if std::path::Path::new(path).exists() {
+            return Some(path.to_owned());
+        }
+    }
+
+    None
+}
+
 /// File extensions recognised as video files (lower-cased).
 pub const VIDEO_EXTENSIONS: &[&str] = &[
     "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "ts", "m2ts",
@@ -159,31 +237,53 @@ pub trait RemoteController {
 
 pub struct MpvController {
     socket_path: PathBuf,
+    /// Path to the mpv binary (name on PATH or absolute path).
+    mpv_bin: String,
+    /// True when `mpv_bin` is a Windows executable (ends with `.exe`).
+    /// In this mode a socat+npiperelay bridge is used and file paths are
+    /// translated with `wslpath -w` before being sent to mpv.
+    wsl_mode: bool,
 }
 
 impl MpvController {
-    pub fn new(socket_path: impl Into<PathBuf>) -> Self {
-        Self { socket_path: socket_path.into() }
+    pub fn new(socket_path: impl Into<PathBuf>, mpv_bin: impl Into<String>) -> Self {
+        let mpv_bin = mpv_bin.into();
+        let wsl_mode = mpv_bin.to_lowercase().ends_with(".exe");
+        Self { socket_path: socket_path.into(), mpv_bin, wsl_mode }
     }
 
     /// Ensure mpv is running and listening on the socket.
     ///
-    /// If the socket is not yet available, spawn a new mpv process with
-    /// `--idle=yes` and poll for the socket to appear (up to 20 × 100 ms).
+    /// Native Linux: spawn mpv with `--input-ipc-server=<socket>` if not already running.
+    /// WSL mode: start the socat+npiperelay bridge first, then spawn Windows mpv.exe.
     fn ensure_running(&self) -> anyhow::Result<()> {
         if UnixStream::connect(&self.socket_path).is_ok() {
             return Ok(());
         }
 
-        std::process::Command::new("mpv")
-            .arg("--idle=yes")
-            .arg("--keep-open=yes")
-            .arg(format!("--input-ipc-server={}", self.socket_path.display()))
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .map_err(|e| anyhow::anyhow!("view: could not spawn mpv: {e}"))?;
+        if self.wsl_mode {
+            self.start_bridge_if_needed()?;
+            // Spawn Windows mpv.exe; it connects to the named pipe that npiperelay bridges.
+            std::process::Command::new(&self.mpv_bin)
+                .arg("--idle=yes")
+                .arg("--keep-open=yes")
+                .arg(format!("--input-ipc-server={MPV_PIPE_NAME}"))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("view: could not spawn mpv: {e}"))?;
+        } else {
+            std::process::Command::new(&self.mpv_bin)
+                .arg("--idle=yes")
+                .arg("--keep-open=yes")
+                .arg(format!("--input-ipc-server={}", self.socket_path.display()))
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| anyhow::anyhow!("view: could not spawn mpv: {e}"))?;
+        }
 
         // Poll until socket appears (up to 2 s).
         for _ in 0..20 {
@@ -194,6 +294,47 @@ impl MpvController {
         }
 
         anyhow::bail!("view: mpv socket did not appear in time (is mpv installed?)")
+    }
+
+    /// Start the socat+npiperelay bridge that connects the Unix socket to
+    /// the Windows named pipe `\\.\pipe\mex-mpv`.
+    ///
+    /// No-op if the socket is already reachable (bridge already running).
+    fn start_bridge_if_needed(&self) -> anyhow::Result<()> {
+        if UnixStream::connect(&self.socket_path).is_ok() {
+            return Ok(());
+        }
+
+        // Remove any stale socket file before binding.
+        let _ = std::fs::remove_file(&self.socket_path);
+
+        let socket_str = self.socket_path.to_string_lossy();
+        std::process::Command::new("socat")
+            .arg(format!("UNIX-LISTEN:{socket_str},fork"))
+            .arg(format!("EXEC:npiperelay.exe -ei -ep //./pipe/{MPV_PIPE_NAME},nofork"))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "view: could not start socat bridge: {e} \
+                     (WSL mode requires socat — run: apt install socat)"
+                )
+            })?;
+
+        // Wait for socat to create the socket (up to 3 s).
+        for _ in 0..30 {
+            std::thread::sleep(Duration::from_millis(100));
+            if UnixStream::connect(&self.socket_path).is_ok() {
+                return Ok(());
+            }
+        }
+
+        anyhow::bail!(
+            "view: socat bridge socket did not appear — \
+             ensure npiperelay.exe is on your PATH (https://github.com/jstarks/npiperelay)"
+        )
     }
 
     /// Write a single JSON command to the socket.
@@ -210,7 +351,12 @@ impl MpvController {
 impl RemoteController for MpvController {
     fn open_file(&self, path: &Path) -> anyhow::Result<()> {
         self.ensure_running()?;
-        let escaped = path.to_string_lossy().replace('"', "\\\"");
+        let path_str = if self.wsl_mode {
+            translate_path_for_player(path)
+        } else {
+            path.to_string_lossy().into_owned()
+        };
+        let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
         self.send_command(&format!(
             r#"{{"command":["loadfile","{escaped}"]}}"#
         ))

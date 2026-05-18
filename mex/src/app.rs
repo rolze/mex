@@ -203,6 +203,7 @@ impl App {
         image_state: ThreadProtocol,
         image_protocol_name: String,
         import_source_dirs: Vec<String>,
+        mpv_path: String,
     ) -> Self {
         let filtered = files.clone();
         let mut tag_set: BTreeSet<String> = BTreeSet::new();
@@ -271,7 +272,7 @@ impl App {
             import_source_dirs,
             import_path_hint: None,
             import_path_changed_at: None,
-            mpv: MpvController::new(MPV_SOCKET),
+            mpv: MpvController::new(MPV_SOCKET, mpv_path),
             mpv_status: MpvStatus::Disconnected,
             mpv_event_rx: {
                 let (tx, rx) = mpsc::channel();
