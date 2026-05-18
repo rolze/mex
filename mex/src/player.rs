@@ -52,6 +52,7 @@ impl MpvController {
 
         std::process::Command::new("mpv")
             .arg("--idle=yes")
+            .arg("--keep-open=yes")
             .arg(format!("--input-ipc-server={}", self.socket_path.display()))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
