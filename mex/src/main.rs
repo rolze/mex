@@ -461,7 +461,17 @@ fn run_loop(
                         if app.command.is_some() {
                             app.pop_command_char();
                         } else if app.filter_mode {
-                            app.pop_filter_char();
+                            // If nothing left to delete, Backspace exits filter mode
+                            if app.filter_text.is_empty()
+                                && app.tag_filters.is_empty()
+                                && !app.tag_typing
+                                && app.tag_type_filters.is_empty()
+                                && !app.tag_type_typing
+                            {
+                                app.exit_filter_mode();
+                            } else {
+                                app.pop_filter_char();
+                            }
                         }
                     }
 
