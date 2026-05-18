@@ -1943,8 +1943,12 @@ impl App {
     }
 
     /// Advance the cursor to the next video file in the filtered list and open
-    /// it in mpv. Wraps around at the end of the list.
+    /// it in mpv. Requires mpv to already be running.
     pub fn view_next_video(&mut self) {
+        if !self.mpv.is_connected() {
+            self.status_message = Some("mpv: not running".into());
+            return;
+        }
         let start = self.selected;
         let len = self.filtered.len();
         if len == 0 { return; }
@@ -1971,8 +1975,12 @@ impl App {
     }
 
     /// Move the cursor to the previous video file in the filtered list and open
-    /// it in mpv. Wraps around at the start of the list.
+    /// it in mpv. Requires mpv to already be running.
     pub fn view_prev_video(&mut self) {
+        if !self.mpv.is_connected() {
+            self.status_message = Some("mpv: not running".into());
+            return;
+        }
         let start = self.selected;
         let len = self.filtered.len();
         if len == 0 { return; }
@@ -2000,6 +2008,10 @@ impl App {
 
     /// Toggle play/pause in the running mpv instance.
     pub fn mpv_play_pause(&mut self) {
+        if !self.mpv.is_connected() {
+            self.status_message = Some("mpv: not running".into());
+            return;
+        }
         if let Err(e) = self.mpv.play_pause() {
             self.status_message = Some(e.to_string());
         }
@@ -2007,6 +2019,10 @@ impl App {
 
     /// Stop playback in mpv (keeps mpv alive in idle mode).
     pub fn mpv_stop(&mut self) {
+        if !self.mpv.is_connected() {
+            self.status_message = Some("mpv: not running".into());
+            return;
+        }
         if let Err(e) = self.mpv.stop() {
             self.status_message = Some(e.to_string());
         }
