@@ -474,8 +474,6 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
 fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
     let title = if app.command.is_some() {
         " Command "
-    } else if app.filter_mode {
-        " /Filter "
     } else {
         " Filter "
     };
@@ -677,7 +675,12 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(spans)
     };
 
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let border_style = if app.filter_mode || app.command.is_some() {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+    let block = Block::default().borders(Borders::ALL).title(title).border_style(border_style);
     let inner = block.inner(area);
 
     frame.render_widget(block, area);
