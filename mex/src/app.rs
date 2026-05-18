@@ -2667,7 +2667,7 @@ mod tests {
                 os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             })
             .collect();
-        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into(), vec![])
+        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new())
     }
 
     /// Build a test App with extra non-image rows appended for navigation tests.
@@ -2706,7 +2706,7 @@ mod tests {
                 os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             });
         }
-        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into(), vec![])
+        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new())
     }
 
     // ── Dispatch-count tests ────────────────────────────────────────────────
@@ -2894,7 +2894,7 @@ mod tests {
                 idx += 1;
             }
         }
-        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![])
+        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new())
     }
 
     // ── Home (non-selecting) ────────────────────────────────────────────────
@@ -3190,7 +3190,7 @@ mod tests {
                 os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             })
             .collect();
-        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![])
+        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new())
     }
 
     #[test]
@@ -3414,7 +3414,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let image_state = ThreadProtocol::new(tx, None);
         let picker = Picker::halfblocks();
-        App::new("test.db".into(), String::new(), String::new(), vec![], picker, image_state, "halfblocks".into(), vec![])
+        App::new("test.db".into(), String::new(), String::new(), vec![], picker, image_state, "halfblocks".into(), vec![], String::new())
     }
 
     #[test]
@@ -3610,7 +3610,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
         app.enter_command_mode();
         "tag tr".chars().for_each(|c| app.push_command_char(c));
         let suggestions = app.tag_arg_suggestions();
@@ -3631,7 +3631,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
         app.enter_command_mode();
         "tag newtag@per".chars().for_each(|c| app.push_command_char(c));
         let suggestions = app.tag_arg_suggestions();
@@ -3650,7 +3650,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
         app.enter_command_mode();
         "tag vac".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -3669,7 +3669,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
         app.enter_command_mode();
         "tag newtag@per".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -3741,7 +3741,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
         app.command = Some("untag tr".into());
         let suggestions = app.tag_arg_suggestions();
         assert!(suggestions.contains(&"travel".to_string()));
@@ -3760,7 +3760,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
         app.enter_command_mode();
         "untag vac".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -3779,7 +3779,7 @@ mod tests {
                 derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             }
         ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![]);
+        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
         app.enter_command_mode();
         "untag vacation tri".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -3810,7 +3810,7 @@ mod tests {
                 orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
             })
             .collect();
-        App::new("test.db".into(), root, views_root.to_string(), files, picker, image_state, "halfblocks".into(), vec![])
+        App::new("test.db".into(), root, views_root.to_string(), files, picker, image_state, "halfblocks".into(), vec![], String::new())
     }
 
     #[test]
