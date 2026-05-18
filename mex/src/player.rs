@@ -120,6 +120,8 @@ pub enum MpvEvent {
     Filename(Option<String>),
     /// `idle-active` property changed.
     IdleActive(bool),
+    /// `eof-reached` property changed — `true` when playback hit the end of the file.
+    EofReached(bool),
 }
 
 // ── Event listener ────────────────────────────────────────────────────────────
@@ -151,6 +153,7 @@ pub fn start_event_listener(socket_path: PathBuf, tx: mpsc::Sender<MpvEvent>) {
                         "{\"command\":[\"observe_property\",1,\"pause\"]}\n",
                         "{\"command\":[\"observe_property\",2,\"filename\"]}\n",
                         "{\"command\":[\"observe_property\",3,\"idle-active\"]}\n",
+                        "{\"command\":[\"observe_property\",4,\"eof-reached\"]}\n",
                     ];
                     let mut ok = true;
                     for cmd in &cmds {
@@ -216,6 +219,7 @@ fn parse_mpv_event(line: &str) -> Option<MpvEvent> {
             Some(MpvEvent::Filename(filename))
         }
         "idle-active" => Some(MpvEvent::IdleActive(v.get("data")?.as_bool()?)),
+        "eof-reached" => Some(MpvEvent::EofReached(v.get("data")?.as_bool()?)),
         _ => None,
     }
 }
@@ -229,6 +233,8 @@ pub trait RemoteController {
     fn stop(&self) -> anyhow::Result<()>;
     /// Toggle play / pause.
     fn play_pause(&self) -> anyhow::Result<()>;
+    /// Ensure playback is running (un-pause if paused).
+    fn play(&self) -> anyhow::Result<()>;
     /// Return true if the player socket is reachable right now.
     fn is_connected(&self) -> bool;
 }
@@ -368,6 +374,10 @@ impl RemoteController for MpvController {
 
     fn play_pause(&self) -> anyhow::Result<()> {
         self.send_command(r#"{"command":["cycle","pause"]}"#)
+    }
+
+    fn play(&self) -> anyhow::Result<()> {
+        self.send_command(r#"{"command":["set_property","pause",false]}"#)
     }
 
     fn is_connected(&self) -> bool {
