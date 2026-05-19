@@ -1,5 +1,8 @@
 use anyhow::Result;
+use regex::Regex;
 use rusqlite::{Connection, OptionalExtension};
+
+pub const PATH_RE: &str = r"^(?P<year>\d{4})/(?:\d{4})-(?P<month>0[1-9]|1[0-2])-(?:(?P<day>0[1-9]|[12]\d|3[01])-(?:(?P<day_cap>[a-z0-9-]+)(?:\-(?P<day_coll>\d{4}))?|(?P<day_cnt>\d{4}))|(?P<slug>[a-z0-9-]{3,})-(?P<slug_cnt>\d{4})(?:\-(?P<slug_cap>[a-z0-9-]+))?)\.(?P<ext>[a-z0-9]+)$";
 
 #[derive(Clone, Debug)]
 pub struct MediaFile {
@@ -525,6 +528,113 @@ pub fn fix_ext(db_path: &str, target_root: &str, file_id: &str, new_ext: &str) -
     conn.execute(
         "UPDATE media SET target_path = ?1, ext = ?2 WHERE id = ?3",
         rusqlite::params![new_target_path, new_ext, file_id],
+    )?;
+
+    Ok(())
+}
+
+/// Fix (add / edit / remove) the caption slug of a single media file.
+///
+/// `new_caption` must already be a valid kebab-case caption (lowercase, `a-z0-9-`, max 42
+/// chars) or an empty string (to remove the caption entirely).
+///
+/// Filename surgery is regex-driven:
+/// - The `target_path` is parsed using the definitive regex from `REGEXP.md`.
+/// - All structural components are preserved, and the new caption is substituted.
+/// - If the new path is occupied, a collision counter is added/incremented.
+pub fn fix_caption(
+    db_path: &str,
+    target_root: &str,
+    file_id: &str,
+    new_caption: &str,
+) -> Result<()> {
+    use std::path::Path;
+
+    let conn = Connection::open(db_path)?;
+    let target_path: String = conn.query_row(
+        "SELECT target_path FROM media WHERE id = ?1",
+        [file_id],
+        |row| row.get(0),
+    )?;
+
+    let re = Regex::new(PATH_RE)?;
+    let caps = re
+        .captures(&target_path)
+        .ok_or_else(|| anyhow::anyhow!("file path does not match formal spec: {target_path}"))?;
+
+    let year = caps.name("year").map(|m| m.as_str()).unwrap_or("0000");
+    let month = caps.name("month").map(|m| m.as_str()).unwrap_or("00");
+    let ext = caps.name("ext").map(|m| m.as_str()).unwrap_or("bin");
+
+    // Rebuild builder
+    let build_with_collision = |cap: &str, coll: Option<&str>| -> String {
+        let stem = if let Some(day_m) = caps.name("day") {
+            let day = day_m.as_str();
+            if cap.is_empty() {
+                format!("{year}-{month}-{day}-{}", caps.name("day_cnt").map(|m| m.as_str()).unwrap_or("0001"))
+            } else if let Some(c) = coll {
+                format!("{year}-{month}-{day}-{cap}-{c}")
+            } else {
+                format!("{year}-{month}-{day}-{cap}")
+            }
+        } else if let Some(slug_m) = caps.name("slug") {
+            let slug = slug_m.as_str();
+            let cnt = caps.name("slug_cnt").map(|m| m.as_str()).unwrap_or("0001");
+            if cap.is_empty() {
+                format!("{year}-{month}-{slug}-{cnt}")
+            } else {
+                format!("{year}-{month}-{slug}-{cnt}-{cap}")
+            }
+        } else {
+            "unknown".to_string()
+        };
+
+        format!("{year}/{stem}.{ext}")
+    };
+
+    let base_new_path = build_with_collision(new_caption, caps.name("day_coll").map(|m| m.as_str()));
+
+    let mut final_path = base_new_path;
+    if final_path != target_path {
+        let mut counter = 2u32;
+        
+        while Path::new(target_root).join(&final_path).exists() || 
+              conn.query_row("SELECT COUNT(*) FROM media WHERE target_path = ?1 AND id != ?2 AND status IN ('moved','trashed','deleted')", rusqlite::params![final_path, file_id], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0 
+        {
+            if let Some(day_m) = caps.name("day") {
+                let day = day_m.as_str();
+                if new_caption.is_empty() {
+                    final_path = format!("{year}/{year}-{month}-{day}-{:04}.{ext}", counter);
+                } else {
+                    final_path = format!("{year}/{year}-{month}-{day}-{new_caption}-{:04}.{ext}", counter);
+                }
+            } else if let Some(slug_m) = caps.name("slug") {
+                let slug = slug_m.as_str();
+                final_path = format!("{year}/{year}-{month}-{slug}-{:04}{}.{ext}", 
+                    counter,
+                    if new_caption.is_empty() { "".to_string() } else { format!("-{new_caption}") }
+                );
+            }
+            counter += 1;
+        }
+    }
+
+    // Rename on disk
+    let old_abs = Path::new(target_root).join(&target_path);
+    let new_abs = Path::new(target_root).join(&final_path);
+
+    if old_abs != new_abs && old_abs.exists() {
+        if let Some(parent) = new_abs.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&old_abs, &new_abs)?;
+    }
+
+    // Update DB
+    let stored_caption = if new_caption.is_empty() { None } else { Some(new_caption) };
+    conn.execute(
+        "UPDATE media SET target_path = ?1, caption_slug = ?2 WHERE id = ?3",
+        rusqlite::params![final_path, stored_caption, file_id],
     )?;
 
     Ok(())

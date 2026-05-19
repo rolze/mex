@@ -446,6 +446,20 @@ fn run_loop(
                 }
                 // Any keypress clears a displayed status message.
                 app.status_message = None;
+
+                // Caption-edit mode: swallow all keys and route to caption handlers.
+                if app.caption_edit.is_some() {
+                    match (key.modifiers, key.code) {
+                        (_, KeyCode::Enter) => app.confirm_caption_edit(),
+                        (_, KeyCode::Esc) => app.cancel_caption_edit(),
+                        (_, KeyCode::Backspace) => app.pop_caption_char(),
+                        (_, KeyCode::Delete) => app.clear_caption(),
+                        (_, KeyCode::Char(c)) => app.push_caption_char(c),
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 match (key.modifiers, key.code) {
                     // Esc: exit filter mode → cancel command → clear selection → close preview → clear filter
                     (_, KeyCode::Esc) => {
@@ -520,6 +534,15 @@ fn run_loop(
                     // Trash / Keep
                     (_, KeyCode::Delete) if app.command.is_none() => app.trash_selected(),
                     (_, KeyCode::Insert) if app.command.is_none() => app.keep_selected(),
+
+                    // F2: enter inline caption editor (normal mode only, list non-empty).
+                    (_, KeyCode::F(2))
+                        if app.command.is_none()
+                            && !app.filter_mode
+                            && !app.filtered.is_empty() =>
+                    {
+                        app.enter_caption_edit()
+                    }
 
                     // Backspace: pop from command buffer or filter (filter only in filter mode)
                     (_, KeyCode::Backspace) => {

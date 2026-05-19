@@ -13,18 +13,9 @@ A personal, opinionated terminal media browser and importer written in **Rust + 
 - **Fixes** metadata in-place: `:fix-date` to correct date prefixes and `:fix-ext` to repair wrong file extensions.
 - **Previews** images inline using Kitty / Sixel / iTerm2 / halfblock protocols — auto-detected, overridable via `MEX_PROTOCOL`.
 
-## Filename convention
+## Filename Convention
 
-```
-<yyyy>/  yyyy-MM-<slug>-####-<caption>.<ext>   ← slug + caption
-         yyyy-MM-<slug>-####.<ext>              ← slug only
-         yyyy-MM-DD-<caption>.<ext>             ← caption only
-         yyyy-MM-DD-####.<ext>                  ← counter only
-```
-
-- Year-based folder, date prefix on every file.
-- **Slug** — the only file-based grouper (derived from source folder names; falls back to `yyyy-MM-DD`).
-- **Caption** — optional short description embedded in the filename; user-editable.
+The library enforces a strict filename and directory structure to ensure long-term maintainability and easy browsing. See [REGEXP.md](REGEXP.md) for the formal specification, component definitions, and validation rules.
 
 ## Configuration
 

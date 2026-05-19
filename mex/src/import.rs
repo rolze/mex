@@ -143,7 +143,7 @@ pub fn is_dump_folder(name: &str) -> bool {
 
 // ── Transliteration ───────────────────────────────────────────────────────────
 
-fn transliterate(s: &str) -> String {
+pub fn transliterate(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
     for ch in s.chars() {
         match ch {

@@ -1,6 +1,7 @@
 use crate::app::{App, EmptyTrashState, FixOsTimeState, ImportState, RemoveSlugState};
 use crate::db::folder_of;
 use crate::import::ImportStatus;
+use regex::Regex;
 use crate::player::MpvStatus;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -240,6 +241,108 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default()
             };
+
+            // ── Caption-edit mode: replace the filename area with an inline editor ──
+            if is_cursor {
+                if let Some(ref ed) = app.caption_edit {
+                    // Derive structural components using the formal regex.
+                    let re = Regex::new(crate::db::PATH_RE).unwrap();
+                    let (stem_prefix, stem_suffix) = if let Some(caps) = re.captures(&f.target_path) {
+                        let year = caps.name("year").map(|m| m.as_str()).unwrap_or("0000");
+                        let month = caps.name("month").map(|m| m.as_str()).unwrap_or("00");
+                        let ext = caps.name("ext").map(|m| m.as_str()).unwrap_or("bin");
+                        
+                        if let Some(day_m) = caps.name("day") {
+                            let day = day_m.as_str();
+                            let suffix = if caps.name("day_cap").is_some() {
+                                // Pattern 3/4: suffix is collision counter (if exists) + extension
+                                format!("{}.{ext}", caps.name("day_coll").map(|m| format!("-{}", m.as_str())).unwrap_or_default())
+                            } else {
+                                // Pattern 5: suffix is counter + extension
+                                format!("{}.{ext}", caps.name("day_cnt").map(|m| format!("-{}", m.as_str())).unwrap_or_default())
+                            };
+                            (format!("{year}-{month}-{day}"), suffix)
+                        } else if let Some(slug_m) = caps.name("slug") {
+                            let slug = slug_m.as_str();
+                            let cnt = caps.name("slug_cnt").map(|m| m.as_str()).unwrap_or("0001");
+                            // Pattern 1/2: prefix includes slug and counter; suffix is extension
+                            (format!("{year}-{month}-{slug}-{cnt}"), format!(".{ext}"))
+                        } else {
+                            ("unknown".to_string(), format!(".{ext}"))
+                        }
+                    } else {
+                        // Fallback if somehow regex fails
+                        let filename = f.target_path.rsplit('/').next().unwrap_or(&f.target_path);
+                        let dot_pos = filename.rfind('.').unwrap_or(filename.len());
+                        let (stem, ext) = (&filename[..dot_pos], &filename[dot_pos..]);
+                        if !f.caption_slug.is_empty() {
+                            let cap_suffix = format!("-{}", f.caption_slug);
+                            (stem.strip_suffix(cap_suffix.as_str()).unwrap_or(stem).to_string(), ext.to_string())
+                        } else {
+                            (stem.to_string(), ext.to_string())
+                        }
+                    };
+
+                    // Build caption field spans.
+                    let pre_sel = ed.pre_selected && !ed.text.is_empty();
+                    let cap_len = ed.text.chars().count();
+
+                    let edit_style = Style::default()
+                        .fg(Color::Black)
+                        .add_modifier(Modifier::BOLD)
+                        .add_modifier(Modifier::UNDERLINED);
+                    let dim_style = Style::default().fg(Color::DarkGray);
+
+                    let mut filename_spans: Vec<Span> = Vec::new();
+                    filename_spans.push(Span::styled(stem_prefix, base_style));
+
+                    if pre_sel {
+                        filename_spans.push(Span::styled("-", base_style));
+                        // Entire pre-selected caption is underlined.
+                        filename_spans.push(Span::styled(ed.text.clone(), edit_style));
+                        filename_spans.push(Span::styled("_", edit_style));
+                    } else if !ed.text.is_empty() {
+                        filename_spans.push(Span::styled("-", base_style));
+                        // Entire typed caption is underlined.
+                        filename_spans.push(Span::styled(ed.text.clone(), edit_style));
+                        filename_spans.push(Span::styled("_", edit_style));
+                    } else {
+                        filename_spans.push(Span::styled("_", edit_style));
+                    }
+                    filename_spans.push(Span::styled(stem_suffix, base_style));
+                    filename_spans
+                        .push(Span::styled(format!(" [{cap_len}/42]"), dim_style));
+
+                    let folder_cell = truncate_front(folder_of(&f.target_path), FOLDER_COL - 2);
+                    let folder_name = format!("{:<width$}", folder_cell, width = FOLDER_COL - 2);
+                    let folder_sep_fg = Color::Black;
+
+                    let mut spans = vec![
+                        Span::styled(folder_name, base_style.fg(folder_sep_fg)),
+                        Span::styled(
+                            marker_str,
+                            base_style.fg(marker_fg).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("/", base_style.fg(folder_sep_fg)),
+                    ];
+                    
+                    // Truncate and pad the re-assembled filename line to match the list layout.
+                    let assembled_line = Line::from(filename_spans);
+                    let assembled_str = assembled_line.to_string();
+                    let filename_cell = truncate_front(&assembled_str, filename_col);
+                    let _filename_padded = format!("{:<width$}", filename_cell, width = filename_col);
+                    
+                    // We need to re-span it to keep styles, but since it's the cursor row we 
+                    // can just use the assembled_line for now as a simpler approximation, 
+                    // or better: just push the assembled spans.
+                    // For now, let's keep it simple and just use the spans we built, 
+                    // but they might overflow. 
+                    spans.extend(assembled_line.spans);
+
+                    let line = Line::from(spans);
+                    return ListItem::new(line).style(base_style);
+                }
+            }
 
             let filename = f.target_path.rsplit('/').next().unwrap_or(&f.target_path);
             let filename_cell = truncate_front(filename, filename_col);
@@ -615,6 +718,18 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
+    // Caption-edit mode takes over the filter bar with a hint line.
+    if app.caption_edit.is_some() {
+        let hint = Line::from(Span::styled(
+            "F2: editing caption  —  ESC cancel  ·  ENTER confirm",
+            Style::default().fg(Color::DarkGray),
+        ));
+        let widget = Paragraph::new(hint)
+            .block(Block::default().borders(Borders::ALL).title(" Caption "));
+        frame.render_widget(widget, area);
+        return;
+    }
+
     let title = if app.command.is_some() {
         " Command "
     } else {

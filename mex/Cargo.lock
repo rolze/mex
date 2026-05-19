@@ -1199,6 +1199,7 @@ dependencies = [
  "kamadak-exif",
  "ratatui",
  "ratatui-image",
+ "regex",
  "rusqlite",
  "serde_json",
  "sha2",

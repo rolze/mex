@@ -135,6 +135,19 @@ pub enum EmptyTrashMsg {
     Done(usize, usize), // (deleted, errors)
 }
 
+// ── Caption-edit state ────────────────────────────────────────────────────────
+
+/// State for the inline caption editor (F2).
+pub struct CaptionEdit {
+    /// Current text in the editor (always valid caption chars only).
+    pub text: String,
+    /// When true the whole text is pre-selected: the first typed char replaces
+    /// everything, Backspace clears it.
+    pub pre_selected: bool,
+}
+
+const CAPTION_MAX: usize = 42;
+
 const CACHE_MAX: usize = 30;
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
 
@@ -240,6 +253,8 @@ pub struct App {
     /// True while the user is actively editing the filter (entered via `/`).
     /// When false, printable keys do not feed the filter.
     pub filter_mode: bool,
+    /// Active inline caption editor (F2). `None` = not editing.
+    pub caption_edit: Option<CaptionEdit>,
 }
 
 impl App {
@@ -331,6 +346,7 @@ impl App {
             },
             mpv_ended: false,
             filter_mode: false,
+            caption_edit: None,
         }
     }
 
@@ -686,7 +702,123 @@ impl App {
         self.import_path_changed_at = None;
     }
 
-    /// Called whenever the import path argument may have changed.
+    // ── Caption edit (F2) ─────────────────────────────────────────────────────
+
+    /// Enter the inline caption editor for the file under the cursor.
+    /// Pre-selects any existing caption so the first keystroke overwrites it.
+    pub fn enter_caption_edit(&mut self) {
+        use regex::Regex;
+        if let Some(file) = self.selected_file() {
+            let re = Regex::new(crate::db::PATH_RE).unwrap();
+            let current = if let Some(caps) = re.captures(&file.target_path) {
+                caps.name("day_cap")
+                    .or_else(|| caps.name("slug_cap"))
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default()
+            } else {
+                file.caption_slug.clone()
+            };
+
+            self.caption_edit = Some(CaptionEdit {
+                pre_selected: !current.is_empty(),
+                text: current,
+            });
+            self.status_message = None;
+        }
+    }
+
+    /// Push a printable character into the caption editor.
+    ///
+    /// Applies on-the-fly transliteration (`space→'-'`, umlauts, ß) and rejects
+    /// characters that are not `a-z`, `0-9`, or `-`.
+    ///
+    /// If text is pre-selected, it remains pre-selected (highlighted) but
+    /// new characters are appended to the end.
+    pub fn push_caption_char(&mut self, c: char) {
+        let Some(ref mut ed) = self.caption_edit else {
+            return;
+        };
+
+        // On-the-fly transliteration.
+        let translated: Option<&str> = match c {
+            ' ' => Some("-"),
+            'ä' | 'Ä' => Some("ae"),
+            'ö' | 'Ö' => Some("oe"),
+            'ü' | 'Ü' => Some("ue"),
+            'ß' => Some("ss"),
+            _ => None,
+        };
+
+        if let Some(s) = translated {
+            for ch in s.chars() {
+                if ed.text.chars().count() < CAPTION_MAX {
+                    ed.text.push(ch);
+                }
+            }
+            ed.pre_selected = false;
+            return;
+        }
+
+        // Validate: only a-z, 0-9, '-'.
+        let lower = c.to_ascii_lowercase();
+        if !lower.is_ascii_alphanumeric() && lower != '-' {
+            self.status_message = Some("Invalid character for filename".into());
+            return;
+        }
+
+        if ed.text.chars().count() < CAPTION_MAX {
+            ed.text.push(lower);
+        }
+        ed.pre_selected = false;
+    }
+
+    /// Remove the last character from the caption editor.
+    pub fn pop_caption_char(&mut self) {
+        let Some(ref mut ed) = self.caption_edit else {
+            return;
+        };
+        ed.text.pop();
+        ed.pre_selected = false;
+    }
+
+    /// Clear the entire caption text (called by <DEL>).
+    pub fn clear_caption(&mut self) {
+        if let Some(ref mut ed) = self.caption_edit {
+            ed.text.clear();
+            ed.pre_selected = false;
+        }
+    }
+
+    /// Confirm the caption edit: rename the file, update the DB, reload.
+    pub fn confirm_caption_edit(&mut self) {
+        let Some(ed) = self.caption_edit.take() else {
+            return;
+        };
+        let new_caption = ed.text.trim_matches('-').to_string();
+
+        let file_id = match self.selected_file() {
+            Some(f) => f.id.clone(),
+            None => return,
+        };
+
+        match crate::db::fix_caption(&self.db_path, &self.target_root, &file_id, &new_caption) {
+            Ok(()) => {
+                if let Err(e) = self.reload_preserve_cursor() {
+                    self.status_message = Some(format!("caption: reload failed: {e}"));
+                }
+            }
+            Err(e) => {
+                self.status_message = Some(format!("caption: {e}"));
+            }
+        }
+    }
+
+    /// Cancel the caption editor without applying any change.
+    pub fn cancel_caption_edit(&mut self) {
+        self.caption_edit = None;
+    }
+
+
     /// Clears the hint and arms the debounce timer if in import-path context.
     fn on_import_path_changed(&mut self) {
         if self
