@@ -5,6 +5,7 @@ use std::path::PathBuf;
 /// Per-installation mex configuration.
 /// Stored in `~/.config/mex/config.toml` (key = value, one per line).
 /// Never written to `.mex.db` — the media DB is shared across devices.
+#[derive(Default)]
 pub struct Config {
     pub target_root: String,
     /// Root directory where `:create-view` materialises named view directories.
@@ -20,15 +21,13 @@ pub struct Config {
     pub mpv_path: String,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self { target_root: String::new(), views_root: String::new(), db_path: String::new(), mpv_path: String::new() }
-    }
-}
 
 fn config_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".config").join("mex").join("config.toml")
+    PathBuf::from(home)
+        .join(".config")
+        .join("mex")
+        .join("config.toml")
 }
 
 /// Read the local config file. Returns `Config::default()` if the file does

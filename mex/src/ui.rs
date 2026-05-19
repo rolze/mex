@@ -9,7 +9,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
-use ratatui_image::{StatefulImage, thread::ThreadProtocol};
+use ratatui_image::{thread::ThreadProtocol, StatefulImage};
 
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -18,7 +18,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Import screens take over the full area (except filter bar).
     match &app.import_state {
-        ImportState::Scanning { scanned, current_file } => {
+        ImportState::Scanning {
+            scanned,
+            current_file,
+        } => {
             let scanned = *scanned;
             let current_file = current_file.clone();
             draw_import_scanning(frame, app, area, scanned, &current_file);
@@ -28,21 +31,43 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             draw_import_preview(frame, app, area);
             return;
         }
-        ImportState::Copying { done, total, current_file, copied, skipped_dup, errors } => {
+        ImportState::Copying {
+            done,
+            total,
+            current_file,
+            copied,
+            skipped_dup,
+            errors,
+        } => {
             let done = *done;
             let total = *total;
             let copied = *copied;
             let skipped_dup = *skipped_dup;
             let errors = *errors;
             let current_file = current_file.clone();
-            draw_import_copying(frame, app, area, done, total, &current_file, copied, skipped_dup, errors);
+            draw_import_copying(
+                frame,
+                app,
+                area,
+                done,
+                total,
+                &current_file,
+                copied,
+                skipped_dup,
+                errors,
+            );
             return;
         }
         _ => {}
     }
 
     // Remove-slug progress overlay takes over the full screen while running.
-    if let RemoveSlugState::Running { done, total, current } = &app.remove_slug_state {
+    if let RemoveSlugState::Running {
+        done,
+        total,
+        current,
+    } = &app.remove_slug_state
+    {
         let done = *done;
         let total = *total;
         let current = current.clone();
@@ -51,7 +76,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Fix-os-time progress overlay takes over the full screen while running.
-    if let FixOsTimeState::Running { done, total, current } = &app.fix_os_time_state {
+    if let FixOsTimeState::Running {
+        done,
+        total,
+        current,
+    } = &app.fix_os_time_state
+    {
         let done = *done;
         let total = *total;
         let current = current.clone();
@@ -137,13 +167,16 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
         if !app.is_filter_active() {
             format!(" mex — {} / {} ({} selected) ", pos, total, sel)
         } else {
-            format!(" mex — {} / {} / {} ({} selected) ", pos, filtered, total, sel)
+            format!(
+                " mex — {} / {} / {} ({} selected) ",
+                pos, filtered, total, sel
+            )
         }
     };
 
     // Fixed column widths (folder is always a short year prefix)
     let inner_width = area.width.saturating_sub(2) as usize; // subtract borders
-    const FOLDER_COL: usize = 6;  // e.g. "2022/ "
+    const FOLDER_COL: usize = 6; // e.g. "2022/ "
     const TAGS_COL: usize = 30;
     const GAP: usize = 1;
     let filename_col = inner_width
@@ -170,7 +203,15 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let folder_name = format!("{:<width$}", folder_cell, width = FOLDER_COL - 2);
             // Marker priority: trashed > missing > selected > normal.
             let show_dot = is_selected && !is_trashed && !is_missing;
-            let marker_str = if is_trashed { "🗑" } else if is_missing { "!" } else if show_dot { "•" } else { " " };
+            let marker_str = if is_trashed {
+                "🗑"
+            } else if is_missing {
+                "!"
+            } else if show_dot {
+                "•"
+            } else {
+                " "
+            };
             let marker_fg = if is_cursor {
                 Color::Black
             } else if is_trashed {
@@ -182,11 +223,18 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             };
 
             let base_style = if is_cursor {
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else if is_trashed {
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM)
             } else if is_missing {
-                Style::default().fg(Color::Rgb(220, 100, 100)).bg(Color::Rgb(60, 15, 15))
+                Style::default()
+                    .fg(Color::Rgb(220, 100, 100))
+                    .bg(Color::Rgb(60, 15, 15))
             } else if is_selected {
                 Style::default().bg(Color::Rgb(50, 50, 90))
             } else {
@@ -199,12 +247,44 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             let filename_padded = format!("{:<width$}", filename_cell, width = filename_col);
 
             // Highlight slug (cyan+bold) and caption (dark-yellow+bold) independently.
-            let slug_hi: &str    = if !f.derived_slug.is_empty()  { &f.derived_slug  } else { "" };
-            let caption_hi: &str = if !f.caption_slug.is_empty() { &f.caption_slug } else { "" };
+            let slug_hi: &str = if !f.derived_slug.is_empty() {
+                &f.derived_slug
+            } else {
+                ""
+            };
+            let caption_hi: &str = if !f.caption_slug.is_empty() {
+                &f.caption_slug
+            } else {
+                ""
+            };
 
-            let base_fg    = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else if is_missing { Color::Rgb(220, 100, 100) } else { Color::White };
-            let slug_fg    = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else if is_missing { Color::Rgb(220, 100, 100) } else { Color::Cyan };
-            let caption_fg = if is_cursor { Color::Black } else if is_trashed { Color::DarkGray } else if is_missing { Color::Rgb(220, 100, 100) } else { Color::Yellow };
+            let base_fg = if is_cursor {
+                Color::Black
+            } else if is_trashed {
+                Color::DarkGray
+            } else if is_missing {
+                Color::Rgb(220, 100, 100)
+            } else {
+                Color::White
+            };
+            let slug_fg = if is_cursor {
+                Color::Black
+            } else if is_trashed {
+                Color::DarkGray
+            } else if is_missing {
+                Color::Rgb(220, 100, 100)
+            } else {
+                Color::Cyan
+            };
+            let caption_fg = if is_cursor {
+                Color::Black
+            } else if is_trashed {
+                Color::DarkGray
+            } else if is_missing {
+                Color::Rgb(220, 100, 100)
+            } else {
+                Color::Yellow
+            };
 
             // Build fg highlight regions: (start_byte, end_byte, fg_color); slug before caption.
             let mut regions: Vec<(usize, usize, Color)> = Vec::new();
@@ -247,32 +327,68 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             // Build spans by splitting at all region and filter-match boundaries.
             let filename_spans: Vec<Span> = {
                 let mut pts: Vec<usize> = vec![0, filename_padded.len()];
-                for (s, e, _) in &regions    { pts.push(*s); pts.push(*e); }
-                for (s, e)    in &filter_matches { pts.push(*s); pts.push(*e); }
+                for (s, e, _) in &regions {
+                    pts.push(*s);
+                    pts.push(*e);
+                }
+                for (s, e) in &filter_matches {
+                    pts.push(*s);
+                    pts.push(*e);
+                }
                 pts.sort_unstable();
                 pts.dedup();
-                pts.windows(2).map(|w| {
-                    let (seg_start, seg_end) = (w[0], w[1]);
-                    let text = filename_padded[seg_start..seg_end].to_string();
-                    let fg_region = regions.iter().find(|(s, e, _)| *s <= seg_start && seg_end <= *e);
-                    let in_filter = filter_matches.iter().any(|(s, e)| *s <= seg_start && seg_end <= *e);
-                    let fg = fg_region.map(|(_, _, c)| *c).unwrap_or(base_fg);
-                    let mut style = base_style.fg(fg);
-                    if fg_region.is_some() { style = style.add_modifier(Modifier::BOLD); }
-                    if in_filter { style = style.bg(Color::Rgb(90, 60, 0)); }
-                    Span::styled(text, style)
-                }).collect()
+                pts.windows(2)
+                    .map(|w| {
+                        let (seg_start, seg_end) = (w[0], w[1]);
+                        let text = filename_padded[seg_start..seg_end].to_string();
+                        let fg_region = regions
+                            .iter()
+                            .find(|(s, e, _)| *s <= seg_start && seg_end <= *e);
+                        let in_filter = filter_matches
+                            .iter()
+                            .any(|(s, e)| *s <= seg_start && seg_end <= *e);
+                        let fg = fg_region.map(|(_, _, c)| *c).unwrap_or(base_fg);
+                        let mut style = base_style.fg(fg);
+                        if fg_region.is_some() {
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        if in_filter {
+                            style = style.bg(Color::Rgb(90, 60, 0));
+                        }
+                        Span::styled(text, style)
+                    })
+                    .collect()
             };
 
-            let tag_fg = if is_cursor { Color::Black } else if is_missing { Color::Rgb(180, 60, 60) } else { Color::Green };
-            let sep_fg = if is_cursor { Color::Black } else { Color::DarkGray };
-            let (tag_span_vec, tags_used) = tag_spans(&f.tags, base_style, tag_fg, sep_fg, TAGS_COL);
+            let tag_fg = if is_cursor {
+                Color::Black
+            } else if is_missing {
+                Color::Rgb(180, 60, 60)
+            } else {
+                Color::Green
+            };
+            let sep_fg = if is_cursor {
+                Color::Black
+            } else {
+                Color::DarkGray
+            };
+            let (tag_span_vec, tags_used) =
+                tag_spans(&f.tags, base_style, tag_fg, sep_fg, TAGS_COL);
             let tags_padding = TAGS_COL.saturating_sub(tags_used);
 
-            let folder_sep_fg = if is_cursor { Color::Black } else if is_missing { Color::Rgb(150, 50, 50) } else { Color::DarkGray };
+            let folder_sep_fg = if is_cursor {
+                Color::Black
+            } else if is_missing {
+                Color::Rgb(150, 50, 50)
+            } else {
+                Color::DarkGray
+            };
             let mut spans = vec![
                 Span::styled(folder_name, base_style.fg(folder_sep_fg)),
-                Span::styled(marker_str, base_style.fg(marker_fg).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    marker_str,
+                    base_style.fg(marker_fg).add_modifier(Modifier::BOLD),
+                ),
                 Span::styled("/", base_style.fg(folder_sep_fg)),
             ];
             spans.extend(filename_spans);
@@ -392,11 +508,19 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(meta_area);
 
-        let date_str = if !file.os_date.is_empty() { file.os_date.as_str() }
-                       else if !file.derived_date.is_empty() { file.derived_date.as_str() }
-                       else { "—" };
+        let date_str = if !file.os_date.is_empty() {
+            file.os_date.as_str()
+        } else if !file.derived_date.is_empty() {
+            file.derived_date.as_str()
+        } else {
+            "—"
+        };
 
-        let orig_raw = if !file.orig_filename.is_empty() { file.orig_filename.as_str() } else { "—" };
+        let orig_raw = if !file.orig_filename.is_empty() {
+            file.orig_filename.as_str()
+        } else {
+            "—"
+        };
 
         // Label "File  " / "Orig  " = 6 chars; truncate paths to fit the column.
         const LABEL_WIDTH: usize = 6;
@@ -420,10 +544,16 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
         ]);
         frame.render_widget(left, cols[0]);
 
-        let slug_str = if !file.derived_slug.is_empty() { file.derived_slug.as_str() }
-                       else { "—" };
-        let caption_str = if !file.caption_slug.is_empty() { file.caption_slug.as_str() }
-                          else { "—" };
+        let slug_str = if !file.derived_slug.is_empty() {
+            file.derived_slug.as_str()
+        } else {
+            "—"
+        };
+        let caption_str = if !file.caption_slug.is_empty() {
+            file.caption_slug.as_str()
+        } else {
+            "—"
+        };
 
         let mut tags_line = vec![Span::styled("Tags  ", Style::default().fg(Color::DarkGray))];
         if file.tags.is_empty() {
@@ -466,7 +596,9 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
             // Centre the spinner in the image area.
             let sx = image_area.x + image_area.width.saturating_sub(label_width) / 2;
             let sy = image_area.y + image_area.height / 2;
-            if sx + label_width <= image_area.x + image_area.width && sy < image_area.y + image_area.height {
+            if sx + label_width <= image_area.x + image_area.width
+                && sy < image_area.y + image_area.height
+            {
                 let spinner_area = Rect::new(sx, sy, label_width, 1);
                 let spinner_widget = Paragraph::new(Span::styled(
                     label,
@@ -492,7 +624,9 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
     let line = if let Some(ref cmd) = app.command {
         let mut spans: Vec<Span> = vec![Span::styled(
             format!(":{cmd}"),
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )];
 
         // Show dim suffix for command-name autocomplete (only before first space).
@@ -575,7 +709,10 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                     spans.push(Span::styled("  ✗", Style::default().fg(Color::Red)));
                 }
                 Some(crate::app::ImportPathHint::NotADir) => {
-                    spans.push(Span::styled("  ✗ not a dir", Style::default().fg(Color::Red)));
+                    spans.push(Span::styled(
+                        "  ✗ not a dir",
+                        Style::default().fg(Color::Red),
+                    ));
                 }
                 None => {}
             }
@@ -597,10 +734,14 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         // Build a boolean expression: text AND (@types OR …) AND (#tags OR …)
         // Styling: AND/OR/() = DarkGray, /text = Bold (default fg), @type = Magenta+Bold, #tag = Cyan+Bold
-        let dim   = Style::default().fg(Color::DarkGray);
-        let white = Style::default().add_modifier(Modifier::BOLD);  // default fg = visible on any theme
-        let cyan  = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
-        let mag   = Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD);
+        let dim = Style::default().fg(Color::DarkGray);
+        let white = Style::default().add_modifier(Modifier::BOLD); // default fg = visible on any theme
+        let cyan = Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD);
+        let mag = Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD);
 
         let mut spans: Vec<Span> = vec![];
         let mut need_and = false;
@@ -612,7 +753,9 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         // so the user has a clear visual cue that filter editing is active.
         if app.filter_mode || !app.filter_text.is_empty() {
             spans.push(Span::styled(format!("/{}", app.filter_text), white));
-            if !app.filter_text.is_empty() { need_and = true; }
+            if !app.filter_text.is_empty() {
+                need_and = true;
+            }
         }
 
         // ── @type group ───────────────────────────────────────────────────────
@@ -621,17 +764,25 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         let type_count = app.tag_type_filters.len() + if typing_type { 1 } else { 0 };
 
         if type_count > 0 {
-            if need_and { spans.push(and_sep()); }
+            if need_and {
+                spans.push(and_sep());
+            }
             let use_parens = type_count > 1;
-            if use_parens { spans.push(Span::styled("(", dim)); }
+            if use_parens {
+                spans.push(Span::styled("(", dim));
+            }
 
             for (i, ty) in app.tag_type_filters.iter().enumerate() {
-                if i > 0 { spans.push(Span::styled(" OR ", dim)); }
+                if i > 0 {
+                    spans.push(Span::styled(" OR ", dim));
+                }
                 spans.push(Span::styled(format!("@{ty}"), mag));
             }
 
             if typing_type {
-                if !app.tag_type_filters.is_empty() { spans.push(Span::styled(" OR ", dim)); }
+                if !app.tag_type_filters.is_empty() {
+                    spans.push(Span::styled(" OR ", dim));
+                }
                 spans.push(Span::styled(format!("@{}", app.tag_type_input), mag));
                 // dim autocomplete suffix
                 if let Some(suggestion) = app.current_type_suggestion() {
@@ -644,7 +795,9 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
 
-            if use_parens { spans.push(Span::styled(")", dim)); }
+            if use_parens {
+                spans.push(Span::styled(")", dim));
+            }
             need_and = true;
         }
 
@@ -653,17 +806,25 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         let tag_count = app.tag_filters.len() + if typing_tag { 1 } else { 0 };
 
         if tag_count > 0 {
-            if need_and { spans.push(and_sep()); }
+            if need_and {
+                spans.push(and_sep());
+            }
             let use_parens = tag_count > 1;
-            if use_parens { spans.push(Span::styled("(", dim)); }
+            if use_parens {
+                spans.push(Span::styled("(", dim));
+            }
 
             for (i, tag) in app.tag_filters.iter().enumerate() {
-                if i > 0 { spans.push(Span::styled(" OR ", dim)); }
+                if i > 0 {
+                    spans.push(Span::styled(" OR ", dim));
+                }
                 spans.push(Span::styled(format!("#{tag}"), cyan));
             }
 
             if typing_tag {
-                if !app.tag_filters.is_empty() { spans.push(Span::styled(" OR ", dim)); }
+                if !app.tag_filters.is_empty() {
+                    spans.push(Span::styled(" OR ", dim));
+                }
                 spans.push(Span::styled(format!("#{}", app.tag_input), cyan));
                 // dim autocomplete suffix
                 if let Some(suggestion) = app.current_suggestion() {
@@ -676,7 +837,9 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                 }
             }
 
-            if use_parens { spans.push(Span::styled(")", dim)); }
+            if use_parens {
+                spans.push(Span::styled(")", dim));
+            }
         }
 
         if app.filter_mode {
@@ -690,7 +853,10 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
     } else {
         Style::default()
     };
-    let block = Block::default().borders(Borders::ALL).title(title).border_style(border_style);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .border_style(border_style);
     let inner = block.inner(area);
 
     frame.render_widget(block, area);
@@ -717,8 +883,14 @@ fn draw_status_box(frame: &mut Frame, app: &App, area: Rect) {
     let (icon, text, color): (&str, &str, Color) = match &app.mpv_status {
         MpvStatus::Disconnected => ("", "—", Color::DarkGray),
         MpvStatus::Idle => ("⏹", "idle", Color::DarkGray),
-        MpvStatus::Playing { filename, paused: false } => ("▶", filename.as_str(), Color::Green),
-        MpvStatus::Playing { filename, paused: true } => ("⏸", filename.as_str(), Color::Yellow),
+        MpvStatus::Playing {
+            filename,
+            paused: false,
+        } => ("▶", filename.as_str(), Color::Green),
+        MpvStatus::Playing {
+            filename,
+            paused: true,
+        } => ("⏸", filename.as_str(), Color::Yellow),
     };
 
     let line = if icon.is_empty() {
@@ -739,7 +911,13 @@ fn draw_status_box(frame: &mut Frame, app: &App, area: Rect) {
 // ── Import UI ─────────────────────────────────────────────────────────────────
 
 /// Full-screen "Scanning…" overlay shown while the background thread walks the source.
-fn draw_import_scanning(frame: &mut Frame, app: &App, area: Rect, scanned: usize, current_file: &str) {
+fn draw_import_scanning(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    scanned: usize,
+    current_file: &str,
+) {
     let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
     let file_line = if current_file.is_empty() {
         String::new()
@@ -765,10 +943,22 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let total = entries.len();
-    let pending = entries.iter().filter(|e| e.status == ImportStatus::Pending).count();
-    let dups = entries.iter().filter(|e| e.status == ImportStatus::Duplicate).count();
-    let skipped = entries.iter().filter(|e| e.status == ImportStatus::Skipped).count();
-    let unknown = entries.iter().filter(|e| e.status == ImportStatus::UnknownDate).count();
+    let pending = entries
+        .iter()
+        .filter(|e| e.status == ImportStatus::Pending)
+        .count();
+    let dups = entries
+        .iter()
+        .filter(|e| e.status == ImportStatus::Duplicate)
+        .count();
+    let skipped = entries
+        .iter()
+        .filter(|e| e.status == ImportStatus::Skipped)
+        .count();
+    let unknown = entries
+        .iter()
+        .filter(|e| e.status == ImportStatus::UnknownDate)
+        .count();
 
     // Layout: stats bar (6 lines) + scrollable list + footer (3 lines)
     let chunks = Layout::default()
@@ -784,11 +974,21 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     let stats_text = vec![
         Line::from(vec![
             Span::styled("  Total files found:", Style::default().fg(Color::White)),
-            Span::styled(format!("{total:>5}"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{total:>5}"),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Ready to copy:    ", Style::default().fg(Color::White)),
-            Span::styled(format!("{pending:>5}"), Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{pending:>5}"),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  Duplicate:        ", Style::default().fg(Color::White)),
@@ -797,23 +997,36 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
         ]),
         Line::from(vec![
             Span::styled("  Quality variant:  ", Style::default().fg(Color::White)),
-            Span::styled(format!("{skipped:>5}"), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{skipped:>5}"),
+                Style::default().fg(Color::DarkGray),
+            ),
             Span::styled("  (will be skipped)", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled("  Unknown date:     ", Style::default().fg(Color::White)),
             Span::styled(format!("{unknown:>5}"), Style::default().fg(Color::Yellow)),
-            Span::styled("  (needs review — not copied)", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "  (needs review — not copied)",
+                Style::default().fg(Color::Yellow),
+            ),
         ]),
     ];
-    let stats_para = Paragraph::new(stats_text)
-        .block(Block::default().borders(Borders::ALL).title(" Import — Preview ").style(Style::default().fg(Color::Cyan)));
+    let stats_para = Paragraph::new(stats_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Import — Preview ")
+            .style(Style::default().fg(Color::Cyan)),
+    );
     frame.render_widget(stats_para, chunks[0]);
 
     // Table of pending + unknown entries
     let list_height = chunks[1].height.saturating_sub(2) as usize;
     app.import_list_height = list_height;
-    let visible_count = entries.iter().filter(|e| e.status != ImportStatus::Skipped).count();
+    let visible_count = entries
+        .iter()
+        .filter(|e| e.status != ImportStatus::Skipped)
+        .count();
     let visible: Vec<&crate::import::ImportEntry> = entries
         .iter()
         .filter(|e| e.status != ImportStatus::Skipped)
@@ -828,7 +1041,9 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     let items: Vec<ListItem> = visible
         .iter()
         .map(|e| {
-            let src = e.source_path.file_name()
+            let src = e
+                .source_path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("?");
             let src = truncate_front(src, src_col);
@@ -848,18 +1063,12 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
                 (Color::White, String::new())
             };
             let line = Line::from(vec![
-                Span::styled(
-                    format!("{src:<src_col$}"),
-                    Style::default().fg(src_color),
-                ),
+                Span::styled(format!("{src:<src_col$}"), Style::default().fg(src_color)),
                 Span::styled(
                     format!(" {status_char} "),
                     Style::default().fg(status_color),
                 ),
-                Span::styled(
-                    format!("{tgt:<tgt_col$}"),
-                    Style::default().fg(Color::Cyan),
-                ),
+                Span::styled(format!("{tgt:<tgt_col$}"), Style::default().fg(Color::Cyan)),
                 Span::styled(
                     format!("  {date_src:>4}/{slug_src:<4}"),
                     Style::default().fg(Color::DarkGray),
@@ -871,32 +1080,49 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let scroll_end = (scroll + list_height).min(visible_count);
-    let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(format!(
-            " {pending} ready  {scroll_end}/{visible_count}  ↑↓/PgDn/PgUp ",
-        )));
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
+        " {pending} ready  {scroll_end}/{visible_count}  ↑↓/PgDn/PgUp ",
+    )));
     frame.render_widget(list, chunks[1]);
 
     // Footer
     let footer_line = if pending > 0 {
         Line::from(vec![
-            Span::styled("  y / Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "  y / Enter",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" — confirm import    ", Style::default().fg(Color::White)),
-            Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled(" — cancel", Style::default().fg(Color::White)),
         ])
     } else {
         Line::from(vec![
-            Span::styled("  Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::styled(" — close  (nothing to import)", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "  Esc",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " — close  (nothing to import)",
+                Style::default().fg(Color::DarkGray),
+            ),
         ])
     };
-    let footer = Paragraph::new(footer_line)
-        .block(Block::default().borders(Borders::ALL));
+    let footer = Paragraph::new(footer_line).block(Block::default().borders(Borders::ALL));
     frame.render_widget(footer, chunks[2]);
 }
 
 /// Full-screen overlay shown while files are being copied.
+#[allow(clippy::too_many_arguments)]
 fn draw_import_copying(
     frame: &mut Frame,
     app: &App,
@@ -909,11 +1135,11 @@ fn draw_import_copying(
     errors: usize,
 ) {
     let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
-    let pct = if total > 0 { done * 100 / total } else { 0 };
+    let pct = (done * 100).checked_div(total).unwrap_or(0);
 
     // ASCII progress bar
     let bar_width = (area.width as usize).saturating_sub(8).min(50);
-    let filled = if total > 0 { bar_width * done / total } else { 0 };
+    let filled = (bar_width * done).checked_div(total).unwrap_or(0);
     let bar: String = "█".repeat(filled) + &"░".repeat(bar_width - filled);
 
     let file_line = if current_file.is_empty() {
@@ -924,9 +1150,15 @@ fn draw_import_copying(
 
     // Build stats line: only show non-zero counters to keep it clean.
     let mut stats_parts: Vec<String> = Vec::new();
-    if copied > 0       { stats_parts.push(format!("✓ {copied} copied")); }
-    if skipped_dup > 0  { stats_parts.push(format!("⊘ {skipped_dup} duplicate")); }
-    if errors > 0       { stats_parts.push(format!("✗ {errors} error")); }
+    if copied > 0 {
+        stats_parts.push(format!("✓ {copied} copied"));
+    }
+    if skipped_dup > 0 {
+        stats_parts.push(format!("⊘ {skipped_dup} duplicate"));
+    }
+    if errors > 0 {
+        stats_parts.push(format!("✗ {errors} error"));
+    }
     let stats_line = if stats_parts.is_empty() {
         String::new()
     } else {
@@ -958,10 +1190,10 @@ fn draw_remove_slug_progress(
     title: &str,
 ) {
     let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
-    let pct = if total > 0 { done * 100 / total } else { 0 };
+    let pct = (done * 100).checked_div(total).unwrap_or(0);
 
     let bar_width = (area.width as usize).saturating_sub(8).min(50);
-    let filled = if total > 0 { bar_width * done / total } else { 0 };
+    let filled = (bar_width * done).checked_div(total).unwrap_or(0);
     let bar: String = "█".repeat(filled) + &"░".repeat(bar_width - filled);
 
     let file_line = if current.is_empty() {
@@ -970,9 +1202,7 @@ fn draw_remove_slug_progress(
         format!("\n  → {current}")
     };
 
-    let text = format!(
-        "{spinner}  {done} / {total}  ({pct}%)\n  {bar}{file_line}"
-    );
+    let text = format!("{spinner}  {done} / {total}  ({pct}%)\n  {bar}{file_line}");
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1040,16 +1270,29 @@ fn draw_empty_trash_preview(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let scroll_end = (scroll + list_height).min(total);
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(format!(
-        " {scroll_end}/{total}  ↑↓/PgDn/PgUp "
-    )));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" {scroll_end}/{total}  ↑↓/PgDn/PgUp ")),
+    );
     frame.render_widget(list, chunks[1]);
 
     // Footer
     let footer = Paragraph::new(Line::from(vec![
-        Span::styled("  y / Enter", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-        Span::styled(" — confirm permanent deletion    ", Style::default().fg(Color::White)),
-        Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  y / Enter",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            " — confirm permanent deletion    ",
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            "Esc",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" — cancel", Style::default().fg(Color::White)),
     ]))
     .block(Block::default().borders(Borders::ALL));
@@ -1059,10 +1302,10 @@ fn draw_empty_trash_preview(frame: &mut Frame, app: &mut App, area: Rect) {
 /// Full-screen overlay shown while `:empty-trash` is deleting files.
 fn draw_empty_trash_deleting(frame: &mut Frame, app: &App, area: Rect, done: usize, total: usize) {
     let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
-    let pct = if total > 0 { done * 100 / total } else { 0 };
+    let pct = (done * 100).checked_div(total).unwrap_or(0);
 
     let bar_width = (area.width as usize).saturating_sub(8).min(50);
-    let filled = if total > 0 { bar_width * done / total } else { 0 };
+    let filled = (bar_width * done).checked_div(total).unwrap_or(0);
     let bar: String = "█".repeat(filled) + &"░".repeat(bar_width - filled);
 
     let text = format!("{spinner}  {done} / {total}  ({pct}%)\n  {bar}");

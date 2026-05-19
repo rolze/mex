@@ -47,7 +47,8 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
         let (tags, tag_types) = if tags_str.is_empty() {
             (vec![], vec![])
         } else {
-            tags_str.split('\x1f')
+            tags_str
+                .split('\x1f')
                 .map(|pair| {
                     if let Some(sep) = pair.find('\x1e') {
                         (pair[..sep].to_string(), pair[sep + 1..].to_string())
@@ -233,7 +234,9 @@ pub fn assign_tag(
     if !media_ids.is_empty() {
         let tx = conn.transaction()?;
         {
-            let mut stmt = tx.prepare_cached("INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)")?;
+            let mut stmt = tx.prepare_cached(
+                "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
+            )?;
             for media_id in media_ids {
                 stmt.execute(rusqlite::params![media_id, tag_id])?;
             }
@@ -250,18 +253,16 @@ pub fn assign_tag(
 /// - `tag_names` non-empty → remove only the named tags (case-insensitive).
 ///
 /// Returns the number of `media_tags` rows deleted.
-pub fn remove_tags(
-    db_path: &str,
-    media_ids: &[String],
-    tag_names: &[String],
-) -> Result<usize> {
+pub fn remove_tags(db_path: &str, media_ids: &[String], tag_names: &[String]) -> Result<usize> {
     if media_ids.is_empty() {
         return Ok(0);
     }
 
     let conn = Connection::open(db_path)?;
 
-    let id_ph: String = std::iter::repeat("?").take(media_ids.len()).collect::<Vec<_>>().join(",");
+    let id_ph: String = std::iter::repeat_n("?", media_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
 
     let removed = if tag_names.is_empty() {
         conn.execute(
@@ -269,7 +270,9 @@ pub fn remove_tags(
             rusqlite::params_from_iter(media_ids),
         )?
     } else {
-        let name_ph: String = std::iter::repeat("?").take(tag_names.len()).collect::<Vec<_>>().join(",");
+        let name_ph: String = std::iter::repeat_n("?", tag_names.len())
+            .collect::<Vec<_>>()
+            .join(",");
         let sql = format!(
             "DELETE FROM media_tags WHERE media_id IN ({id_ph}) \
              AND tag_id IN (SELECT id FROM tags WHERE name IN ({name_ph}) COLLATE NOCASE)"
@@ -297,7 +300,9 @@ pub fn rename_file_date(basename: &str, new_date: &str) -> String {
         && basename[..4].chars().all(|c| c.is_ascii_digit())
         && basename[5..7].chars().all(|c| c.is_ascii_digit())
         && basename[8..10].chars().all(|c| c.is_ascii_digit())
-        && (basename.len() == 10 || basename.as_bytes()[10] == b'.' || basename.as_bytes()[10] == b'-');
+        && (basename.len() == 10
+            || basename.as_bytes()[10] == b'.'
+            || basename.as_bytes()[10] == b'-');
 
     if day_re_match {
         // Replace the first 10 chars (yyyy-MM-DD) with new_date
@@ -331,12 +336,7 @@ pub fn rename_file_date(basename: &str, new_date: &str) -> String {
 /// check** is performed before any mutation. If the filesystem does not permit
 /// `set_file_mtime` (e.g. exFAT via WSL2), the function returns an error
 /// immediately and nothing is changed on disk or in the DB.
-pub fn fix_date(
-    db_path: &str,
-    target_root: &str,
-    file_id: &str,
-    new_date: &str,
-) -> Result<()> {
+pub fn fix_date(db_path: &str, target_root: &str, file_id: &str, new_date: &str) -> Result<()> {
     use filetime::{set_file_mtime, FileTime};
     use std::path::Path;
 
@@ -350,16 +350,16 @@ pub fn fix_date(
     )?;
 
     // Split into folder prefix and basename.
-    let (old_folder, basename) = if let Some(pos) = target_path.rfind('/') {
-        (&target_path[..pos], &target_path[pos + 1..])
+    let basename = if let Some(pos) = target_path.rfind('/') {
+        &target_path[pos + 1..]
     } else {
-        ("", target_path.as_str())
+        target_path.as_str()
     };
 
     let new_basename = rename_file_date(basename, new_date);
     let new_year = &new_date[..4];
     // Keep the same sub-folder structure (year folder).
-    let new_folder = if old_folder.is_empty() { new_year.to_string() } else { new_year.to_string() };
+    let new_folder = new_year.to_string();
     let new_target_path = if new_folder.is_empty() {
         new_basename.clone()
     } else {
@@ -384,9 +384,7 @@ pub fn fix_date(
         let current_meta = std::fs::metadata(&old_abs)?;
         let current_mtime = FileTime::from_last_modification_time(&current_meta);
         set_file_mtime(&old_abs, current_mtime).map_err(|e| {
-            anyhow::anyhow!(
-                "mtime update not supported on this filesystem (exFAT/WSL2?): {e}"
-            )
+            anyhow::anyhow!("mtime update not supported on this filesystem (exFAT/WSL2?): {e}")
         })?;
     }
 
@@ -453,7 +451,9 @@ fn read_file_hms(path: &std::path::Path) -> Option<(u8, u8, u8)> {
 /// Returns `None` if the string is too short or malformed.
 fn extract_hms_from_str(s: &str) -> Option<(u8, u8, u8)> {
     // Expect at least "yyyy-mm-dd HH:MM:SS" (19 chars).
-    if s.len() < 19 { return None; }
+    if s.len() < 19 {
+        return None;
+    }
     let time_part = &s[11..19]; // "HH:MM:SS"
     let h: u8 = time_part[0..2].parse().ok()?;
     let m: u8 = time_part[3..5].parse().ok()?;
@@ -573,7 +573,11 @@ pub fn remove_slug_batch(
     };
 
     if file_ids.is_empty() {
-        return Ok(RemoveSlugBatchStats { fixed: 0, skipped: 0, errors: Vec::new() });
+        return Ok(RemoveSlugBatchStats {
+            fixed: 0,
+            skipped: 0,
+            errors: Vec::new(),
+        });
     }
 
     let conn = Connection::open(db_path)?;
@@ -804,24 +808,37 @@ pub fn remove_slug_batch(
                     rec.caption_slug, rec.ext
                 );
                 seen_new_paths.insert(p.clone());
-                Assignment { new_target_path: p, stored_counter: Some(counter) }
+                Assignment {
+                    new_target_path: p,
+                    stored_counter: Some(counter),
+                }
             } else {
                 seen_new_paths.insert(plain.clone());
-                Assignment { new_target_path: plain, stored_counter: None }
+                Assignment {
+                    new_target_path: plain,
+                    stored_counter: None,
+                }
             }
         } else {
             let counter = *day_next.get(&day_prefix).unwrap_or(&1);
             *day_next.get_mut(&day_prefix).unwrap() += 1;
             let p = format!("{year}/{day_prefix}-{counter:04}.{}", rec.ext);
             seen_new_paths.insert(p.clone());
-            Assignment { new_target_path: p, stored_counter: Some(counter) }
+            Assignment {
+                new_target_path: p,
+                stored_counter: Some(counter),
+            }
         };
 
         assignments.push(assignment);
     }
 
     // ── 5. Execute renames + DB updates ───────────────────────────────────
-    let mut stats = RemoveSlugBatchStats { fixed: 0, skipped: 0, errors: Vec::new() };
+    let mut stats = RemoveSlugBatchStats {
+        fixed: 0,
+        skipped: 0,
+        errors: Vec::new(),
+    };
 
     for (i, (rec, asgn)) in records.iter().zip(assignments.iter()).enumerate() {
         on_progress(i, &rec.id);
@@ -960,7 +977,9 @@ pub fn trash_files(db_path: &str, media_ids: &[String]) -> Result<usize> {
         return Ok(0);
     }
     let conn = Connection::open(db_path)?;
-    let ph: String = std::iter::repeat("?").take(media_ids.len()).collect::<Vec<_>>().join(",");
+    let ph: String = std::iter::repeat_n("?", media_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
     let updated = conn.execute(
         &format!("UPDATE media SET status = 'trashed' WHERE id IN ({ph})"),
         rusqlite::params_from_iter(media_ids),
@@ -976,7 +995,9 @@ pub fn keep_files(db_path: &str, media_ids: &[String]) -> Result<usize> {
         return Ok(0);
     }
     let conn = Connection::open(db_path)?;
-    let ph: String = std::iter::repeat("?").take(media_ids.len()).collect::<Vec<_>>().join(",");
+    let ph: String = std::iter::repeat_n("?", media_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
     let updated = conn.execute(
         &format!("UPDATE media SET status = 'moved' WHERE id IN ({ph})"),
         rusqlite::params_from_iter(media_ids),
@@ -1010,7 +1031,8 @@ pub fn load_trashed_files(db_path: &str, limit: usize) -> Result<Vec<MediaFile>>
         let (tags, tag_types) = if tags_str.is_empty() {
             (vec![], vec![])
         } else {
-            tags_str.split('\x1f')
+            tags_str
+                .split('\x1f')
                 .map(|pair| {
                     if let Some(sep) = pair.find('\x1e') {
                         (pair[..sep].to_string(), pair[sep + 1..].to_string())
@@ -1062,16 +1084,19 @@ pub fn delete_trashed_from_fs(
     }
 
     let conn = Connection::open(db_path)?;
-    let ph: String = std::iter::repeat("?").take(media_ids.len()).collect::<Vec<_>>().join(",");
+    let ph: String = std::iter::repeat_n("?", media_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
 
     let target_paths: Vec<(String, String)> = {
         let sql = format!("SELECT id, target_path FROM media WHERE id IN ({ph})");
         let mut stmt = conn.prepare(&sql)?;
-        let result: Vec<(String, String)> = stmt.query_map(rusqlite::params_from_iter(media_ids), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
+        let result: Vec<(String, String)> = stmt
+            .query_map(rusqlite::params_from_iter(media_ids), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         result
     };
 
@@ -1263,10 +1288,7 @@ mod tests {
 
     #[test]
     fn extract_hms_from_str_midnight() {
-        assert_eq!(
-            extract_hms_from_str("2022-04-18 00:00:00"),
-            Some((0, 0, 0))
-        );
+        assert_eq!(extract_hms_from_str("2022-04-18 00:00:00"), Some((0, 0, 0)));
     }
 
     #[test]
@@ -1319,18 +1341,26 @@ mod tests {
 
         // Old file gone, new file present.
         assert!(!old_file.exists(), "old file should be gone after rename");
-        assert!(new_year_dir.join(new_name).exists(), "new file should exist");
+        assert!(
+            new_year_dir.join(new_name).exists(),
+            "new file should exist"
+        );
 
         // DB should reflect new path and date.
         let conn = Connection::open(&db_path).unwrap();
         let (tp, dd, od): (String, String, String) = conn
-            .query_row("SELECT target_path, derived_date, os_date FROM media WHERE id='id1'", [], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            })
+            .query_row(
+                "SELECT target_path, derived_date, os_date FROM media WHERE id='id1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .unwrap();
         assert_eq!(tp, "2023/2023-06-15-0001.jpg");
         assert_eq!(dd, "2023-06-15");
-        assert!(od.starts_with("2023-06-15"), "os_date should start with new date, got {od}");
+        assert!(
+            od.starts_with("2023-06-15"),
+            "os_date should start with new date, got {od}"
+        );
 
         fs::remove_dir_all(&dir).ok();
     }
@@ -1360,13 +1390,19 @@ mod tests {
             "id2",
             "2023-06-15",
         );
-        assert!(result.is_ok(), "fix_date on absent file should succeed: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "fix_date on absent file should succeed: {:?}",
+            result
+        );
 
         let conn = Connection::open(&db_path).unwrap();
         let (tp, dd): (String, String) = conn
-            .query_row("SELECT target_path, derived_date FROM media WHERE id='id2'", [], |r| {
-                Ok((r.get(0)?, r.get(1)?))
-            })
+            .query_row(
+                "SELECT target_path, derived_date FROM media WHERE id='id2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!(tp, "2023/2023-06-15-0001.jpg");
         assert_eq!(dd, "2023-06-15");

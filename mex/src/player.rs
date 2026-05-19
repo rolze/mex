@@ -34,9 +34,7 @@ pub fn translate_path_for_player(path: &Path) -> String {
         .arg(path)
         .output();
     match output {
-        Ok(o) if o.status.success() => {
-            String::from_utf8_lossy(&o.stdout).trim().to_owned()
-        }
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_owned(),
         _ => path.to_string_lossy().into_owned(),
     }
 }
@@ -92,8 +90,8 @@ pub fn detect_windows_mpv() -> Option<String> {
 
 /// File extensions recognised as video files (lower-cased).
 pub const VIDEO_EXTENSIONS: &[&str] = &[
-    "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "ts", "m2ts",
-    "mpeg", "mpg", "ogv", "3gp", "divx", "rmvb",
+    "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "m4v", "ts", "m2ts", "mpeg", "mpg", "ogv",
+    "3gp", "divx", "rmvb",
 ];
 
 // ── Status types ──────────────────────────────────────────────────────────────
@@ -185,7 +183,7 @@ pub fn start_event_listener(socket_path: PathBuf, tx: mpsc::Sender<MpvEvent>) {
                                 if e.kind() == std::io::ErrorKind::WouldBlock
                                     || e.kind() == std::io::ErrorKind::TimedOut =>
                             {
-                                continue // read timeout — poll again
+                                continue; // read timeout — poll again
                             }
                             Err(_) => break, // real socket error
                         }
@@ -255,7 +253,11 @@ impl MpvController {
     pub fn new(socket_path: impl Into<PathBuf>, mpv_bin: impl Into<String>) -> Self {
         let mpv_bin = mpv_bin.into();
         let wsl_mode = mpv_bin.to_lowercase().ends_with(".exe");
-        Self { socket_path: socket_path.into(), mpv_bin, wsl_mode }
+        Self {
+            socket_path: socket_path.into(),
+            mpv_bin,
+            wsl_mode,
+        }
     }
 
     /// Ensure mpv is running and listening on the socket.
@@ -317,7 +319,9 @@ impl MpvController {
         let socket_str = self.socket_path.to_string_lossy();
         std::process::Command::new("socat")
             .arg(format!("UNIX-LISTEN:{socket_str},fork"))
-            .arg(format!("EXEC:npiperelay.exe -ei -ep //./pipe/{MPV_PIPE_NAME},nofork"))
+            .arg(format!(
+                "EXEC:npiperelay.exe -ei -ep //./pipe/{MPV_PIPE_NAME},nofork"
+            ))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -363,9 +367,7 @@ impl RemoteController for MpvController {
             path.to_string_lossy().into_owned()
         };
         let escaped = path_str.replace('\\', "\\\\").replace('"', "\\\"");
-        self.send_command(&format!(
-            r#"{{"command":["loadfile","{escaped}"]}}"#
-        ))
+        self.send_command(&format!(r#"{{"command":["loadfile","{escaped}"]}}"#))
     }
 
     fn stop(&self) -> anyhow::Result<()> {

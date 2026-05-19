@@ -3,17 +3,17 @@ use mex::{app, config, db, import, ui};
 use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        self, Event, KeyCode, KeyEventKind, KeyboardEnhancementFlags, KeyModifiers,
-        MediaKeyCode, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+        self, Event, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MediaKeyCode,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use ratatui_image::{
+    errors::Errors,
     picker::{Picker, ProtocolType},
     thread::{ResizeRequest, ResizeResponse, ThreadProtocol},
-    errors::Errors,
 };
 use std::{
     io,
@@ -130,7 +130,10 @@ fn resolve_config_roots(mut cfg: config::Config) -> config::Config {
         match config::validate_views_root(&cfg.views_root) {
             Ok(()) => {
                 if let Err(e) = std::fs::create_dir_all(&cfg.views_root) {
-                    eprintln!("mex: warning — could not create views_root {}: {e}", cfg.views_root);
+                    eprintln!(
+                        "mex: warning — could not create views_root {}: {e}",
+                        cfg.views_root
+                    );
                 } else {
                     eprintln!("mex: views root:  {}", cfg.views_root);
                 }
@@ -209,8 +212,7 @@ fn main() -> Result<()> {
     let mpv_path = cfg.mpv_path;
     db::init_db(&db_path).context("Failed to initialise DB")?;
     let files = db::load_files(&db_path).context("Failed to load files from DB")?;
-    let import_source_dirs = db::load_recent_import_source_dirs(&db_path)
-        .unwrap_or_default();
+    let import_source_dirs = db::load_recent_import_source_dirs(&db_path).unwrap_or_default();
 
     // Query terminal for graphics protocol/font-size (before entering alt screen).
     let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
@@ -218,9 +220,9 @@ fn main() -> Result<()> {
     // Allow manual override via MEX_PROTOCOL=kitty|sixel|iterm2|halfblocks.
     if let Ok(proto_env) = std::env::var("MEX_PROTOCOL") {
         let requested = match proto_env.to_lowercase().as_str() {
-            "kitty"      => Some(ProtocolType::Kitty),
-            "sixel"      => Some(ProtocolType::Sixel),
-            "iterm2"     => Some(ProtocolType::Iterm2),
+            "kitty" => Some(ProtocolType::Kitty),
+            "sixel" => Some(ProtocolType::Sixel),
+            "iterm2" => Some(ProtocolType::Iterm2),
             "halfblocks" => Some(ProtocolType::Halfblocks),
             other => {
                 eprintln!("mex: unknown MEX_PROTOCOL={other:?}; using auto-detected protocol");
@@ -248,7 +250,17 @@ fn main() -> Result<()> {
 
     let image_state = ThreadProtocol::new(tx_worker, None);
 
-    let mut app = app::App::new(db_path, target_root, views_root, files, picker, image_state, protocol_name, import_source_dirs, mpv_path);
+    let mut app = app::App::new(
+        db_path,
+        target_root,
+        views_root,
+        files,
+        picker,
+        image_state,
+        protocol_name,
+        import_source_dirs,
+        mpv_path,
+    );
 
     // Terminal setup
     enable_raw_mode()?;
@@ -256,9 +268,10 @@ fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen)?;
     // Enable Kitty keyboard protocol so Shift+Enter is distinguishable from Enter.
     // Silently ignored by terminals that don't support it.
-    let _ = execute!(stdout, PushKeyboardEnhancementFlags(
-        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-    ));
+    let _ = execute!(
+        stdout,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    );
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -284,7 +297,9 @@ fn run_loop(
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
 
-        if app.quit { break; }
+        if app.quit {
+            break;
+        }
 
         // Advance spinner animation regardless of events.
         app.tick();
@@ -310,125 +325,128 @@ fn run_loop(
         app.poll_mpv_events();
 
         if event::poll(std::time::Duration::from_millis(16))? {
-            match event::read()? {
-                Event::Key(key) => {
-                    // With keyboard enhancement enabled terminals also send Release
-                    // events; ignore them to avoid double-firing every binding.
-                    if key.kind == KeyEventKind::Release { continue; }
-                    // Handle remove-slug progress lock screen first.
-                    match &app.remove_slug_state {
-                        app::RemoveSlugState::Running { .. } => {
-                            continue; // swallow all keys while repair is running
-                        }
-                        app::RemoveSlugState::Done(_) => {
-                            app.remove_slug_state = app::RemoveSlugState::Idle;
-                            // fall through so the keypress also registers normally
-                        }
-                        app::RemoveSlugState::Idle => {}
+            if let Event::Key(key) = event::read()? {
+                // With keyboard enhancement enabled terminals also send Release
+                // events; ignore them to avoid double-firing every binding.
+                if key.kind == KeyEventKind::Release {
+                    continue;
+                }
+                // Handle remove-slug progress lock screen first.
+                match &app.remove_slug_state {
+                    app::RemoveSlugState::Running { .. } => {
+                        continue; // swallow all keys while repair is running
                     }
-
-                    // Handle fix-os-time progress lock screen.
-                    match &app.fix_os_time_state {
-                        app::FixOsTimeState::Running { .. } => {
-                            continue; // swallow all keys while repair is running
-                        }
-                        app::FixOsTimeState::Done(_) => {
-                            app.fix_os_time_state = app::FixOsTimeState::Idle;
-                            // fall through so the keypress also registers normally
-                        }
-                        app::FixOsTimeState::Idle => {}
+                    app::RemoveSlugState::Done(_) => {
+                        app.remove_slug_state = app::RemoveSlugState::Idle;
+                        // fall through so the keypress also registers normally
                     }
+                    app::RemoveSlugState::Idle => {}
+                }
 
-                    // Handle empty-trash preview / deleting screens.
-                    match &app.empty_trash_state {
-                        app::EmptyTrashState::Preview { ref files, .. } => {
-                            let total = files.len();
-                            match key.code {
-                                KeyCode::Char('y') | KeyCode::Enter if total > 0 => {
-                                    app.confirm_empty_trash();
-                                    continue;
-                                }
-                                KeyCode::Esc => {
-                                    app.cancel_empty_trash();
-                                    continue;
-                                }
-                                KeyCode::Down => {
-                                    app.empty_trash_scroll_down();
-                                    continue;
-                                }
-                                KeyCode::Up => {
-                                    app.empty_trash_scroll_up();
-                                    continue;
-                                }
-                                KeyCode::PageDown => {
-                                    app.empty_trash_page_down();
-                                    continue;
-                                }
-                                KeyCode::PageUp => {
-                                    app.empty_trash_page_up();
-                                    continue;
-                                }
-                                _ => continue, // swallow all other keys on preview
+                // Handle fix-os-time progress lock screen.
+                match &app.fix_os_time_state {
+                    app::FixOsTimeState::Running { .. } => {
+                        continue; // swallow all keys while repair is running
+                    }
+                    app::FixOsTimeState::Done(_) => {
+                        app.fix_os_time_state = app::FixOsTimeState::Idle;
+                        // fall through so the keypress also registers normally
+                    }
+                    app::FixOsTimeState::Idle => {}
+                }
+
+                // Handle empty-trash preview / deleting screens.
+                match &app.empty_trash_state {
+                    app::EmptyTrashState::Preview { ref files, .. } => {
+                        let total = files.len();
+                        match key.code {
+                            KeyCode::Char('y') | KeyCode::Enter if total > 0 => {
+                                app.confirm_empty_trash();
+                                continue;
                             }
-                        }
-                        app::EmptyTrashState::Deleting { .. } => {
-                            continue; // swallow all keys while deletion is running
-                        }
-                        app::EmptyTrashState::Done(_) => {
-                            app.empty_trash_state = app::EmptyTrashState::Idle;
-                            // fall through
-                        }
-                        app::EmptyTrashState::Idle => {}
-                    }
-
-                    // Handle import-preview / import-done screens first.
-                    match &app.import_state {
-                        app::ImportState::Preview { ref entries, .. } => {
-                            let has_pending = entries.iter().any(|e| e.status == import::ImportStatus::Pending);
-                            match key.code {
-                                KeyCode::Char('y') | KeyCode::Enter if has_pending => {
-                                    app.confirm_import();
-                                    continue;
-                                }
-                                KeyCode::Esc => {
-                                    app.cancel_import();
-                                    continue;
-                                }
-                                KeyCode::Down => {
-                                    app.import_preview_scroll_down();
-                                    continue;
-                                }
-                                KeyCode::Up => {
-                                    app.import_preview_scroll_up();
-                                    continue;
-                                }
-                                KeyCode::PageDown => {
-                                    app.import_preview_page_down();
-                                    continue;
-                                }
-                                KeyCode::PageUp => {
-                                    app.import_preview_page_up();
-                                    continue;
-                                }
-                                _ => continue, // swallow all other keys on preview
+                            KeyCode::Esc => {
+                                app.cancel_empty_trash();
+                                continue;
                             }
+                            KeyCode::Down => {
+                                app.empty_trash_scroll_down();
+                                continue;
+                            }
+                            KeyCode::Up => {
+                                app.empty_trash_scroll_up();
+                                continue;
+                            }
+                            KeyCode::PageDown => {
+                                app.empty_trash_page_down();
+                                continue;
+                            }
+                            KeyCode::PageUp => {
+                                app.empty_trash_page_up();
+                                continue;
+                            }
+                            _ => continue, // swallow all other keys on preview
                         }
-                        app::ImportState::Scanning { .. } | app::ImportState::Copying { .. } => {
-                            if key.code == KeyCode::Esc {
+                    }
+                    app::EmptyTrashState::Deleting { .. } => {
+                        continue; // swallow all keys while deletion is running
+                    }
+                    app::EmptyTrashState::Done(_) => {
+                        app.empty_trash_state = app::EmptyTrashState::Idle;
+                        // fall through
+                    }
+                    app::EmptyTrashState::Idle => {}
+                }
+
+                // Handle import-preview / import-done screens first.
+                match &app.import_state {
+                    app::ImportState::Preview { ref entries, .. } => {
+                        let has_pending = entries
+                            .iter()
+                            .any(|e| e.status == import::ImportStatus::Pending);
+                        match key.code {
+                            KeyCode::Char('y') | KeyCode::Enter if has_pending => {
+                                app.confirm_import();
+                                continue;
+                            }
+                            KeyCode::Esc => {
                                 app.cancel_import();
                                 continue;
                             }
-                            continue; // swallow other keys while busy
+                            KeyCode::Down => {
+                                app.import_preview_scroll_down();
+                                continue;
+                            }
+                            KeyCode::Up => {
+                                app.import_preview_scroll_up();
+                                continue;
+                            }
+                            KeyCode::PageDown => {
+                                app.import_preview_page_down();
+                                continue;
+                            }
+                            KeyCode::PageUp => {
+                                app.import_preview_page_up();
+                                continue;
+                            }
+                            _ => continue, // swallow all other keys on preview
                         }
-                        app::ImportState::Done(_) => {
-                            app.import_state = app::ImportState::Idle;
-                            // fall through so the keypress also registers normally
-                        }
-                        app::ImportState::Idle => {}
                     }
-                    // Any keypress clears a displayed status message.
-                    app.status_message = None;
-                    match (key.modifiers, key.code) {
+                    app::ImportState::Scanning { .. } | app::ImportState::Copying { .. } => {
+                        if key.code == KeyCode::Esc {
+                            app.cancel_import();
+                            continue;
+                        }
+                        continue; // swallow other keys while busy
+                    }
+                    app::ImportState::Done(_) => {
+                        app.import_state = app::ImportState::Idle;
+                        // fall through so the keypress also registers normally
+                    }
+                    app::ImportState::Idle => {}
+                }
+                // Any keypress clears a displayed status message.
+                app.status_message = None;
+                match (key.modifiers, key.code) {
                     // Esc: exit filter mode → cancel command → clear selection → close preview → clear filter
                     (_, KeyCode::Esc) => {
                         if app.filter_mode {
@@ -446,11 +464,11 @@ fn run_loop(
 
                     // Navigation — arrow/page/ctrl keys only; no letter bindings
                     // Ctrl-modified arrows/home/end must come before their wildcard counterparts.
-                    (KeyModifiers::SHIFT, KeyCode::Up)   => app.extend_selection_up(),
+                    (KeyModifiers::SHIFT, KeyCode::Up) => app.extend_selection_up(),
                     (KeyModifiers::SHIFT, KeyCode::Down) => app.extend_selection_down(),
                     (KeyModifiers::SHIFT, KeyCode::Home) => app.jump_slug_day_prev(),
-                    (KeyModifiers::SHIFT, KeyCode::End)  => app.jump_slug_day_next(),
-                    (_, KeyCode::Down)  => {
+                    (KeyModifiers::SHIFT, KeyCode::End) => app.jump_slug_day_next(),
+                    (_, KeyCode::Down) => {
                         if app.tag_type_typing {
                             app.cycle_type_suggestion_down();
                         } else if app.tag_typing {
@@ -461,7 +479,7 @@ fn run_loop(
                             app.move_down();
                         }
                     }
-                    (_, KeyCode::Up)    => {
+                    (_, KeyCode::Up) => {
                         if app.tag_type_typing {
                             app.cycle_type_suggestion_up();
                         } else if app.tag_typing {
@@ -472,13 +490,13 @@ fn run_loop(
                             app.move_up();
                         }
                     }
-                    (_, KeyCode::Home)  => app.jump_home(),
-                    (_, KeyCode::End)   => app.jump_end(),
+                    (_, KeyCode::Home) => app.jump_home(),
+                    (_, KeyCode::End) => app.jump_end(),
                     (KeyModifiers::CONTROL, KeyCode::Char('d')) => app.half_page_down(),
                     (KeyModifiers::CONTROL, KeyCode::Char('u')) => app.half_page_up(),
                     (KeyModifiers::CONTROL, KeyCode::Char('a')) => app.select_all_or_none(),
                     (_, KeyCode::PageDown) => app.page_down(),
-                    (_, KeyCode::PageUp)   => app.page_up(),
+                    (_, KeyCode::PageUp) => app.page_up(),
 
                     // Open current file in system default viewer/player.
                     // Ctrl+O works in all terminals; Shift+Enter requires Kitty keyboard protocol.
@@ -523,7 +541,9 @@ fn run_loop(
                     }
 
                     // Tab: complete current tag/command suggestion (only in filter or command mode)
-                    (_, KeyCode::Tab) if app.filter_mode || app.command.is_some() => app.tab_complete(),
+                    (_, KeyCode::Tab) if app.filter_mode || app.command.is_some() => {
+                        app.tab_complete()
+                    }
 
                     // ':' enters command mode (unless already in command mode, where it
                     // is a literal character — needed for paths like mtp:host=…)
@@ -560,10 +580,18 @@ fn run_loop(
                     // p: open cursor file in mpv (spawns mpv if needed; validates video ext)
                     // s: toggle pause/resume — requires mpv to be running
                     // j/k: next/prev video — require mpv to be running
-                    (_, KeyCode::Char('p')) if app.command.is_none() && !app.filter_mode => app.view_selected(),
-                    (_, KeyCode::Char('s')) if app.command.is_none() && !app.filter_mode => app.mpv_play_pause(),
-                    (_, KeyCode::Char('j')) if app.command.is_none() && !app.filter_mode => app.view_next_video(),
-                    (_, KeyCode::Char('k')) if app.command.is_none() && !app.filter_mode => app.view_prev_video(),
+                    (_, KeyCode::Char('p')) if app.command.is_none() && !app.filter_mode => {
+                        app.view_selected()
+                    }
+                    (_, KeyCode::Char('s')) if app.command.is_none() && !app.filter_mode => {
+                        app.mpv_play_pause()
+                    }
+                    (_, KeyCode::Char('j')) if app.command.is_none() && !app.filter_mode => {
+                        app.view_next_video()
+                    }
+                    (_, KeyCode::Char('k')) if app.command.is_none() && !app.filter_mode => {
+                        app.view_prev_video()
+                    }
 
                     // Printable chars:
                     // - command mode → command buffer
@@ -582,10 +610,7 @@ fn run_loop(
                     }
 
                     _ => {}
-                    }
                 }
-
-                _ => {}
             }
         }
     }

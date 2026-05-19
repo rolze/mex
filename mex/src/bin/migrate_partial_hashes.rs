@@ -24,8 +24,7 @@ fn main() -> Result<()> {
     println!("Root: {target_root}");
     println!();
 
-    let conn = Connection::open(&db_path)
-        .with_context(|| format!("cannot open {db_path}"))?;
+    let conn = Connection::open(&db_path).with_context(|| format!("cannot open {db_path}"))?;
 
     // ── 1. Schema migration ───────────────────────────────────────────────────
     ensure_schema_v1(&conn)?;

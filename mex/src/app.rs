@@ -1,6 +1,8 @@
-use crate::db::{MediaFile, set_missing_on_disk};
+use crate::db::{set_missing_on_disk, MediaFile};
 use crate::import::{ImportEntry, ImportMsg, ImportStatus};
-use crate::player::{MpvController, MpvEvent, MpvStatus, RemoteController, VIDEO_EXTENSIONS, MPV_SOCKET};
+use crate::player::{
+    MpvController, MpvEvent, MpvStatus, RemoteController, MPV_SOCKET, VIDEO_EXTENSIONS,
+};
 use image::DynamicImage;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
 use std::{
@@ -12,7 +14,19 @@ use std::{
 
 /// All command names recognised by the command bar, in alphabetical order.
 /// Used for command-name autocompletion (analogous to tag autocompletion).
-const KNOWN_COMMANDS: &[&str] = &["create-view", "empty-trash", "fix-date", "fix-ext", "fix-os-time", "import", "q", "quit", "remove-slug", "tag", "untag"];
+const KNOWN_COMMANDS: &[&str] = &[
+    "create-view",
+    "empty-trash",
+    "fix-date",
+    "fix-ext",
+    "fix-os-time",
+    "import",
+    "q",
+    "quit",
+    "remove-slug",
+    "tag",
+    "untag",
+];
 
 // ── Import state ──────────────────────────────────────────────────────────────
 
@@ -30,14 +44,24 @@ pub enum ImportPathHint {
 pub enum ImportState {
     Idle,
     /// Background scan in progress; `scanned` is the number of files found so far.
-    Scanning { scanned: usize, current_file: String },
+    Scanning {
+        scanned: usize,
+        current_file: String,
+    },
     /// Scan finished; waiting for user confirmation (y / Esc).
     Preview {
         entries: Vec<ImportEntry>,
         scroll: usize, // scroll offset for the preview list
     },
     /// Copy in progress.
-    Copying { done: usize, total: usize, current_file: String, copied: usize, skipped_dup: usize, errors: usize },
+    Copying {
+        done: usize,
+        total: usize,
+        current_file: String,
+        copied: usize,
+        skipped_dup: usize,
+        errors: usize,
+    },
     /// Copy finished; message is displayed until the next keypress.
     Done(String),
 }
@@ -47,13 +71,21 @@ pub enum ImportState {
 pub enum RemoveSlugState {
     Idle,
     /// Background repair in progress.
-    Running { done: usize, total: usize, current: String },
+    Running {
+        done: usize,
+        total: usize,
+        current: String,
+    },
     /// Finished; message shown until the next keypress.
     Done(String),
 }
 
 pub enum RemoveSlugMsg {
-    Progress { done: usize, total: usize, current: String },
+    Progress {
+        done: usize,
+        total: usize,
+        current: String,
+    },
     Done(String),
 }
 
@@ -62,13 +94,21 @@ pub enum RemoveSlugMsg {
 pub enum FixOsTimeState {
     Idle,
     /// Background repair in progress.
-    Running { done: usize, total: usize, current: String },
+    Running {
+        done: usize,
+        total: usize,
+        current: String,
+    },
     /// Finished; message shown until the next keypress.
     Done(String),
 }
 
 pub enum FixOsTimeMsg {
-    Progress { done: usize, total: usize, current: String },
+    Progress {
+        done: usize,
+        total: usize,
+        current: String,
+    },
     Done(String),
 }
 
@@ -77,9 +117,15 @@ pub enum FixOsTimeMsg {
 pub enum EmptyTrashState {
     Idle,
     /// Waiting for user confirmation: shows up to 100 trashed files.
-    Preview { files: Vec<crate::db::MediaFile>, scroll: usize },
+    Preview {
+        files: Vec<crate::db::MediaFile>,
+        scroll: usize,
+    },
     /// Background deletion in progress.
-    Deleting { done: usize, total: usize },
+    Deleting {
+        done: usize,
+        total: usize,
+    },
     /// Finished; message shown until the next keypress.
     Done(String),
 }
@@ -116,18 +162,18 @@ pub struct App {
     /// Active command being typed (`:q`, etc.). `None` = search/normal mode.
     pub command: Option<String>,
     pub preview_open: bool,
-    pub list_height: usize,     // updated each frame
+    pub list_height: usize, // updated each frame
     // Image display
     pub image_picker: Picker,
     pub image_state: ThreadProtocol,
-    pub image_protocol_name: String,  // e.g. "halfblocks", "kitty", "sixel"
+    pub image_protocol_name: String, // e.g. "halfblocks", "kitty", "sixel"
     /// Path of the image currently loaded into image_state (or in-flight).
     /// The encoded protocol is kept alive even when preview is closed so
     /// reopening the same file is instant (no re-encode needed).
     pub current_image_path: Option<PathBuf>,
     pub image_cache: HashMap<PathBuf, DynamicImage>,
-    pub is_loading: bool,       // true while bg encode is in flight
-    pub spinner_frame: usize,   // advances each tick for animation
+    pub is_loading: bool,     // true while bg encode is in flight
+    pub spinner_frame: usize, // advances each tick for animation
     /// Number of times a new encode was dispatched (cache misses). Only used for tests.
     pub encode_dispatch_count: usize,
     /// Set to true by execute_command when the user requests quit.
@@ -197,6 +243,7 @@ pub struct App {
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         db_path: String,
         target_root: String,
@@ -292,7 +339,9 @@ impl App {
             self.selected += 1;
             self.shift_last_landed = None;
             self.ensure_visible();
-            if self.preview_open { self.refresh_image(); }
+            if self.preview_open {
+                self.refresh_image();
+            }
         }
     }
 
@@ -301,21 +350,27 @@ impl App {
             self.selected -= 1;
             self.shift_last_landed = None;
             self.ensure_visible();
-            if self.preview_open { self.refresh_image(); }
+            if self.preview_open {
+                self.refresh_image();
+            }
         }
     }
 
     pub fn jump_top(&mut self) {
         self.selected = 0;
         self.scroll_offset = 0;
-        if self.preview_open { self.refresh_image(); }
+        if self.preview_open {
+            self.refresh_image();
+        }
     }
 
     pub fn jump_bottom(&mut self) {
         if !self.filtered.is_empty() {
             self.selected = self.filtered.len() - 1;
             self.ensure_visible();
-            if self.preview_open { self.refresh_image(); }
+            if self.preview_open {
+                self.refresh_image();
+            }
         }
     }
 
@@ -323,28 +378,36 @@ impl App {
         let step = self.list_height / 2;
         self.selected = (self.selected + step).min(self.filtered.len().saturating_sub(1));
         self.ensure_visible();
-        if self.preview_open { self.refresh_image(); }
+        if self.preview_open {
+            self.refresh_image();
+        }
     }
 
     pub fn half_page_up(&mut self) {
         let step = self.list_height / 2;
         self.selected = self.selected.saturating_sub(step);
         self.ensure_visible();
-        if self.preview_open { self.refresh_image(); }
+        if self.preview_open {
+            self.refresh_image();
+        }
     }
 
     pub fn page_down(&mut self) {
         let step = self.list_height.max(1);
         self.selected = (self.selected + step).min(self.filtered.len().saturating_sub(1));
         self.ensure_visible();
-        if self.preview_open { self.refresh_image(); }
+        if self.preview_open {
+            self.refresh_image();
+        }
     }
 
     pub fn page_up(&mut self) {
         let step = self.list_height.max(1);
         self.selected = self.selected.saturating_sub(step);
         self.ensure_visible();
-        if self.preview_open { self.refresh_image(); }
+        if self.preview_open {
+            self.refresh_image();
+        }
     }
 
     fn ensure_visible(&mut self) {
@@ -469,10 +532,16 @@ impl App {
     /// Confirm the current tag: push the highlighted suggestion (or the raw
     /// input if there is none) into `tag_filters`, then exit tag-typing mode.
     pub fn confirm_tag(&mut self) {
-        let tag = self.current_suggestion()
+        let tag = self
+            .current_suggestion()
             .unwrap_or_else(|| self.tag_input.trim().to_lowercase());
         let tag = tag.trim().to_string();
-        if !tag.is_empty() && !self.tag_filters.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
+        if !tag.is_empty()
+            && !self
+                .tag_filters
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case(&tag))
+        {
             self.tag_filters.push(tag);
         }
         self.tag_typing = false;
@@ -538,16 +607,24 @@ impl App {
     /// The currently highlighted type suggestion, or `None` when there are no matches.
     pub fn current_type_suggestion(&self) -> Option<String> {
         let suggestions = self.filtered_type_suggestions();
-        suggestions.get(self.type_suggestion_idx).map(|s| (*s).clone())
+        suggestions
+            .get(self.type_suggestion_idx)
+            .map(|s| (*s).clone())
     }
 
     /// Confirm the current type filter: push the highlighted suggestion (or raw input)
     /// into `tag_type_filters`, then exit type-typing mode.
     pub fn confirm_type_filter(&mut self) {
-        let ty = self.current_type_suggestion()
+        let ty = self
+            .current_type_suggestion()
             .unwrap_or_else(|| self.tag_type_input.trim().to_lowercase());
         let ty = ty.trim().to_string();
-        if !ty.is_empty() && !self.tag_type_filters.iter().any(|t| t.eq_ignore_ascii_case(&ty)) {
+        if !ty.is_empty()
+            && !self
+                .tag_type_filters
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case(&ty))
+        {
             self.tag_type_filters.push(ty);
         }
         self.tag_type_typing = false;
@@ -612,7 +689,12 @@ impl App {
     /// Called whenever the import path argument may have changed.
     /// Clears the hint and arms the debounce timer if in import-path context.
     fn on_import_path_changed(&mut self) {
-        if self.command.as_deref().map(|c| c.starts_with("import ")).unwrap_or(false) {
+        if self
+            .command
+            .as_deref()
+            .map(|c| c.starts_with("import "))
+            .unwrap_or(false)
+        {
             self.import_path_hint = None;
             self.import_path_changed_at = Some(Instant::now());
         } else {
@@ -658,14 +740,16 @@ impl App {
         if let Some(arg) = cmd.strip_prefix("tag ") {
             if let Some(at_pos) = arg.rfind('@') {
                 let type_prefix = arg[at_pos + 1..].to_lowercase();
-                return self.all_tag_types
+                return self
+                    .all_tag_types
                     .iter()
                     .filter(|t| t.to_lowercase().starts_with(&type_prefix))
                     .cloned()
                     .collect();
             } else {
                 let name_prefix = arg.to_lowercase();
-                return self.all_tags
+                return self
+                    .all_tags
                     .iter()
                     .filter(|t| t.to_lowercase().starts_with(&name_prefix))
                     .cloned()
@@ -682,7 +766,8 @@ impl App {
                 rest.trim_start().rsplit(' ').next().unwrap_or("")
             };
             let prefix_lower = prefix.to_lowercase();
-            return self.all_tags
+            return self
+                .all_tags
                 .iter()
                 .filter(|t| t.to_lowercase().starts_with(&prefix_lower))
                 .cloned()
@@ -770,8 +855,7 @@ impl App {
             self.command_name_suggestions().len()
         };
         if count > 0 {
-            self.command_suggestion_idx =
-                (self.command_suggestion_idx + count - 1) % count;
+            self.command_suggestion_idx = (self.command_suggestion_idx + count - 1) % count;
         }
     }
 
@@ -881,7 +965,8 @@ impl App {
         }
 
         if let Some(tag_arg) = trimmed.strip_prefix("untag") {
-            let tag_names: Vec<String> = tag_arg.split_whitespace().map(|s| s.to_string()).collect();
+            let tag_names: Vec<String> =
+                tag_arg.split_whitespace().map(|s| s.to_string()).collect();
             self.untag_selected(&tag_names);
             return;
         }
@@ -929,9 +1014,7 @@ impl App {
         } else {
             let mut idxs: Vec<usize> = self.selection.iter().copied().collect();
             idxs.sort_unstable();
-            idxs.iter()
-                .filter_map(|&i| self.filtered.get(i))
-                .collect()
+            idxs.iter().filter_map(|&i| self.filtered.get(i)).collect()
         };
 
         if files.is_empty() {
@@ -943,12 +1026,14 @@ impl App {
 
         if view_dir.exists() {
             if let Err(e) = std::fs::remove_dir_all(&view_dir) {
-                self.status_message = Some(format!("create-view: could not remove existing view: {e}"));
+                self.status_message =
+                    Some(format!("create-view: could not remove existing view: {e}"));
                 return;
             }
         }
         if let Err(e) = std::fs::create_dir_all(&view_dir) {
-            self.status_message = Some(format!("create-view: could not create view directory: {e}"));
+            self.status_message =
+                Some(format!("create-view: could not create view directory: {e}"));
             return;
         }
 
@@ -999,7 +1084,10 @@ impl App {
         let source_root = path.to_path_buf();
         let (tx, rx) = mpsc::channel::<ImportMsg>();
         self.import_rx = Some(rx);
-        self.import_state = ImportState::Scanning { scanned: 0, current_file: String::new() };
+        self.import_state = ImportState::Scanning {
+            scanned: 0,
+            current_file: String::new(),
+        };
 
         std::thread::spawn(move || {
             let tx2 = tx.clone();
@@ -1026,31 +1114,49 @@ impl App {
     /// Called by the event loop when an `ImportMsg` arrives on `import_rx`.
     pub fn on_import_msg(&mut self, msg: ImportMsg) {
         match msg {
-            ImportMsg::ScanProgress { count, current_file } => {
-                self.import_state = ImportState::Scanning { scanned: count, current_file };
+            ImportMsg::ScanProgress {
+                count,
+                current_file,
+            } => {
+                self.import_state = ImportState::Scanning {
+                    scanned: count,
+                    current_file,
+                };
             }
             ImportMsg::ScanDone(mut entries) => {
                 // Assign counters now that we have target_root
                 let target_root = std::path::Path::new(&self.target_root);
                 if let Ok(conn) = rusqlite::Connection::open(&self.db_path) {
-                    if let Err(e) = crate::import::assign_counters(&mut entries, target_root, &conn) {
+                    if let Err(e) = crate::import::assign_counters(&mut entries, target_root, &conn)
+                    {
                         self.status_message = Some(format!("import: counter error: {e}"));
                         self.import_state = ImportState::Idle;
                         return;
                     }
                 }
-                self.import_state = ImportState::Preview {
-                    entries,
-                    scroll: 0,
-                };
+                self.import_state = ImportState::Preview { entries, scroll: 0 };
             }
             ImportMsg::ScanError(e) => {
                 self.status_message = Some(format!("import: scan error: {e}"));
                 self.import_state = ImportState::Idle;
                 self.import_rx = None;
             }
-            ImportMsg::CopyProgress { done, total, current_file, copied, skipped_dup, errors } => {
-                self.import_state = ImportState::Copying { done, total, current_file, copied, skipped_dup, errors };
+            ImportMsg::CopyProgress {
+                done,
+                total,
+                current_file,
+                copied,
+                skipped_dup,
+                errors,
+            } => {
+                self.import_state = ImportState::Copying {
+                    done,
+                    total,
+                    current_file,
+                    copied,
+                    skipped_dup,
+                    errors,
+                };
             }
             ImportMsg::CopyDone(summary) => {
                 let msg = format!(
@@ -1076,8 +1182,18 @@ impl App {
             ImportState::Preview { entries, .. } => entries.clone(),
             _ => return,
         };
-        let total = entries.iter().filter(|e| e.status == ImportStatus::Pending).count();
-        self.import_state = ImportState::Copying { done: 0, total, current_file: String::new(), copied: 0, skipped_dup: 0, errors: 0 };
+        let total = entries
+            .iter()
+            .filter(|e| e.status == ImportStatus::Pending)
+            .count();
+        self.import_state = ImportState::Copying {
+            done: 0,
+            total,
+            current_file: String::new(),
+            copied: 0,
+            skipped_dup: 0,
+            errors: 0,
+        };
 
         let db_path = self.db_path.clone();
         let target_root = self.target_root.clone();
@@ -1094,11 +1210,17 @@ impl App {
                 }
             };
             if let Err(e) = crate::db::ensure_schema_v1(&conn) {
-                let _ = tx.send(ImportMsg::CopyError(format!("schema migration failed: {e}")));
+                let _ = tx.send(ImportMsg::CopyError(format!(
+                    "schema migration failed: {e}"
+                )));
                 return;
             }
             let tx2 = tx.clone();
-            let mut progress_cb = move |done: usize, total: usize, file: &str, summary: &crate::import::ImportSummary| -> bool {
+            let mut progress_cb = move |done: usize,
+                                        total: usize,
+                                        file: &str,
+                                        summary: &crate::import::ImportSummary|
+                  -> bool {
                 tx2.send(ImportMsg::CopyProgress {
                     done,
                     total,
@@ -1106,7 +1228,8 @@ impl App {
                     copied: summary.copied,
                     skipped_dup: summary.skipped_dup,
                     errors: summary.errors,
-                }).is_ok()
+                })
+                .is_ok()
             };
             match crate::import::execute_import(
                 &entries,
@@ -1134,7 +1257,10 @@ impl App {
     /// Scroll the import preview list down.
     pub fn import_preview_scroll_down(&mut self) {
         if let ImportState::Preview { scroll, entries } = &mut self.import_state {
-            let visible = entries.iter().filter(|e| e.status != ImportStatus::Skipped).count();
+            let visible = entries
+                .iter()
+                .filter(|e| e.status != ImportStatus::Skipped)
+                .count();
             let max_scroll = visible.saturating_sub(self.import_list_height);
             if *scroll < max_scroll {
                 *scroll += 1;
@@ -1152,7 +1278,10 @@ impl App {
     /// Scroll the import preview list down by one page.
     pub fn import_preview_page_down(&mut self) {
         if let ImportState::Preview { scroll, entries } = &mut self.import_state {
-            let visible = entries.iter().filter(|e| e.status != ImportStatus::Skipped).count();
+            let visible = entries
+                .iter()
+                .filter(|e| e.status != ImportStatus::Skipped)
+                .count();
             let max_scroll = visible.saturating_sub(self.import_list_height);
             *scroll = (*scroll + self.import_list_height).min(max_scroll);
         }
@@ -1185,7 +1314,9 @@ impl App {
     /// if nothing is explicitly selected).
     pub fn fix_date_selected(&mut self, date_str: &str) {
         if !is_valid_date(date_str) {
-            self.status_message = Some(format!("fix-date: invalid date '{date_str}' (expected yyyy-mm-dd)"));
+            self.status_message = Some(format!(
+                "fix-date: invalid date '{date_str}' (expected yyyy-mm-dd)"
+            ));
             return;
         }
 
@@ -1233,10 +1364,7 @@ impl App {
                 date_str
             ));
         } else if let Some(msg) = first_error {
-            self.status_message = Some(format!(
-                "fix-date: {} error(s) — {}",
-                errors, msg
-            ));
+            self.status_message = Some(format!("fix-date: {} error(s) — {}", errors, msg));
         } else {
             self.status_message = Some(format!(
                 "fix-date: {} updated, {} error(s)",
@@ -1261,7 +1389,11 @@ impl App {
             let mut sel: Vec<usize> = self.selection.iter().copied().collect();
             sel.sort_unstable();
             sel.iter()
-                .filter_map(|&i| self.filtered.get(i).map(|f| (f.id.clone(), f.target_path.clone())))
+                .filter_map(|&i| {
+                    self.filtered
+                        .get(i)
+                        .map(|f| (f.id.clone(), f.target_path.clone()))
+                })
                 .collect()
         };
 
@@ -1285,7 +1417,9 @@ impl App {
 
             match crate::import::detect_wrong_ext(&abs_path, &current_ext) {
                 Some(new_ext) => {
-                    if let Err(e) = crate::db::fix_ext(&self.db_path, &self.target_root, id, &new_ext) {
+                    if let Err(e) =
+                        crate::db::fix_ext(&self.db_path, &self.target_root, id, &new_ext)
+                    {
                         eprintln!("fix-ext error for {id}: {e}");
                         if first_error.is_none() {
                             first_error = Some(e.to_string());
@@ -1354,18 +1488,14 @@ impl App {
         self.remove_slug_rx = Some(rx);
 
         std::thread::spawn(move || {
-            let result = crate::db::remove_slug_batch(
-                &db_path,
-                &target_root,
-                &targets,
-                |done, current| {
+            let result =
+                crate::db::remove_slug_batch(&db_path, &target_root, &targets, |done, current| {
                     let _ = tx.send(RemoveSlugMsg::Progress {
                         done,
                         total,
                         current: current.to_string(),
                     });
-                },
-            );
+                });
 
             let summary = match result {
                 Err(e) => format!("remove-slug: fatal error — {e}"),
@@ -1396,8 +1526,16 @@ impl App {
     /// Dispatch a message received from the background remove-slug thread.
     pub fn on_remove_slug_msg(&mut self, msg: RemoveSlugMsg) {
         match msg {
-            RemoveSlugMsg::Progress { done, total, current } => {
-                self.remove_slug_state = RemoveSlugState::Running { done, total, current };
+            RemoveSlugMsg::Progress {
+                done,
+                total,
+                current,
+            } => {
+                self.remove_slug_state = RemoveSlugState::Running {
+                    done,
+                    total,
+                    current,
+                };
             }
             RemoveSlugMsg::Done(summary) => {
                 self.remove_slug_rx = None;
@@ -1503,8 +1641,16 @@ impl App {
     /// Dispatch a message received from the background fix-os-time thread.
     pub fn on_fix_os_time_msg(&mut self, msg: FixOsTimeMsg) {
         match msg {
-            FixOsTimeMsg::Progress { done, total, current } => {
-                self.fix_os_time_state = FixOsTimeState::Running { done, total, current };
+            FixOsTimeMsg::Progress {
+                done,
+                total,
+                current,
+            } => {
+                self.fix_os_time_state = FixOsTimeState::Running {
+                    done,
+                    total,
+                    current,
+                };
             }
             FixOsTimeMsg::Done(summary) => {
                 self.fix_os_time_rx = None;
@@ -1604,10 +1750,7 @@ impl App {
                 self.status_message = Some(if tag_names.is_empty() {
                     format!("cleared all tags from {file_count} file(s)")
                 } else {
-                    format!(
-                        "removed {} from {file_count} file(s)",
-                        tag_names.join(", ")
-                    )
+                    format!("removed {} from {file_count} file(s)", tag_names.join(", "))
                 });
             }
         }
@@ -1726,9 +1869,14 @@ impl App {
             let mut errors = 0usize;
             for id in &ids {
                 let _ = tx.send(EmptyTrashMsg::Progress { done, total });
-                match crate::db::delete_trashed_from_fs(&db_path, &target_root, &[id.clone()]) {
-                    Ok((d, e)) => { done += d; errors += e; }
-                    Err(_) => { errors += 1; }
+                match crate::db::delete_trashed_from_fs(&db_path, &target_root, std::slice::from_ref(id)) {
+                    Ok((d, e)) => {
+                        done += d;
+                        errors += e;
+                    }
+                    Err(_) => {
+                        errors += 1;
+                    }
                 }
             }
             let _ = tx.send(EmptyTrashMsg::Done(done, errors));
@@ -1744,14 +1892,18 @@ impl App {
     pub fn empty_trash_scroll_down(&mut self) {
         if let EmptyTrashState::Preview { files, scroll } = &mut self.empty_trash_state {
             let max = files.len().saturating_sub(1);
-            if *scroll < max { *scroll += 1; }
+            if *scroll < max {
+                *scroll += 1;
+            }
         }
     }
 
     /// Scroll the empty-trash preview list up by one line.
     pub fn empty_trash_scroll_up(&mut self) {
         if let EmptyTrashState::Preview { scroll, .. } = &mut self.empty_trash_state {
-            if *scroll > 0 { *scroll -= 1; }
+            if *scroll > 0 {
+                *scroll -= 1;
+            }
         }
     }
 
@@ -1825,7 +1977,12 @@ impl App {
                     self.mpv_ended = false;
                     match &mut self.mpv_status {
                         MpvStatus::Playing { filename, .. } => *filename = name,
-                        _ => self.mpv_status = MpvStatus::Playing { filename: name, paused: false },
+                        _ => {
+                            self.mpv_status = MpvStatus::Playing {
+                                filename: name,
+                                paused: false,
+                            }
+                        }
                     }
                 }
                 MpvEvent::Filename(None) => {
@@ -1835,7 +1992,10 @@ impl App {
                     }
                 }
                 MpvEvent::Paused(paused) => {
-                    if let MpvStatus::Playing { paused: ref mut p, .. } = self.mpv_status {
+                    if let MpvStatus::Playing {
+                        paused: ref mut p, ..
+                    } = self.mpv_status
+                    {
                         *p = paused;
                     }
                 }
@@ -1894,7 +2054,10 @@ impl App {
 
     pub(crate) fn apply_filter(&mut self) {
         let text_needle = self.filter_text.to_lowercase();
-        self.filtered = if text_needle.is_empty() && self.tag_filters.is_empty() && self.tag_type_filters.is_empty() {
+        self.filtered = if text_needle.is_empty()
+            && self.tag_filters.is_empty()
+            && self.tag_type_filters.is_empty()
+        {
             self.all_files.clone()
         } else {
             self.all_files
@@ -1903,13 +2066,15 @@ impl App {
                     let text_match = text_needle.is_empty()
                         || text_filter_matches(&f.target_path.to_lowercase(), &text_needle);
                     let type_match = self.tag_type_filters.is_empty()
-                        || self.tag_type_filters.iter().any(|ty| {
-                            f.tag_types.iter().any(|ft| ft.eq_ignore_ascii_case(ty))
-                        });
+                        || self
+                            .tag_type_filters
+                            .iter()
+                            .any(|ty| f.tag_types.iter().any(|ft| ft.eq_ignore_ascii_case(ty)));
                     let tag_match = self.tag_filters.is_empty()
-                        || self.tag_filters.iter().any(|t| {
-                            f.tags.iter().any(|ft| ft.eq_ignore_ascii_case(t))
-                        });
+                        || self
+                            .tag_filters
+                            .iter()
+                            .any(|t| f.tags.iter().any(|ft| ft.eq_ignore_ascii_case(t)));
                     text_match && type_match && tag_match
                 })
                 .cloned()
@@ -1982,9 +2147,7 @@ impl App {
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
         if !VIDEO_EXTENSIONS.contains(&ext.as_str()) {
-            self.status_message = Some(format!(
-                "view: not a video file (.{ext})"
-            ));
+            self.status_message = Some(format!("view: not a video file (.{ext})"));
             return;
         }
         if !path.exists() {
@@ -2007,7 +2170,9 @@ impl App {
         self.mpv_ended = false;
         let start = self.selected;
         let len = self.filtered.len();
-        if len == 0 { return; }
+        if len == 0 {
+            return;
+        }
         let mut idx = (start + 1) % len;
         loop {
             if let Some(f) = self.filtered.get(idx) {
@@ -2019,7 +2184,9 @@ impl App {
                 if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
                     self.selected = idx;
                     self.ensure_visible();
-                    if self.preview_open { self.refresh_image(); }
+                    if self.preview_open {
+                        self.refresh_image();
+                    }
                     self.view_selected();
                     if was_ended {
                         if let Err(e) = self.mpv.play() {
@@ -2029,7 +2196,9 @@ impl App {
                     return;
                 }
             }
-            if idx == start { break; }
+            if idx == start {
+                break;
+            }
             idx = (idx + 1) % len;
         }
         self.status_message = Some("view: no video file found in list".into());
@@ -2046,7 +2215,9 @@ impl App {
         self.mpv_ended = false;
         let start = self.selected;
         let len = self.filtered.len();
-        if len == 0 { return; }
+        if len == 0 {
+            return;
+        }
         let mut idx = if start == 0 { len - 1 } else { start - 1 };
         loop {
             if let Some(f) = self.filtered.get(idx) {
@@ -2058,7 +2229,9 @@ impl App {
                 if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
                     self.selected = idx;
                     self.ensure_visible();
-                    if self.preview_open { self.refresh_image(); }
+                    if self.preview_open {
+                        self.refresh_image();
+                    }
                     self.view_selected();
                     if was_ended {
                         if let Err(e) = self.mpv.play() {
@@ -2068,7 +2241,9 @@ impl App {
                     return;
                 }
             }
-            if idx == start { break; }
+            if idx == start {
+                break;
+            }
             idx = if idx == 0 { len - 1 } else { idx - 1 };
         }
         self.status_message = Some("view: no video file found in list".into());
@@ -2182,7 +2357,8 @@ impl App {
         };
 
         // Skip non-image files rather than attempting (and failing) to decode them.
-        let is_image = path.extension()
+        let is_image = path
+            .extension()
             .and_then(|e| e.to_str())
             .map(|e| IMAGE_EXTS.contains(&e.to_lowercase().as_str()))
             .unwrap_or(false);
@@ -2209,17 +2385,22 @@ impl App {
         }
 
         // Cache miss: read from disk, cache, then encode.
-        match image::ImageReader::open(&path)
-            .and_then(|r| r.decode().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e)))
-        {
+        match image::ImageReader::open(&path).and_then(|r| {
+            r.decode()
+                .map_err(std::io::Error::other)
+        }) {
             Ok(dyn_img) => {
                 if self.image_cache.len() >= CACHE_MAX {
-                    let victims: Vec<PathBuf> = self.image_cache.keys()
+                    let victims: Vec<PathBuf> = self
+                        .image_cache
+                        .keys()
                         .filter(|k| *k != &path)
                         .take(CACHE_MAX / 3)
                         .cloned()
                         .collect();
-                    for k in victims { self.image_cache.remove(&k); }
+                    for k in victims {
+                        self.image_cache.remove(&k);
+                    }
                 }
                 self.image_cache.insert(path.clone(), dyn_img.clone());
                 let proto: StatefulProtocol = self.image_picker.new_resize_protocol(dyn_img);
@@ -2267,7 +2448,12 @@ impl App {
         if self.filtered.is_empty() {
             return;
         }
-        if self.filtered.get(self.selected).map(|f| f.status == "trashed").unwrap_or(false) {
+        if self
+            .filtered
+            .get(self.selected)
+            .map(|f| f.status == "trashed")
+            .unwrap_or(false)
+        {
             return;
         }
         if self.selection.contains(&self.selected) {
@@ -2287,7 +2473,12 @@ impl App {
     /// If every selectable file is already selected, deselects all instead.
     pub fn select_all_or_none(&mut self) {
         let selectable: Vec<usize> = (0..self.filtered.len())
-            .filter(|&i| self.filtered.get(i).map(|f| f.status != "trashed").unwrap_or(false))
+            .filter(|&i| {
+                self.filtered
+                    .get(i)
+                    .map(|f| f.status != "trashed")
+                    .unwrap_or(false)
+            })
             .collect();
         if selectable.is_empty() {
             return;
@@ -2312,7 +2503,9 @@ impl App {
             }
             self.selected -= 1;
             self.ensure_visible();
-            if self.preview_open { self.refresh_image(); }
+            if self.preview_open {
+                self.refresh_image();
+            }
             self.toggle_index(self.selected);
             self.shift_last_landed = Some((self.selected, false));
         }
@@ -2330,7 +2523,9 @@ impl App {
             }
             self.selected += 1;
             self.ensure_visible();
-            if self.preview_open { self.refresh_image(); }
+            if self.preview_open {
+                self.refresh_image();
+            }
             self.toggle_index(self.selected);
             self.shift_last_landed = Some((self.selected, true));
         }
@@ -2338,7 +2533,12 @@ impl App {
 
     fn toggle_index(&mut self, idx: usize) {
         // Trashed files cannot be selected.
-        if self.filtered.get(idx).map(|f| f.status == "trashed").unwrap_or(false) {
+        if self
+            .filtered
+            .get(idx)
+            .map(|f| f.status == "trashed")
+            .unwrap_or(false)
+        {
             return;
         }
         if self.selection.contains(&idx) {
@@ -2354,7 +2554,11 @@ impl App {
     /// Matches MEX filename convention: slug files have no day component; day files have DD.
     fn group_key(f: &MediaFile) -> String {
         if !f.derived_slug.is_empty() {
-            let month = if f.derived_date.len() >= 7 { &f.derived_date[..7] } else { &f.derived_date };
+            let month = if f.derived_date.len() >= 7 {
+                &f.derived_date[..7]
+            } else {
+                &f.derived_date
+            };
             format!("{}-{}", month, f.derived_slug)
         } else if f.derived_date.len() >= 10 {
             f.derived_date[..10].to_string()
@@ -2366,7 +2570,8 @@ impl App {
     /// Find the first index of the current group (scan backward from `pos`).
     fn group_start_of(&self, pos: usize) -> usize {
         let key = Self::group_key(&self.filtered[pos]);
-        (0..=pos).rev()
+        (0..=pos)
+            .rev()
             .take_while(|&i| Self::group_key(&self.filtered[i]) == key)
             .last()
             .unwrap_or(pos)
@@ -2386,20 +2591,30 @@ impl App {
     /// if every index is already selected → remove all; otherwise insert all.
     fn toggle_range(&mut self, lo: usize, hi: usize) {
         let selectable: Vec<usize> = (lo..=hi)
-            .filter(|&i| self.filtered.get(i).map_or(false, |f| f.status != "trashed"))
+            .filter(|&i| {
+                self.filtered
+                    .get(i)
+                    .is_some_and(|f| f.status != "trashed")
+            })
             .collect();
         let all_selected = selectable.iter().all(|i| self.selection.contains(i));
         if all_selected {
-            for i in selectable { self.selection.remove(&i); }
+            for i in selectable {
+                self.selection.remove(&i);
+            }
         } else {
-            for i in selectable { self.selection.insert(i); }
+            for i in selectable {
+                self.selection.insert(i);
+            }
         }
     }
 
     /// Home (non-selecting): jump to start of current slug/day group.
     /// If already at the group start, jump to start of the previous group.
     pub fn jump_home(&mut self) {
-        if self.filtered.is_empty() { return; }
+        if self.filtered.is_empty() {
+            return;
+        }
         let group_start = self.group_start_of(self.selected);
         if self.selected > group_start {
             self.selected = group_start;
@@ -2408,20 +2623,26 @@ impl App {
             self.selected = self.group_start_of(prev_end);
         }
         self.ensure_visible();
-        if self.preview_open { self.refresh_image(); }
+        if self.preview_open {
+            self.refresh_image();
+        }
     }
 
     /// End (non-selecting): jump to the start of the next slug/day group.
     /// No-op if already in the last group.
     pub fn jump_end(&mut self) {
-        if self.filtered.is_empty() { return; }
+        if self.filtered.is_empty() {
+            return;
+        }
         let group_end = self.group_end_of(self.selected);
         let next_start = group_end + 1;
         if next_start < self.filtered.len() {
             self.selected = next_start;
         }
         self.ensure_visible();
-        if self.preview_open { self.refresh_image(); }
+        if self.preview_open {
+            self.refresh_image();
+        }
     }
 
     /// Shift-Home: toggle-range selection + cursor movement.
@@ -2429,7 +2650,9 @@ impl App {
     /// - NOT at group start: toggles `group_start..=cursor`; cursor → group_start.
     /// - AT group start: toggles entire previous group; cursor → prev_group_start.
     pub fn jump_slug_day_prev(&mut self) {
-        if self.filtered.is_empty() { return; }
+        if self.filtered.is_empty() {
+            return;
+        }
         let group_start = self.group_start_of(self.selected);
         if self.selected > group_start {
             self.toggle_range(group_start, self.selected);
@@ -2441,7 +2664,9 @@ impl App {
             self.selected = prev_start;
         }
         self.ensure_visible();
-        if self.preview_open { self.refresh_image(); }
+        if self.preview_open {
+            self.refresh_image();
+        }
     }
 
     /// Shift-End: toggle-range selection + cursor overshoot.
@@ -2449,28 +2674,40 @@ impl App {
     /// Toggles `cursor..=group_end`; cursor moves to the **start of the next group**
     /// (overshooting the selection boundary). If at the last group, cursor moves to group_end.
     pub fn jump_slug_day_next(&mut self) {
-        if self.filtered.is_empty() { return; }
+        if self.filtered.is_empty() {
+            return;
+        }
         let group_end = self.group_end_of(self.selected);
         self.toggle_range(self.selected, group_end);
         let next_start = group_end + 1;
-        self.selected = if next_start < self.filtered.len() { next_start } else { group_end };
+        self.selected = if next_start < self.filtered.len() {
+            next_start
+        } else {
+            group_end
+        };
         self.ensure_visible();
-        if self.preview_open { self.refresh_image(); }
+        if self.preview_open {
+            self.refresh_image();
+        }
     }
 }
 
 /// Returns true if `s` is a valid `yyyy-mm-dd` date string.
 fn is_valid_date(s: &str) -> bool {
-    if s.len() != 10 { return false; }
+    if s.len() != 10 {
+        return false;
+    }
     let b = s.as_bytes();
-    if b[4] != b'-' || b[7] != b'-' { return false; }
+    if b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
     let ok_digits = |slice: &[u8]| slice.iter().all(|c| c.is_ascii_digit());
     if !ok_digits(&b[0..4]) || !ok_digits(&b[5..7]) || !ok_digits(&b[8..10]) {
         return false;
     }
     let month: u8 = s[5..7].parse().unwrap_or(0);
     let day: u8 = s[8..10].parse().unwrap_or(0);
-    month >= 1 && month <= 12 && day >= 1 && day <= 31
+    (1..=12).contains(&month) && (1..=31).contains(&day)
 }
 
 /// Spawn a clipboard tool with the given args (input as final arg).
@@ -2494,14 +2731,13 @@ fn osc52_copy(text: &str) -> bool {
     let b64 = base64_encode(text.as_bytes());
     // ESC ] 52 ; c ; <base64> BEL
     let seq = format!("\x1b]52;c;{b64}\x07");
-    std::io::stdout().write_all(seq.as_bytes()).is_ok()
-        && std::io::stdout().flush().is_ok()
+    std::io::stdout().write_all(seq.as_bytes()).is_ok() && std::io::stdout().flush().is_ok()
 }
 
 /// Minimal base64 encoder (RFC 4648, no padding issues for our use-case).
 fn base64_encode(input: &[u8]) -> String {
     const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
@@ -2509,8 +2745,16 @@ fn base64_encode(input: &[u8]) -> String {
         let n = (b0 << 16) | (b1 << 8) | b2;
         out.push(TABLE[((n >> 18) & 0x3f) as usize] as char);
         out.push(TABLE[((n >> 12) & 0x3f) as usize] as char);
-        out.push(if chunk.len() > 1 { TABLE[((n >> 6) & 0x3f) as usize] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[(n & 0x3f) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[((n >> 6) & 0x3f) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[(n & 0x3f) as usize] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -2620,10 +2864,7 @@ mod tests {
         for prefix in &["mex-media-root", "../mex-media-root"] {
             let p = PathBuf::from(prefix);
             if p.is_dir() {
-                return p.canonicalize()
-                    .unwrap_or(p)
-                    .to_string_lossy()
-                    .into_owned();
+                return p.canonicalize().unwrap_or(p).to_string_lossy().into_owned();
             }
         }
         create_synthetic_test_images()
@@ -2640,7 +2881,8 @@ mod tests {
             let p = dir.join(name);
             if !p.exists() {
                 let img = DynamicImage::ImageRgb8(RgbImage::new(8, 8));
-                img.save_with_format(&p, *fmt).expect("write synthetic test image");
+                img.save_with_format(&p, *fmt)
+                    .expect("write synthetic test image");
             }
         }
         dir.to_string_lossy().into_owned()
@@ -2648,7 +2890,8 @@ mod tests {
 
     /// Build a test App where each entry in `image_names` becomes one
     /// MediaFile with that name as `target_path` (relative to test_media_root).
-    fn make_test_app(image_names: &[&str]) -> App {        let (tx, _rx) = mpsc::channel();
+    fn make_test_app(image_names: &[&str]) -> App {
+        let (tx, _rx) = mpsc::channel();
         let image_state = ThreadProtocol::new(tx, None);
         let picker = Picker::halfblocks();
         let root = test_media_root();
@@ -2664,10 +2907,23 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
+                os_date: String::new(),
+                orig_filename: String::new(),
+                status: "moved".into(),
+                missing_on_disk: false,
             })
             .collect();
-        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new())
+        App::new(
+            "test.db".into(),
+            root,
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        )
     }
 
     /// Build a test App with extra non-image rows appended for navigation tests.
@@ -2689,7 +2945,10 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
+                os_date: String::new(),
+                orig_filename: String::new(),
+                status: "moved".into(),
+                missing_on_disk: false,
             })
             .collect();
         // Extra placeholder rows (non-existent paths — preview will clear gracefully).
@@ -2703,10 +2962,23 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
+                os_date: String::new(),
+                orig_filename: String::new(),
+                status: "moved".into(),
+                missing_on_disk: false,
             });
         }
-        App::new("test.db".into(), root, String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new())
+        App::new(
+            "test.db".into(),
+            root,
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        )
     }
 
     // ── Dispatch-count tests ────────────────────────────────────────────────
@@ -2717,7 +2989,10 @@ mod tests {
         let mut app = make_test_app(&["rolze.jpg"]);
         assert_eq!(app.encode_dispatch_count, 0);
         app.refresh_image();
-        assert_eq!(app.encode_dispatch_count, 1, "first open must dispatch an encode");
+        assert_eq!(
+            app.encode_dispatch_count, 1,
+            "first open must dispatch an encode"
+        );
     }
 
     /// Calling refresh_image again with the same path must NOT dispatch a
@@ -2771,7 +3046,11 @@ mod tests {
     fn dynimage_is_cached_after_first_load() {
         let mut app = make_test_app(&["rolze.jpg", "bg.png", "rolze.jpg"]);
         app.toggle_preview();
-        assert_eq!(app.image_cache.len(), 1, "first open must populate DynamicImage cache");
+        assert_eq!(
+            app.image_cache.len(),
+            1,
+            "first open must populate DynamicImage cache"
+        );
         app.move_down();
         assert_eq!(app.image_cache.len(), 2);
         app.move_up();
@@ -2803,8 +3082,8 @@ mod tests {
         let cold_duration = t_cold.elapsed();
 
         app.move_down(); // navigate away
-        app.move_up();   // back to rolze.jpg
-        // Reset path to force cache-hit path (not same-path short-circuit).
+        app.move_up(); // back to rolze.jpg
+                       // Reset path to force cache-hit path (not same-path short-circuit).
         app.current_image_path = None;
         let t_hot = Instant::now();
         app.refresh_image(); // cache hit — no disk I/O
@@ -2844,7 +3123,10 @@ mod tests {
         app.all_files[0].target_path = "some_audio.mp3".into();
         app.filtered[0].target_path = "some_audio.mp3".into();
         app.refresh_image();
-        assert_eq!(app.encode_dispatch_count, 0, "non-image file must not dispatch encode");
+        assert_eq!(
+            app.encode_dispatch_count, 0,
+            "non-image file must not dispatch encode"
+        );
         assert!(app.current_image_path.is_none());
     }
 
@@ -2856,7 +3138,10 @@ mod tests {
         app.toggle_preview();
         assert!(app.current_image_path.is_some());
         app.push_filter_char('x');
-        assert!(app.current_image_path.is_none(), "filter must clear current_image_path");
+        assert!(
+            app.current_image_path.is_none(),
+            "filter must clear current_image_path"
+        );
         assert!(!app.preview_open, "filter must close preview");
     }
 
@@ -2875,11 +3160,12 @@ mod tests {
         let mut idx = 0usize;
         for (name, count) in groups {
             for _ in 0..*count {
-                let (derived_date, derived_slug) = if name.len() == 10 && name.chars().nth(4) == Some('-') {
-                    (name.to_string(), String::new())
-                } else {
-                    ("2024-01".to_string(), name.to_string())
-                };
+                let (derived_date, derived_slug) =
+                    if name.len() == 10 && name.chars().nth(4) == Some('-') {
+                        (name.to_string(), String::new())
+                    } else {
+                        ("2024-01".to_string(), name.to_string())
+                    };
                 files.push(crate::db::MediaFile {
                     id: idx.to_string(),
                     target_path: format!("nonexistent-{idx}.jpg"),
@@ -2889,12 +3175,25 @@ mod tests {
                     tag_types: vec![],
                     derived_slug,
                     caption_slug: String::new(),
-                    os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
+                    os_date: String::new(),
+                    orig_filename: String::new(),
+                    status: "moved".into(),
+                    missing_on_disk: false,
                 });
                 idx += 1;
             }
         }
-        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new())
+        App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        )
     }
 
     // ── Home (non-selecting) ────────────────────────────────────────────────
@@ -2905,7 +3204,10 @@ mod tests {
         let mut app = make_grouped_app(&[("trip", 3), ("work", 3)]);
         app.selected = 4;
         app.jump_home();
-        assert_eq!(app.selected, 3, "Home from middle of group B should land at B's start (index 3)");
+        assert_eq!(
+            app.selected, 3,
+            "Home from middle of group B should land at B's start (index 3)"
+        );
         assert!(app.selection.is_empty(), "Home must not modify selection");
     }
 
@@ -2915,7 +3217,10 @@ mod tests {
         let mut app = make_grouped_app(&[("trip", 3), ("work", 3)]);
         app.selected = 3;
         app.jump_home();
-        assert_eq!(app.selected, 0, "Home at start of B should jump to start of A (index 0)");
+        assert_eq!(
+            app.selected, 0,
+            "Home at start of B should jump to start of A (index 0)"
+        );
         assert!(app.selection.is_empty());
     }
 
@@ -2935,7 +3240,10 @@ mod tests {
         let mut app = make_grouped_app(&[("trip", 3), ("work", 3)]);
         app.selected = 1; // middle of A
         app.jump_end();
-        assert_eq!(app.selected, 3, "End should jump to start of next group (index 3)");
+        assert_eq!(
+            app.selected, 3,
+            "End should jump to start of next group (index 3)"
+        );
         assert!(app.selection.is_empty(), "End must not modify selection");
     }
 
@@ -2953,7 +3261,10 @@ mod tests {
         let mut app = make_grouped_app(&[("trip", 3), ("work", 3)]);
         app.selected = 2; // last item of A
         app.jump_end();
-        assert_eq!(app.selected, 3, "End from last item of A should jump to start of B");
+        assert_eq!(
+            app.selected, 3,
+            "End from last item of A should jump to start of B"
+        );
     }
 
     // ── Shift-Home (toggle-range selection) ────────────────────────────────
@@ -2979,7 +3290,10 @@ mod tests {
         // Pre-select the range that Shift-Home would select
         app.selection.extend([0, 1, 2]);
         app.jump_slug_day_prev();
-        assert!(app.selection.is_empty(), "Shift-Home on already-selected range should deselect");
+        assert!(
+            app.selection.is_empty(),
+            "Shift-Home on already-selected range should deselect"
+        );
         assert_eq!(app.selected, 0);
     }
 
@@ -2993,8 +3307,15 @@ mod tests {
         assert!(app.selection.contains(&0));
         assert!(app.selection.contains(&1));
         assert!(app.selection.contains(&2));
-        assert_eq!(app.selection.len(), 3, "should select entire previous group (A)");
-        assert!(!app.selection.contains(&3), "current position (start of B) must not be selected");
+        assert_eq!(
+            app.selection.len(),
+            3,
+            "should select entire previous group (A)"
+        );
+        assert!(
+            !app.selection.contains(&3),
+            "current position (start of B) must not be selected"
+        );
     }
 
     #[test]
@@ -3017,7 +3338,11 @@ mod tests {
         assert!(app.selection.contains(&1));
         assert!(app.selection.contains(&2));
         assert!(app.selection.contains(&3));
-        assert_eq!(app.selection.len(), 3, "should select 1..=3 (rest of group A)");
+        assert_eq!(
+            app.selection.len(),
+            3,
+            "should select 1..=3 (rest of group A)"
+        );
     }
 
     #[test]
@@ -3026,8 +3351,14 @@ mod tests {
         let mut app = make_grouped_app(&[("trip", 4), ("work", 3)]);
         app.selected = 1;
         app.jump_slug_day_next();
-        assert_eq!(app.selected, 4, "cursor should overshoot to start of next group (index 4)");
-        assert!(!app.selection.contains(&4), "start of next group must NOT be in selection");
+        assert_eq!(
+            app.selected, 4,
+            "cursor should overshoot to start of next group (index 4)"
+        );
+        assert!(
+            !app.selection.contains(&4),
+            "start of next group must NOT be in selection"
+        );
     }
 
     #[test]
@@ -3038,7 +3369,9 @@ mod tests {
         app.selection.extend([1, 2, 3]); // pre-select what Shift-End would select
         app.jump_slug_day_next();
         assert!(
-            !app.selection.contains(&1) && !app.selection.contains(&2) && !app.selection.contains(&3),
+            !app.selection.contains(&1)
+                && !app.selection.contains(&2)
+                && !app.selection.contains(&3),
             "Shift-End on already-selected range should deselect"
         );
     }
@@ -3053,7 +3386,10 @@ mod tests {
         assert!(app.selection.contains(&2));
         assert_eq!(app.selection.len(), 2);
         // No next group — cursor stays at last item of group
-        assert_eq!(app.selected, 2, "cursor should stay at last item when no next group exists");
+        assert_eq!(
+            app.selected, 2,
+            "cursor should stay at last item when no next group exists"
+        );
     }
 
     // ── Shift-Up/Down (toggle both, skip re-toggle when continuing) ─────────
@@ -3075,7 +3411,10 @@ mod tests {
         app.extend_selection_down(); // toggle 0, move→1, toggle 1 → {0,1}
         app.extend_selection_down(); // continuing: skip 1, move→2, toggle 2 → {0,1,2}
         assert!(app.selection.contains(&0));
-        assert!(app.selection.contains(&1), "item 1 must NOT be double-toggled");
+        assert!(
+            app.selection.contains(&1),
+            "item 1 must NOT be double-toggled"
+        );
         assert!(app.selection.contains(&2));
         assert_eq!(app.selection.len(), 3);
     }
@@ -3089,7 +3428,9 @@ mod tests {
         app.extend_selection_down();
         app.extend_selection_down(); // → {0,1,2,3,4}
         assert_eq!(app.selection.len(), 5);
-        for i in 0..=4 { assert!(app.selection.contains(&i)); }
+        for i in 0..=4 {
+            assert!(app.selection.contains(&i));
+        }
     }
 
     #[test]
@@ -3098,8 +3439,8 @@ mod tests {
         app.selected = 0;
         app.extend_selection_down(); // {0,1}, cursor=1
         app.extend_selection_down(); // {0,1,2}, cursor=2
-        // Reverse: not continuing down from 2, so toggle 2 (desel) + move + toggle 1 (desel)
-        app.extend_selection_up();   // {0}, cursor=1
+                                     // Reverse: not continuing down from 2, so toggle 2 (desel) + move + toggle 1 (desel)
+        app.extend_selection_up(); // {0}, cursor=1
         assert!(app.selection.contains(&0));
         assert!(!app.selection.contains(&1));
         assert!(!app.selection.contains(&2));
@@ -3114,7 +3455,9 @@ mod tests {
         app.extend_selection_up();
         app.extend_selection_up(); // → {4,3,2,1}
         assert_eq!(app.selection.len(), 4);
-        for i in 1..=4 { assert!(app.selection.contains(&i)); }
+        for i in 1..=4 {
+            assert!(app.selection.contains(&i));
+        }
     }
 
     #[test]
@@ -3122,7 +3465,7 @@ mod tests {
         let mut app = make_grouped_app(&[("trip", 5)]);
         app.selected = 0;
         app.extend_selection_down(); // {0,1}, state=(1,down)
-        app.move_down();             // normal nav, resets shift state, cursor=2
+        app.move_down(); // normal nav, resets shift state, cursor=2
         app.extend_selection_down(); // fresh start: toggle 2, move→3, toggle 3 → {0,1,2,3}
         assert!(app.selection.contains(&2), "fresh start toggles current");
         assert!(app.selection.contains(&3));
@@ -3162,7 +3505,10 @@ mod tests {
         // Simulate first Esc: clears selection (preview stays open)
         app.clear_selection();
         assert!(app.selection.is_empty(), "selection should be cleared");
-        assert!(app.preview_open, "preview should still be open after first Esc-equivalent");
+        assert!(
+            app.preview_open,
+            "preview should still be open after first Esc-equivalent"
+        );
         // Simulate second Esc: closes preview
         app.preview_open = false;
         assert!(!app.preview_open);
@@ -3187,10 +3533,23 @@ mod tests {
                 tag_types: vec![],
                 derived_slug: String::new(),
                 caption_slug: String::new(),
-                os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
+                os_date: String::new(),
+                orig_filename: String::new(),
+                status: "moved".into(),
+                missing_on_disk: false,
             })
             .collect();
-        App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new())
+        App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        )
     }
 
     #[test]
@@ -3221,10 +3580,7 @@ mod tests {
 
     #[test]
     fn tag_filter_case_insensitive() {
-        let mut app = make_tagged_app(&[
-            ("a.jpg", &["Travel"]),
-            ("b.jpg", &["work"]),
-        ]);
+        let mut app = make_tagged_app(&[("a.jpg", &["Travel"]), ("b.jpg", &["work"])]);
         app.tag_filters.push("TRAVEL".into());
         app.apply_filter();
         assert_eq!(app.filtered.len(), 1);
@@ -3233,10 +3589,7 @@ mod tests {
 
     #[test]
     fn text_filter_skips_tags() {
-        let mut app = make_tagged_app(&[
-            ("photo.jpg", &["travel"]),
-            ("travel.jpg", &["work"]),
-        ]);
+        let mut app = make_tagged_app(&[("photo.jpg", &["travel"]), ("travel.jpg", &["work"])]);
         // "travel" as text should match filename only, not the tag
         app.filter_text = "travel".into();
         app.apply_filter();
@@ -3247,9 +3600,9 @@ mod tests {
     #[test]
     fn combined_filter_and_logic() {
         let mut app = make_tagged_app(&[
-            ("vacation.jpg", &["travel"]),   // text match + tag match → include
-            ("vacation.jpg2", &["work"]),    // text match, tag no match → exclude
-            ("other.jpg", &["travel"]),      // tag match, text no match → exclude
+            ("vacation.jpg", &["travel"]), // text match + tag match → include
+            ("vacation.jpg2", &["work"]),  // text match, tag no match → exclude
+            ("other.jpg", &["travel"]),    // tag match, text no match → exclude
         ]);
         app.filter_text = "vacation".into();
         app.tag_filters.push("travel".into());
@@ -3324,9 +3677,7 @@ mod tests {
 
     #[test]
     fn tag_autocomplete_suggestion() {
-        let app = make_tagged_app(&[
-            ("a.jpg", &["travel", "work"]),
-        ]);
+        let app = make_tagged_app(&[("a.jpg", &["travel", "work"])]);
         // all_tags should be ["travel", "work"] (sorted)
         assert!(app.all_tags.contains(&"travel".to_string()));
         assert!(app.all_tags.contains(&"work".to_string()));
@@ -3356,7 +3707,10 @@ mod tests {
         app.tag_typing = true;
         app.tag_input.clear(); // empty tag_input
         app.pop_filter_char();
-        assert!(!app.tag_typing, "backspace on empty tag_input should exit tag_typing");
+        assert!(
+            !app.tag_typing,
+            "backspace on empty tag_input should exit tag_typing"
+        );
     }
 
     #[test]
@@ -3414,7 +3768,17 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let image_state = ThreadProtocol::new(tx, None);
         let picker = Picker::halfblocks();
-        App::new("test.db".into(), String::new(), String::new(), vec![], picker, image_state, "halfblocks".into(), vec![], String::new())
+        App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            vec![],
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        )
     }
 
     #[test]
@@ -3423,7 +3787,10 @@ mod tests {
         app.enter_command_mode();
         "fix".chars().for_each(|c| app.push_command_char(c));
         let suggestions = app.command_name_suggestions();
-        assert!(suggestions.contains(&"fix-date"), "typing 'fix' should suggest 'fix-date'");
+        assert!(
+            suggestions.contains(&"fix-date"),
+            "typing 'fix' should suggest 'fix-date'"
+        );
     }
 
     #[test]
@@ -3432,7 +3799,10 @@ mod tests {
         app.enter_command_mode();
         "fix-date".chars().for_each(|c| app.push_command_char(c));
         let suggestions = app.command_name_suggestions();
-        assert!(suggestions.contains(&"fix-date"), "exact command name still shows suggestion");
+        assert!(
+            suggestions.contains(&"fix-date"),
+            "exact command name still shows suggestion"
+        );
     }
 
     #[test]
@@ -3464,7 +3834,9 @@ mod tests {
     fn tab_complete_no_fill_after_space() {
         let mut app = make_cmd_app();
         app.enter_command_mode();
-        "fix-date 2024-01-01".chars().for_each(|c| app.push_command_char(c));
+        "fix-date 2024-01-01"
+            .chars()
+            .for_each(|c| app.push_command_char(c));
         app.tab_complete();
         // Should not overwrite the argument.
         assert_eq!(app.command.as_deref(), Some("fix-date 2024-01-01"));
@@ -3476,7 +3848,10 @@ mod tests {
         app.fix_date_selected("not-a-date");
         assert!(app.status_message.is_some());
         let msg = app.status_message.as_deref().unwrap_or("");
-        assert!(msg.contains("invalid date"), "expected invalid date msg, got: {msg}");
+        assert!(
+            msg.contains("invalid date"),
+            "expected invalid date msg, got: {msg}"
+        );
     }
 
     #[test]
@@ -3521,7 +3896,8 @@ mod tests {
                                       PRIMARY KEY (media_id, tag_id));
              INSERT INTO media VALUES ('m1','2024/a.jpg','2024-01-01','jpg',NULL,'','');
              INSERT INTO media VALUES ('m2','2024/b.jpg','2024-01-01','jpg',NULL,'','');",
-        ).unwrap();
+        )
+        .unwrap();
         (dir, db_path.to_str().unwrap().to_string())
     }
 
@@ -3531,9 +3907,16 @@ mod tests {
         crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let tag_id: i64 = conn.query_row("SELECT id FROM tags WHERE name='holiday'", [], |r| r.get(0)).unwrap();
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM media_tags WHERE media_id='m1' AND tag_id=?1", [tag_id], |r| r.get(0)).unwrap();
+        let tag_id: i64 = conn
+            .query_row("SELECT id FROM tags WHERE name='holiday'", [], |r| r.get(0))
+            .unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media_tags WHERE media_id='m1' AND tag_id=?1",
+                [tag_id],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -3544,10 +3927,16 @@ mod tests {
         crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", Some("event")).unwrap();
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let tag_count: i64 = conn.query_row("SELECT COUNT(*) FROM tags WHERE name='holiday'", [], |r| r.get(0)).unwrap();
+        let tag_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM tags WHERE name='holiday'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(tag_count, 1, "should not create duplicate tag");
 
-        let link_count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0)).unwrap();
+        let link_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(link_count, 2);
     }
 
@@ -3555,10 +3944,14 @@ mod tests {
     fn assign_tag_errors_on_type_mismatch() {
         let (_dir, db_path) = make_tag_db();
         crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
-        let result = crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", Some("person"));
+        let result =
+            crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", Some("person"));
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("already exists as type"), "unexpected error: {msg}");
+        assert!(
+            msg.contains("already exists as type"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]
@@ -3568,7 +3961,9 @@ mod tests {
         crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1, "duplicate attach should be ignored");
     }
 
@@ -3578,7 +3973,9 @@ mod tests {
         crate::db::assign_tag(&db_path, &["m1".to_string()], "trip", None).unwrap();
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let ty: String = conn.query_row("SELECT type FROM tags WHERE name='trip'", [], |r| r.get(0)).unwrap();
+        let ty: String = conn
+            .query_row("SELECT type FROM tags WHERE name='trip'", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(ty, "event");
     }
 
@@ -3589,12 +3986,18 @@ mod tests {
         crate::db::assign_tag(&db_path, &["m1".to_string()], "alice", Some("person")).unwrap();
         // Assign same tag without specifying type — must not error
         let result = crate::db::assign_tag(&db_path, &["m2".to_string()], "alice", None);
-        assert!(result.is_ok(), "omitting @type should reuse existing tag, got: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "omitting @type should reuse existing tag, got: {:?}",
+            result
+        );
         let effective = result.unwrap();
         assert_eq!(effective, "person");
 
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let link_count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0)).unwrap();
+        let link_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(link_count, 2);
     }
 
@@ -3603,14 +4006,31 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
         let picker = ratatui_image::picker::Picker::halfblocks();
-        let files: Vec<crate::db::MediaFile> = vec![
-            crate::db::MediaFile {
-                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
-                ext: "jpg".into(), tags: vec!["travel".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
-            }
-        ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
+        let files: Vec<crate::db::MediaFile> = vec![crate::db::MediaFile {
+            id: "1".into(),
+            target_path: "a.jpg".into(),
+            derived_date: "2024-01-01".into(),
+            ext: "jpg".into(),
+            tags: vec!["travel".into(), "trip".into()],
+            tag_types: vec![],
+            derived_slug: String::new(),
+            caption_slug: String::new(),
+            os_date: String::new(),
+            orig_filename: String::new(),
+            status: "moved".into(),
+            missing_on_disk: false,
+        }];
+        let mut app = App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        );
         app.enter_command_mode();
         "tag tr".chars().for_each(|c| app.push_command_char(c));
         let suggestions = app.tag_arg_suggestions();
@@ -3624,16 +4044,35 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
         let picker = ratatui_image::picker::Picker::halfblocks();
-        let files: Vec<crate::db::MediaFile> = vec![
-            crate::db::MediaFile {
-                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
-                ext: "jpg".into(), tags: vec!["alice".into()], tag_types: vec!["person".into()],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
-            }
-        ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
+        let files: Vec<crate::db::MediaFile> = vec![crate::db::MediaFile {
+            id: "1".into(),
+            target_path: "a.jpg".into(),
+            derived_date: "2024-01-01".into(),
+            ext: "jpg".into(),
+            tags: vec!["alice".into()],
+            tag_types: vec!["person".into()],
+            derived_slug: String::new(),
+            caption_slug: String::new(),
+            os_date: String::new(),
+            orig_filename: String::new(),
+            status: "moved".into(),
+            missing_on_disk: false,
+        }];
+        let mut app = App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        );
         app.enter_command_mode();
-        "tag newtag@per".chars().for_each(|c| app.push_command_char(c));
+        "tag newtag@per"
+            .chars()
+            .for_each(|c| app.push_command_char(c));
         let suggestions = app.tag_arg_suggestions();
         assert!(suggestions.contains(&"person".to_string()));
     }
@@ -3643,14 +4082,31 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
         let picker = ratatui_image::picker::Picker::halfblocks();
-        let files: Vec<crate::db::MediaFile> = vec![
-            crate::db::MediaFile {
-                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
-                ext: "jpg".into(), tags: vec!["vacation".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
-            }
-        ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
+        let files: Vec<crate::db::MediaFile> = vec![crate::db::MediaFile {
+            id: "1".into(),
+            target_path: "a.jpg".into(),
+            derived_date: "2024-01-01".into(),
+            ext: "jpg".into(),
+            tags: vec!["vacation".into()],
+            tag_types: vec![],
+            derived_slug: String::new(),
+            caption_slug: String::new(),
+            os_date: String::new(),
+            orig_filename: String::new(),
+            status: "moved".into(),
+            missing_on_disk: false,
+        }];
+        let mut app = App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        );
         app.enter_command_mode();
         "tag vac".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
@@ -3662,16 +4118,35 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
         let picker = ratatui_image::picker::Picker::halfblocks();
-        let files: Vec<crate::db::MediaFile> = vec![
-            crate::db::MediaFile {
-                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
-                ext: "jpg".into(), tags: vec!["alice".into()], tag_types: vec!["person".into()],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
-            }
-        ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
+        let files: Vec<crate::db::MediaFile> = vec![crate::db::MediaFile {
+            id: "1".into(),
+            target_path: "a.jpg".into(),
+            derived_date: "2024-01-01".into(),
+            ext: "jpg".into(),
+            tags: vec!["alice".into()],
+            tag_types: vec!["person".into()],
+            derived_slug: String::new(),
+            caption_slug: String::new(),
+            os_date: String::new(),
+            orig_filename: String::new(),
+            status: "moved".into(),
+            missing_on_disk: false,
+        }];
+        let mut app = App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        );
         app.enter_command_mode();
-        "tag newtag@per".chars().for_each(|c| app.push_command_char(c));
+        "tag newtag@per"
+            .chars()
+            .for_each(|c| app.push_command_char(c));
         app.tab_complete();
         assert_eq!(app.command.as_deref(), Some("tag newtag@person"));
     }
@@ -3691,7 +4166,10 @@ mod tests {
         let mut app = make_cmd_app();
         app.command = Some("ta".into());
         let suggestions = app.command_name_suggestions();
-        assert!(suggestions.contains(&"tag"), "tag should be in KNOWN_COMMANDS");
+        assert!(
+            suggestions.contains(&"tag"),
+            "tag should be in KNOWN_COMMANDS"
+        );
     }
 
     // ── :untag tests ─────────────────────────────────────────────────────────
@@ -3704,7 +4182,13 @@ mod tests {
         let removed = crate::db::remove_tags(&db_path, &["m1".to_string()], &[]).unwrap();
         assert_eq!(removed, 2);
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags WHERE media_id='m1'", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media_tags WHERE media_id='m1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 0);
     }
 
@@ -3715,7 +4199,13 @@ mod tests {
         crate::db::assign_tag(&db_path, &["m1".to_string()], "summer", Some("event")).unwrap();
         crate::db::remove_tags(&db_path, &["m1".to_string()], &["holiday".to_string()]).unwrap();
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags WHERE media_id='m1'", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media_tags WHERE media_id='m1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 1, "should only remove the specified tag");
     }
 
@@ -3723,10 +4213,20 @@ mod tests {
     fn remove_tags_unknown_name_is_noop() {
         let (_dir, db_path) = make_tag_db();
         crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
-        crate::db::remove_tags(&db_path, &["m1".to_string()], &["nonexistent".to_string()]).unwrap();
+        crate::db::remove_tags(&db_path, &["m1".to_string()], &["nonexistent".to_string()])
+            .unwrap();
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM media_tags WHERE media_id='m1'", [], |r| r.get(0)).unwrap();
-        assert_eq!(count, 1, "removing unknown tag should leave existing tag intact");
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media_tags WHERE media_id='m1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "removing unknown tag should leave existing tag intact"
+        );
     }
 
     #[test]
@@ -3734,14 +4234,31 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
         let picker = ratatui_image::picker::Picker::halfblocks();
-        let files: Vec<crate::db::MediaFile> = vec![
-            crate::db::MediaFile {
-                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
-                ext: "jpg".into(), tags: vec!["travel".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
-            }
-        ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
+        let files: Vec<crate::db::MediaFile> = vec![crate::db::MediaFile {
+            id: "1".into(),
+            target_path: "a.jpg".into(),
+            derived_date: "2024-01-01".into(),
+            ext: "jpg".into(),
+            tags: vec!["travel".into(), "trip".into()],
+            tag_types: vec![],
+            derived_slug: String::new(),
+            caption_slug: String::new(),
+            os_date: String::new(),
+            orig_filename: String::new(),
+            status: "moved".into(),
+            missing_on_disk: false,
+        }];
+        let mut app = App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        );
         app.command = Some("untag tr".into());
         let suggestions = app.tag_arg_suggestions();
         assert!(suggestions.contains(&"travel".to_string()));
@@ -3753,18 +4270,39 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
         let picker = ratatui_image::picker::Picker::halfblocks();
-        let files: Vec<crate::db::MediaFile> = vec![
-            crate::db::MediaFile {
-                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
-                ext: "jpg".into(), tags: vec!["vacation".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
-            }
-        ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
+        let files: Vec<crate::db::MediaFile> = vec![crate::db::MediaFile {
+            id: "1".into(),
+            target_path: "a.jpg".into(),
+            derived_date: "2024-01-01".into(),
+            ext: "jpg".into(),
+            tags: vec!["vacation".into()],
+            tag_types: vec![],
+            derived_slug: String::new(),
+            caption_slug: String::new(),
+            os_date: String::new(),
+            orig_filename: String::new(),
+            status: "moved".into(),
+            missing_on_disk: false,
+        }];
+        let mut app = App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        );
         app.enter_command_mode();
         "untag vac".chars().for_each(|c| app.push_command_char(c));
         app.tab_complete();
-        assert_eq!(app.command.as_deref(), Some("untag vacation "), "tab should complete and append space");
+        assert_eq!(
+            app.command.as_deref(),
+            Some("untag vacation "),
+            "tab should complete and append space"
+        );
     }
 
     #[test]
@@ -3772,16 +4310,35 @@ mod tests {
         let (tx, _rx) = std::sync::mpsc::channel();
         let image_state = ratatui_image::thread::ThreadProtocol::new(tx, None);
         let picker = ratatui_image::picker::Picker::halfblocks();
-        let files: Vec<crate::db::MediaFile> = vec![
-            crate::db::MediaFile {
-                id: "1".into(), target_path: "a.jpg".into(), derived_date: "2024-01-01".into(),
-                ext: "jpg".into(), tags: vec!["vacation".into(), "trip".into()], tag_types: vec![],
-                derived_slug: String::new(), caption_slug: String::new(), os_date: String::new(), orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
-            }
-        ];
-        let mut app = App::new("test.db".into(), String::new(), String::new(), files, picker, image_state, "halfblocks".into(), vec![], String::new());
+        let files: Vec<crate::db::MediaFile> = vec![crate::db::MediaFile {
+            id: "1".into(),
+            target_path: "a.jpg".into(),
+            derived_date: "2024-01-01".into(),
+            ext: "jpg".into(),
+            tags: vec!["vacation".into(), "trip".into()],
+            tag_types: vec![],
+            derived_slug: String::new(),
+            caption_slug: String::new(),
+            os_date: String::new(),
+            orig_filename: String::new(),
+            status: "moved".into(),
+            missing_on_disk: false,
+        }];
+        let mut app = App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        );
         app.enter_command_mode();
-        "untag vacation tri".chars().for_each(|c| app.push_command_char(c));
+        "untag vacation tri"
+            .chars()
+            .for_each(|c| app.push_command_char(c));
         app.tab_complete();
         assert_eq!(app.command.as_deref(), Some("untag vacation trip "));
     }
@@ -3807,10 +4364,22 @@ mod tests {
                 derived_slug: String::new(),
                 caption_slug: String::new(),
                 os_date: String::new(),
-                orig_filename: String::new(), status: "moved".into(), missing_on_disk: false,
+                orig_filename: String::new(),
+                status: "moved".into(),
+                missing_on_disk: false,
             })
             .collect();
-        App::new("test.db".into(), root, views_root.to_string(), files, picker, image_state, "halfblocks".into(), vec![], String::new())
+        App::new(
+            "test.db".into(),
+            root,
+            views_root.to_string(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        )
     }
 
     #[test]
@@ -3818,7 +4387,10 @@ mod tests {
         let mut app = make_test_app_with_views_root(&["rolze.jpg"], "");
         app.create_view("myview");
         let msg = app.status_message.as_deref().unwrap_or("");
-        assert!(msg.contains("views_root"), "expected views_root error, got: {msg}");
+        assert!(
+            msg.contains("views_root"),
+            "expected views_root error, got: {msg}"
+        );
     }
 
     #[test]
@@ -3840,9 +4412,16 @@ mod tests {
         let mut app = make_test_app_with_views_root(&["rolze.jpg"], &views_root);
         app.create_view("testview");
         let msg = app.status_message.as_deref().unwrap_or("");
-        assert!(msg.contains("testview"), "expected success message with view name, got: {msg}");
+        assert!(
+            msg.contains("testview"),
+            "expected success message with view name, got: {msg}"
+        );
         let link = tmp.join("testview").join("rolze.jpg");
-        assert!(link.exists(), "hard link should exist at {}", link.display());
+        assert!(
+            link.exists(),
+            "hard link should exist at {}",
+            link.display()
+        );
         // Cleanup
         let _ = std::fs::remove_dir_all(tmp.join("testview"));
     }
@@ -3858,7 +4437,10 @@ mod tests {
         std::fs::write(view_dir.join("stale.txt"), b"old").unwrap();
         let mut app = make_test_app_with_views_root(&["rolze.jpg"], &views_root);
         app.create_view("myview");
-        assert!(!view_dir.join("stale.txt").exists(), "stale file should be gone");
+        assert!(
+            !view_dir.join("stale.txt").exists(),
+            "stale file should be gone"
+        );
         assert!(view_dir.join("rolze.jpg").exists(), "new link should exist");
         // Cleanup
         let _ = std::fs::remove_dir_all(tmp.join("myview"));
@@ -3874,8 +4456,14 @@ mod tests {
         app.selection.insert(1);
         app.create_view("selview");
         let view_dir = tmp.join("selview");
-        assert!(!view_dir.join("rolze.jpg").exists(), "unselected file must not be linked");
-        assert!(view_dir.join("bg.png").exists(), "selected file must be linked");
+        assert!(
+            !view_dir.join("rolze.jpg").exists(),
+            "unselected file must not be linked"
+        );
+        assert!(
+            view_dir.join("bg.png").exists(),
+            "selected file must be linked"
+        );
         // Cleanup
         let _ = std::fs::remove_dir_all(tmp.join("selview"));
     }
@@ -3904,7 +4492,10 @@ mod tests {
         app.push_filter_char('o');
         app.exit_filter_mode();
         assert!(!app.filter_mode);
-        assert_eq!(app.filter_text, "foo", "filter text must be preserved on exit");
+        assert_eq!(
+            app.filter_text, "foo",
+            "filter text must be preserved on exit"
+        );
     }
 
     #[test]
@@ -3917,7 +4508,10 @@ mod tests {
         assert_eq!(app.tag_input, "h");
         app.exit_filter_mode();
         assert!(!app.filter_mode);
-        assert!(!app.tag_typing, "partial tag input must be cancelled on exit");
+        assert!(
+            !app.tag_typing,
+            "partial tag input must be cancelled on exit"
+        );
         assert!(app.tag_input.is_empty());
     }
 

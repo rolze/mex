@@ -38,12 +38,7 @@ fn is_supported_ext(ext: &str) -> bool {
         || VIDEO_EXTS.iter().any(|&x| x == e)
 }
 
-const ALWAYS_SKIP: &[&str] = &[
-    "thumbs.db",
-    "ehthumbs.db",
-    "desktop.ini",
-    ".ds_store",
-];
+const ALWAYS_SKIP: &[&str] = &["thumbs.db", "ehthumbs.db", "desktop.ini", ".ds_store"];
 const THUMBNAIL_PREFIXES: &[&str] = &["TN_", "TN "];
 
 // ── Folder / file classification ──────────────────────────────────────────────
@@ -61,7 +56,14 @@ const FOLDER_JUNK: &[&str] = &[
     "originals",
 ];
 const GENERIC_ORG: &[&str] = &[
-    "others", "other", "various", "assorted", "unsorted", "general", "rest", "sonstiges",
+    "others",
+    "other",
+    "various",
+    "assorted",
+    "unsorted",
+    "general",
+    "rest",
+    "sonstiges",
 ];
 
 fn is_camera_folder_pattern(name: &str) -> bool {
@@ -89,7 +91,16 @@ pub fn is_junk_folder(name: &str) -> bool {
 /// Returns true if the folder name contains a quality-variant token as a standalone word.
 pub fn is_quality_variant(name: &str) -> bool {
     let lower = name.to_lowercase();
-    for token in &["small", "web", "thumbnail", "thumbnails", "thumb", "thumbs", "preview", "previews"] {
+    for token in &[
+        "small",
+        "web",
+        "thumbnail",
+        "thumbnails",
+        "thumb",
+        "thumbs",
+        "preview",
+        "previews",
+    ] {
         // Standalone: surrounded by space, hyphen, underscore, or at start/end
         let bytes = lower.as_bytes();
         let tk = token.as_bytes();
@@ -124,7 +135,10 @@ pub fn is_dump_folder(name: &str) -> bool {
     // normalise separators
     s = regex_replace_all(&s, r"[-_.\s]+", " ");
     let tokens: Vec<&str> = s.split_whitespace().collect();
-    !tokens.is_empty() && tokens.iter().all(|t| DUMP_FOLDER_WORDS.iter().any(|&d| d == *t))
+    !tokens.is_empty()
+        && tokens
+            .iter()
+            .all(|t| DUMP_FOLDER_WORDS.contains(t))
 }
 
 // ── Transliteration ───────────────────────────────────────────────────────────
@@ -220,8 +234,8 @@ fn regex_replace_all(s: &str, pattern: &str, replacement: &str) -> String {
                         i = j;
                         continue;
                     } else {
-                        for k in i..j {
-                            out.push(bytes[k] as char);
+                        for &b in bytes.iter().take(j).skip(i) {
+                            out.push(b as char);
                         }
                         i = j;
                         continue;
@@ -304,12 +318,14 @@ pub fn is_camera_code(filename: &str) -> bool {
         if lower == *prefix {
             return true;
         }
-        if lower.starts_with(prefix) {
-            let rest = &lower[prefix.len()..];
-            let rest = rest.trim_start_matches(|c| c == '_' || c == '-');
+        if let Some(stripped) = lower.strip_prefix(prefix) {
+            let rest = stripped;
+            let rest = rest.trim_start_matches(['_', '-']);
             // Camera codes are followed only by digits and separators (no real words)
             if rest.is_empty()
-                || rest.chars().all(|c| c.is_ascii_digit() || c == '_' || c == '-')
+                || rest
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == '_' || c == '-')
             {
                 return true;
             }
@@ -340,7 +356,7 @@ fn is_camera_fat32(base: &str) -> bool {
     }
     let alpha_end = bytes.iter().position(|b| !b.is_ascii_uppercase());
     match alpha_end {
-        None => false, // all letters, no digits
+        None => false,    // all letters, no digits
         Some(0) => false, // starts with digit
         Some(pos) => bytes[pos..].iter().all(|b| b.is_ascii_digit()),
     }
@@ -351,18 +367,68 @@ fn is_camera_fat32(base: &str) -> bool {
 const SHORT_SLUG_WHITELIST: &[&str] = &["uni", "sun", "fkn", "ocp", "pab"];
 
 const JUNK_WORDS: &[&str] = &[
-    "img", "dsc", "dscn", "dscf", "cimg", "mvc", "sdc", "pic", "pict", "kif", "ssl", "dcp",
-    "picture", "bild", "kopie", "copy", "von", "of", "foto", "photo", "image",
-    "screenshot", "screenshots", "bilder", "videos",
-    "the", "and", "und", "mit", "an", "im", "oder", "der", "die", "das", "ein", "eine",
+    "img",
+    "dsc",
+    "dscn",
+    "dscf",
+    "cimg",
+    "mvc",
+    "sdc",
+    "pic",
+    "pict",
+    "kif",
+    "ssl",
+    "dcp",
+    "picture",
+    "bild",
+    "kopie",
+    "copy",
+    "von",
+    "of",
+    "foto",
+    "photo",
+    "image",
+    "screenshot",
+    "screenshots",
+    "bilder",
+    "videos",
+    "the",
+    "and",
+    "und",
+    "mit",
+    "an",
+    "im",
+    "oder",
+    "der",
+    "die",
+    "das",
+    "ein",
+    "eine",
     // Camera / app prefixes that produce no useful slug
-    "save", "snap", "pano", "vid", "mvi", "burst",
+    "save",
+    "snap",
+    "pano",
+    "vid",
+    "mvi",
+    "burst",
     // Android Camera folder — produces a meaningless "camera" slug
     "camera",
     // Common stop words (German + English) that slip through as 2-3 char tokens
-    "in", "on", "at", "zu", "am", "bei", "auf", "aus", "vor", "vom", "from",
+    "in",
+    "on",
+    "at",
+    "zu",
+    "am",
+    "bei",
+    "auf",
+    "aus",
+    "vor",
+    "vom",
+    "from",
     // Generic file/download names
-    "file", "download", "export",
+    "file",
+    "download",
+    "export",
 ];
 
 /// Extract a slug from a name (filename or folder name).
@@ -396,16 +462,19 @@ pub fn extract_slug(name: &str) -> Option<String> {
         .split_whitespace()
         .map(|t| {
             // lowercase + keep only a-z 0-9 (mirrors Python's name.lower() + re.sub(r'[^a-z0-9]','',t))
-            t.to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>()
+            t.to_lowercase()
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric())
+                .collect::<String>()
         })
         .filter(|t| {
             !t.is_empty()
                 && t.len() >= 3                  // ≥3 chars: filters "in","zu","wa","am" etc.
                 && t.len() <= 20                 // ≤20 chars: filters extreme random IDs
                 && !t.chars().all(|c| c.is_ascii_digit())
-                && !JUNK_WORDS.iter().any(|&j| j == t.as_str())
+                && !JUNK_WORDS.contains(&t.as_str())
                 && !is_hex_garbage(t)            // filter UUID/hash hex fragments
-                && !is_seq_number(t)             // filter "wa0004", "p6agdx"-style IDs
+                && !is_seq_number(t) // filter "wa0004", "p6agdx"-style IDs
         })
         .collect();
 
@@ -468,8 +537,8 @@ fn strip_long_numbers(s: &str) -> String {
             if len >= 6 {
                 out.push(' ');
             } else {
-                for k in i..j {
-                    out.push(bytes[k] as char);
+                for &b in bytes.iter().take(j).skip(i) {
+                    out.push(b as char);
                 }
             }
             i = j;
@@ -653,7 +722,7 @@ pub fn parse_german_folder_date(name: &str) -> Option<String> {
         let tail = &b[b.len() - 4..];
         if tail.iter().all(|x| x.is_ascii_digit()) {
             let yr: u32 = std::str::from_utf8(tail).ok()?.parse().ok()?;
-            if yr < 1900 || yr > 2050 {
+            if !(1900..=2050).contains(&yr) {
                 return None;
             }
             yr
@@ -663,20 +732,20 @@ pub fn parse_german_folder_date(name: &str) -> Option<String> {
     };
 
     // Now scan backwards for month name
-    let without_year = lower.trim_end_matches(|c: char| c.is_ascii_digit()).trim_end();
+    let without_year = lower
+        .trim_end_matches(|c: char| c.is_ascii_digit())
+        .trim_end();
     let month_num = GERMAN_MONTHS
         .iter()
         .find(|(m, _)| without_year.ends_with(m))
         .map(|(m, n)| (*m, *n))?;
 
-    let without_month = without_year
-        .trim_end_matches(month_num.0)
-        .trim_end();
+    let without_month = without_year.trim_end_matches(month_num.0).trim_end();
 
     // Expect a day number like "15. " or "1. " before the month
     // without_month should end with "D." or "D. "
-    let day_str = without_month.trim_end_matches(|c: char| c == '.' || c == ' ');
-    let day_str = day_str.split(|c: char| c == ',' || c == ' ').last()?;
+    let day_str = without_month.trim_end_matches(['.', ' ']);
+    let day_str = day_str.split([',', ' ']).next_back()?;
     let dd: u32 = day_str.parse().ok()?;
     if dd == 0 || dd > 31 {
         return None;
@@ -735,7 +804,7 @@ fn find_ymd_in(s: &str) -> Option<String> {
             let mm = parse_2digit_u(b, i + 4);
             let dd = parse_2digit_u(b, i + 6);
             let after_ok = i + 8 >= b.len() || !b[i + 8].is_ascii_digit();
-            if mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && after_ok {
+            if (1..=12).contains(&mm) && (1..=31).contains(&dd) && after_ok {
                 let yr = parse_4year(b, i);
                 return Some(format!("{yr:04}-{mm:02}-{dd:02}"));
             }
@@ -754,7 +823,7 @@ fn find_ymd_in(s: &str) -> Option<String> {
             let mm = parse_2digit_u(b, i + 5);
             let dd = parse_2digit_u(b, i + 8);
             let after_ok = i + 10 >= b.len() || !b[i + 10].is_ascii_digit();
-            if mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && after_ok {
+            if (1..=12).contains(&mm) && (1..=31).contains(&dd) && after_ok {
                 let yr = parse_4year(b, i);
                 return Some(format!("{yr:04}-{mm:02}-{dd:02}"));
             }
@@ -776,7 +845,7 @@ fn find_yymmdd_in(s: &str) -> Option<String> {
                 let yy = parse_2digit_u(b, i);
                 let mm = parse_2digit_u(b, i + 2);
                 let dd = parse_2digit_u(b, i + 4);
-                if mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 {
+                if (1..=12).contains(&mm) && (1..=31).contains(&dd) {
                     let yr = if yy <= 30 { 2000 + yy } else { 1900 + yy };
                     return Some(format!("{yr:04}-{mm:02}-{dd:02}"));
                 }
@@ -798,7 +867,7 @@ fn find_year_month_prefix(s: &str) -> Option<String> {
         if after_ok {
             let yr = parse_4year(b, 0);
             let mm = parse_2digit_u(b, 5);
-            if mm >= 1 && mm <= 12 {
+            if (1..=12).contains(&mm) {
                 return Some(format!("{yr:04}-{mm:02}-01"));
             }
         }
@@ -826,7 +895,7 @@ fn find_yymmdd_sep_in(s: &str) -> Option<String> {
                 let mm = parse_2digit_u(b, i + 3);
                 let dd = parse_2digit_u(b, i + 6);
                 let yr = if yy <= 30 { 2000 + yy } else { 1900 + yy };
-                if mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 {
+                if (1..=12).contains(&mm) && (1..=31).contains(&dd) {
                     return Some(format!("{yr:04}-{mm:02}-{dd:02}"));
                 }
             }
@@ -862,7 +931,7 @@ fn find_unix_ms_date(s: &str) -> Option<String> {
                 let ms: i64 = slice.parse().ok()?;
                 let secs = ms / 1000;
                 // 2000-01-01 … 2100-01-01
-                if secs >= 946_684_800 && secs <= 4_102_444_800 {
+                if (946_684_800..=4_102_444_800).contains(&secs) {
                     return Some(secs_to_date_pub(secs as u64));
                 }
             }
@@ -913,7 +982,10 @@ pub fn parse_date_folders(parts: &[&str]) -> Option<(String, DatePrecision)> {
         let b = part.as_bytes();
         if b.len() >= 3 {
             let sep = b[b.len() - 3];
-            if (sep == b'-' || sep == b'_') && b[b.len() - 2].is_ascii_digit() && b[b.len() - 1].is_ascii_digit() {
+            if (sep == b'-' || sep == b'_')
+                && b[b.len() - 2].is_ascii_digit()
+                && b[b.len() - 1].is_ascii_digit()
+            {
                 let yy = parse_2digit_u(b, b.len() - 2);
                 let yr = if yy <= 30 { 2000 + yy } else { 1900 + yy };
                 return Some((format!("{yr:04}-01-01"), DatePrecision::YearOnly));
@@ -932,7 +1004,7 @@ pub fn parse_date_folders(parts: &[&str]) -> Option<(String, DatePrecision)> {
             let yy = parse_2digit_u(b, 0);
             let mm = parse_2digit_u(b, 2);
             let dd = parse_2digit_u(b, 4);
-            if mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 {
+            if (1..=12).contains(&mm) && (1..=31).contains(&dd) {
                 let yr = if yy <= 30 { 2000 + yy } else { 1900 + yy };
                 return Some((format!("{yr:04}-{mm:02}-{dd:02}"), DatePrecision::Full));
             }
@@ -995,9 +1067,7 @@ pub fn exif_date(path: &Path) -> Option<String> {
     use exif::{In, Tag};
     let file = fs::File::open(path).ok()?;
     let mut buf = BufReader::new(file);
-    let exif = exif::Reader::new()
-        .read_from_container(&mut buf)
-        .ok()?;
+    let exif = exif::Reader::new().read_from_container(&mut buf).ok()?;
 
     for tag in &[Tag::DateTimeOriginal, Tag::DateTime, Tag::DateTimeDigitized] {
         if let Some(field) = exif.get_field(*tag, In::PRIMARY) {
@@ -1017,11 +1087,16 @@ fn parse_exif_date_str(raw: &str) -> Option<String> {
         return None;
     }
     let b = s.as_bytes();
-    if b[4] == b':' && b[7] == b':' && all_digit(b, 0, 4) && all_digit(b, 5, 2) && all_digit(b, 8, 2) {
+    if b[4] == b':'
+        && b[7] == b':'
+        && all_digit(b, 0, 4)
+        && all_digit(b, 5, 2)
+        && all_digit(b, 8, 2)
+    {
         let yr = parse_4year(b, 0);
         let mm = parse_2digit_u(b, 5);
         let dd = parse_2digit_u(b, 8);
-        if yr >= 1900 && yr <= 2050 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 {
+        if (1900..=2050).contains(&yr) && (1..=12).contains(&mm) && (1..=31).contains(&dd) {
             return Some(format!("{yr:04}-{mm:02}-{dd:02}"));
         }
     }
@@ -1032,9 +1107,7 @@ fn parse_exif_date_str(raw: &str) -> Option<String> {
 
 /// Look for a paired `.xmp` or `.XMP` sidecar and extract `photoshop:DateCreated`
 /// or `xmp:CreateDate`.  Returns `"YYYY-MM-DD"` or `None`.
-
 // ── Format / extension mismatch detection ────────────────────────────────────
-
 /// Returns the canonical extension for the detected format if the file's magic
 /// bytes indicate a format different from `claimed_ext`.  Returns `None` when
 /// they match or the format cannot be detected (e.g. RAW, video).
@@ -1105,7 +1178,7 @@ pub const PARTIAL_HASH_BYTES: usize = 256 * 1024;
 pub enum ImportStatus {
     Pending,
     Duplicate,
-    Skipped,    // quality variant
+    Skipped, // quality variant
     UnknownDate,
 }
 
@@ -1216,12 +1289,14 @@ pub fn scan_source(
             continue;
         }
 
-        let ext = path.extension().and_then(OsStr::to_str).unwrap_or("").to_lowercase();
+        let ext = path
+            .extension()
+            .and_then(OsStr::to_str)
+            .unwrap_or("")
+            .to_lowercase();
 
         // Check if in a quality-variant dir
-        let in_variant = variant_dirs.iter().any(|vd| {
-            path.starts_with(vd)
-        });
+        let in_variant = variant_dirs.iter().any(|vd| path.starts_with(vd));
 
         if in_variant {
             found += 1;
@@ -1248,7 +1323,8 @@ pub fn scan_source(
         }
 
         // Skip junk parent folders
-        let in_junk = path.ancestors()
+        let in_junk = path
+            .ancestors()
             .skip(1) // skip file itself
             .take_while(|p| *p != source_root)
             .any(|p| {
@@ -1308,7 +1384,7 @@ pub fn scan_source(
 
         let (derived_date, date_source) = derive_date(
             folder_result,
-            None,   // EXIF deferred — no file read during scan
+            None, // EXIF deferred — no file read during scan
             filename,
             mtime_d.as_deref(),
         );
@@ -1334,10 +1410,10 @@ pub fn scan_source(
             partial_hash: String::new(),
             file_size,
             ext,
-            wrong_ext: None,   // magic-byte check deferred to execute
+            wrong_ext: None, // magic-byte check deferred to execute
             derived_date,
             date_source: date_source.to_string(),
-            exif_raw: None,    // EXIF deferred to execute
+            exif_raw: None, // EXIF deferred to execute
             derived_slug,
             caption_slug,
             slug_source,
@@ -1382,7 +1458,7 @@ fn derive_date(
     }
     if let Some(mt) = mtime_d {
         let yr: u32 = mt[..4].parse().unwrap_or(0);
-        if yr >= 1990 && yr <= 2050 {
+        if (1990..=2050).contains(&yr) {
             return (Some(mt.to_string()), "file");
         }
     }
@@ -1417,7 +1493,7 @@ fn derive_slug(
 
     // Detect caption filenames (multiple meaningful words)
     let words: Vec<&str> = base
-        .split(|c: char| c == '-' || c == '_' || c == ' ')
+        .split(['-', '_', ' '])
         .filter(|w| !w.is_empty() && !w.chars().all(|c| c.is_ascii_digit()) && w.len() > 1)
         .collect();
     let is_caption = words.len() >= 2;
@@ -1525,7 +1601,7 @@ pub fn find_filename_timestamp(base: &str) -> Option<i64> {
             let mm = parse_2digit_u(b, i + 4);
             let dd_val = parse_2digit_u(b, i + 6);
             let after_ok = i + 8 >= b.len() || !b[i + 8].is_ascii_digit();
-            if mm >= 1 && mm <= 12 && dd_val >= 1 && dd_val <= 31 && after_ok {
+            if (1..=12).contains(&mm) && (1..=31).contains(&dd_val) && after_ok {
                 let yr = parse_4year(b, i) as i64;
                 // Check for separator + time
                 if i + 9 < b.len() && matches!(b[i + 8], b'_' | b'-' | b'T') {
@@ -1538,8 +1614,12 @@ pub fn find_filename_timestamp(base: &str) -> Option<i64> {
                             let sc = parse_2digit_u(b, i + 13);
                             if hh <= 23 && mn <= 59 && sc <= 59 {
                                 return Some(date_hms_to_secs(
-                                    yr, mm as i64, dd_val as i64,
-                                    hh as i64, mn as i64, sc as i64,
+                                    yr,
+                                    mm as i64,
+                                    dd_val as i64,
+                                    hh as i64,
+                                    mn as i64,
+                                    sc as i64,
                                 ));
                             }
                         }
@@ -1552,8 +1632,12 @@ pub fn find_filename_timestamp(base: &str) -> Option<i64> {
                             let mn = parse_2digit_u(b, i + 11);
                             if hh <= 23 && mn <= 59 {
                                 return Some(date_hms_to_secs(
-                                    yr, mm as i64, dd_val as i64,
-                                    hh as i64, mn as i64, 0,
+                                    yr,
+                                    mm as i64,
+                                    dd_val as i64,
+                                    hh as i64,
+                                    mn as i64,
+                                    0,
                                 ));
                             }
                         }
@@ -1594,7 +1678,9 @@ pub fn find_filename_timestamp(base: &str) -> Option<i64> {
             && bb[2] == b'-'
             && bb[5] == b'-'
             && bb[8] == b'_'
-            && [0, 1, 3, 4, 6, 7, 9, 10, 11, 12].iter().all(|&idx| bb[idx].is_ascii_digit())
+            && [0, 1, 3, 4, 6, 7, 9, 10, 11, 12]
+                .iter()
+                .all(|&idx| bb[idx].is_ascii_digit())
         {
             if let (Some(dd_val), Some(mo), Some(yy), Some(hh), Some(mn)) = (
                 parse_2digit(bb, 0),
@@ -1603,9 +1689,20 @@ pub fn find_filename_timestamp(base: &str) -> Option<i64> {
                 parse_2digit(bb, 9),
                 parse_2digit(bb, 11),
             ) {
-                if mo >= 1 && mo <= 12 && dd_val >= 1 && dd_val <= 31 && hh <= 23 && mn <= 59 {
-                    let yr = if yy <= 30 { 2000 + yy as i64 } else { 1900 + yy as i64 };
-                    return Some(date_hms_to_secs(yr, mo as i64, dd_val as i64, hh as i64, mn as i64, 0));
+                if (1..=12).contains(&mo) && (1..=31).contains(&dd_val) && hh <= 23 && mn <= 59 {
+                    let yr = if yy <= 30 {
+                        2000 + yy as i64
+                    } else {
+                        1900 + yy as i64
+                    };
+                    return Some(date_hms_to_secs(
+                        yr,
+                        mo as i64,
+                        dd_val as i64,
+                        hh as i64,
+                        mn as i64,
+                        0,
+                    ));
                 }
             }
         }
@@ -1638,10 +1735,9 @@ pub fn find_filename_timestamp(base: &str) -> Option<i64> {
                 let mn = parse_2digit_u(b, j + 12);
                 let sc = parse_2digit_u(b, j + 15);
                 let yr = if yy <= 30 { 2000 + yy } else { 1900 + yy };
-                if mo >= 1 && mo <= 12 && dy >= 1 && dy <= 31 && hh <= 23 && mn <= 59 && sc <= 59 {
+                if (1..=12).contains(&mo) && (1..=31).contains(&dy) && hh <= 23 && mn <= 59 && sc <= 59 {
                     return Some(date_hms_to_secs(
-                        yr as i64, mo as i64, dy as i64,
-                        hh as i64, mn as i64, sc as i64,
+                        yr as i64, mo as i64, dy as i64, hh as i64, mn as i64, sc as i64,
                     ));
                 }
             }
@@ -1664,7 +1760,7 @@ fn find_unix_ms_secs(s: &str) -> Option<i64> {
                 let slice = std::str::from_utf8(&b[i..i + 13]).ok()?;
                 let ms: i64 = slice.parse().ok()?;
                 let secs = ms / 1000;
-                if secs >= 946_684_800 && secs <= 4_102_444_800 {
+                if (946_684_800..=4_102_444_800).contains(&secs) {
                     return Some(secs);
                 }
             }
@@ -1682,7 +1778,11 @@ fn find_unix_ms_secs(s: &str) -> Option<i64> {
 /// 3. `derived_date` at noon UTC (12:00:00) — avoids ±12 h timezone flip.
 /// 4. `None` — derived_date is unknown; caller leaves mtime untouched.
 fn best_mtime_for_entry(entry: &ImportEntry) -> Option<FileTime> {
-    best_mtime(entry.filename_secs, entry.source_mtime_secs, entry.derived_date.as_deref())
+    best_mtime(
+        entry.filename_secs,
+        entry.source_mtime_secs,
+        entry.derived_date.as_deref(),
+    )
 }
 
 /// Core mtime-selection logic shared by the import execute phase and the
@@ -1727,26 +1827,29 @@ pub fn best_mtime(
     None
 }
 
-
 /// Normalize per-folder date months when the folder gives only a year.
 ///
 /// Three-tier priority (per source directory):
 /// 1. EXIF majority month → overrides `file` + `folder-year-only` rows
 /// 2. mtime majority month → overrides `folder-year-only` rows + normalises mtime outliers
 /// 3. No reference → leave as-is
-pub fn apply_folder_mtime_consensus(entries: &mut Vec<ImportEntry>) {
+pub fn apply_folder_mtime_consensus(entries: &mut [ImportEntry]) {
     use std::collections::BTreeMap;
 
     // Group entries by source directory
     let mut folder_map: BTreeMap<PathBuf, Vec<usize>> = BTreeMap::new();
     for (i, e) in entries.iter().enumerate() {
         if e.status == ImportStatus::Pending || e.status == ImportStatus::UnknownDate {
-            let dir = e.source_path.parent().unwrap_or(Path::new(".")).to_path_buf();
+            let dir = e
+                .source_path
+                .parent()
+                .unwrap_or(Path::new("."))
+                .to_path_buf();
             folder_map.entry(dir).or_default().push(i);
         }
     }
 
-    for (_dir, indices) in &folder_map {
+    for indices in folder_map.values() {
         let mut exif_months: Vec<String> = Vec::new(); // "YYYY-MM"
         let mut file_months: Vec<(usize, String)> = Vec::new(); // (entry_idx, "YYYY-MM")
         let mut fonly_rows: Vec<(usize, String)> = Vec::new(); // folder-year-only rows
@@ -1821,7 +1924,7 @@ fn majority_month(months: &[String]) -> String {
 /// Counter resets to `0001` for each new date-prefix (`yyyy-MM-slug` or `yyyy-MM-DD`).
 /// Checks existing DB max counters AND filesystem to avoid collisions with already-moved files.
 pub fn assign_counters(
-    entries: &mut Vec<ImportEntry>,
+    entries: &mut [ImportEntry],
     target_root: &Path,
     conn: &rusqlite::Connection,
 ) -> Result<()> {
@@ -1839,7 +1942,12 @@ pub fn assign_counters(
             let da = ea.derived_date.as_deref().unwrap_or("");
             let db = eb.derived_date.as_deref().unwrap_or("");
             da.cmp(db)
-                .then(ea.derived_slug.as_deref().unwrap_or("").cmp(eb.derived_slug.as_deref().unwrap_or("")))
+                .then(
+                    ea.derived_slug
+                        .as_deref()
+                        .unwrap_or("")
+                        .cmp(eb.derived_slug.as_deref().unwrap_or("")),
+                )
                 .then(ea.source_path.cmp(&eb.source_path))
         });
         v
@@ -1966,11 +2074,13 @@ pub fn execute_import(
         .collect();
 
     let total = pending.len();
-    let mut summary = ImportSummary::default();
-    summary.unknown_date = entries
-        .iter()
-        .filter(|e| e.status == ImportStatus::UnknownDate)
-        .count();
+    let mut summary = ImportSummary {
+        unknown_date: entries
+            .iter()
+            .filter(|e| e.status == ImportStatus::UnknownDate)
+            .count(),
+        ..Default::default()
+    };
     // No Duplicate entries from scan any more; they'll be counted below.
 
     // Within-batch dedup: track (file_size, partial_hash) of files imported
@@ -2002,9 +2112,10 @@ pub fn execute_import(
         // ── Fast duplicate probe ──────────────────────────────────────────────
         // Read only the first 256 KiB from the source (over MTP).  This is
         // orders of magnitude cheaper than a full copy for large files.
-        let probe_key: Option<(u64, String)> = partial_hash_chunk(&entry.source_path, PARTIAL_HASH_BYTES)
-            .ok()
-            .map(|ph| (entry.file_size, ph));
+        let probe_key: Option<(u64, String)> =
+            partial_hash_chunk(&entry.source_path, PARTIAL_HASH_BYTES)
+                .ok()
+                .map(|ph| (entry.file_size, ph));
 
         if let Some(ref key) = probe_key {
             if existing_hashes.contains_key(key) {
@@ -2013,8 +2124,14 @@ pub fn execute_import(
                 continue;
             }
             if let Some(first_seen) = seen_hashes.get(key) {
-                let name = first_seen.file_name().and_then(|n| n.to_str()).unwrap_or("?");
-                eprintln!("import: batch duplicate of {name}, skipping {}", entry.source_path.display());
+                let name = first_seen
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?");
+                eprintln!(
+                    "import: batch duplicate of {name}, skipping {}",
+                    entry.source_path.display()
+                );
                 summary.skipped_dup += 1;
                 continue;
             }
@@ -2025,7 +2142,10 @@ pub fn execute_import(
         // the probe above.  A surviving abs_tgt.exists() means a genuine name
         // collision with an unrelated file — treat as an error.
         if abs_tgt.exists() {
-            eprintln!("import: conflict at {} — file exists, skipping", abs_tgt.display());
+            eprintln!(
+                "import: conflict at {} — file exists, skipping",
+                abs_tgt.display()
+            );
             summary.errors += 1;
             continue;
         }
@@ -2084,8 +2204,7 @@ pub fn execute_import(
 fn stream_copy_and_hash(src: &Path, dst: &Path) -> Result<(String, u64)> {
     use std::io::Write;
     let mut hasher = Sha256::new();
-    let mut src_file =
-        fs::File::open(src).with_context(|| format!("open {}", src.display()))?;
+    let mut src_file = fs::File::open(src).with_context(|| format!("open {}", src.display()))?;
     let mut dst_file =
         fs::File::create(dst).with_context(|| format!("create {}", dst.display()))?;
     let mut buf = [0u8; 65536];
@@ -2113,10 +2232,14 @@ fn upsert_media_row(
 
     // Reuse existing id if source_path already in DB
     let existing_id: Option<String> = conn
-        .query_row("SELECT id FROM media WHERE source_path = ?1", [src], |row| row.get(0))
+        .query_row(
+            "SELECT id FROM media WHERE source_path = ?1",
+            [src],
+            |row| row.get(0),
+        )
         .optional()?;
 
-    let id = existing_id.unwrap_or_else(|| uuid_v4());
+    let id = existing_id.unwrap_or_else(uuid_v4);
 
     conn.execute(
         "INSERT OR REPLACE INTO media \
@@ -2173,7 +2296,11 @@ fn assign_import_tag(
 
     // Determine the next suffix: base has implicit index 1; base_2, base_3 follow.
     let max_index = existing_names.iter().fold(
-        if existing_names.is_empty() { 0u32 } else { 1u32 },
+        if existing_names.is_empty() {
+            0u32
+        } else {
+            1u32
+        },
         |acc, name| {
             let suffix = name[base.len()..].to_ascii_lowercase();
             if let Some(n) = suffix.strip_prefix('_').and_then(|s| s.parse::<u32>().ok()) {
@@ -2228,7 +2355,7 @@ fn uuid_v4() -> String {
     format!(
         "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
         (v1 >> 32) as u32,
-        (v1 >> 16) as u16 & 0xffff,
+        ((v1 >> 16) as u16),
         (v1 & 0x0fff) as u16,
         ((v2 >> 48) as u16 & 0x3fff) | 0x8000,
         v2 & 0x0000_ffff_ffff_ffff,
@@ -2293,10 +2420,20 @@ pub fn load_existing_hashes(conn: &rusqlite::Connection) -> Result<HashMap<(u64,
 // ── Message type for background thread ───────────────────────────────────────
 
 pub enum ImportMsg {
-    ScanProgress { count: usize, current_file: String },
+    ScanProgress {
+        count: usize,
+        current_file: String,
+    },
     ScanDone(Vec<ImportEntry>),
     ScanError(String),
-    CopyProgress { done: usize, total: usize, current_file: String, copied: usize, skipped_dup: usize, errors: usize },
+    CopyProgress {
+        done: usize,
+        total: usize,
+        current_file: String,
+        copied: usize,
+        skipped_dup: usize,
+        errors: usize,
+    },
     CopyDone(ImportSummary),
     CopyError(String),
 }
@@ -2308,14 +2445,20 @@ mod tests {
     #[test]
     fn test_extract_slug_basic() {
         assert_eq!(extract_slug("paris 2000"), Some("paris".into()));
-        assert_eq!(extract_slug("kroatien split"), Some("kroatien-split".into()));
+        assert_eq!(
+            extract_slug("kroatien split"),
+            Some("kroatien-split".into())
+        );
         assert_eq!(extract_slug("IMG_1234.jpg"), None);
     }
 
     #[test]
     fn test_extract_slug_german() {
         // ö → oe, ü → ue
-        assert_eq!(extract_slug("Österreich").map(|s| s.contains("oesterreich")), Some(true));
+        assert_eq!(
+            extract_slug("Österreich").map(|s| s.contains("oesterreich")),
+            Some(true)
+        );
     }
 
     #[test]
@@ -2346,21 +2489,39 @@ mod tests {
 
     #[test]
     fn test_parse_mobile_date() {
-        assert_eq!(parse_mobile_date("09-07-06_1915"), Some("2006-07-09".into()));
-        assert_eq!(parse_mobile_date("31-12-99_2359"), Some("1999-12-31".into()));
+        assert_eq!(
+            parse_mobile_date("09-07-06_1915"),
+            Some("2006-07-09".into())
+        );
+        assert_eq!(
+            parse_mobile_date("31-12-99_2359"),
+            Some("1999-12-31".into())
+        );
         assert_eq!(parse_mobile_date("IMG_1234"), None);
     }
 
     #[test]
     fn test_parse_german_folder_date() {
-        assert_eq!(parse_german_folder_date("1. April 2019"), Some("2019-04-01".into()));
-        assert_eq!(parse_german_folder_date("15. August 2017"), Some("2017-08-15".into()));
+        assert_eq!(
+            parse_german_folder_date("1. April 2019"),
+            Some("2019-04-01".into())
+        );
+        assert_eq!(
+            parse_german_folder_date("15. August 2017"),
+            Some("2017-08-15".into())
+        );
     }
 
     #[test]
     fn test_parse_date_filename_yyyymmdd() {
-        assert_eq!(parse_date_filename("20190615_photo.jpg"), Some("2019-06-15".into()));
-        assert_eq!(parse_date_filename("2019-06-15 holiday.jpg"), Some("2019-06-15".into()));
+        assert_eq!(
+            parse_date_filename("20190615_photo.jpg"),
+            Some("2019-06-15".into())
+        );
+        assert_eq!(
+            parse_date_filename("2019-06-15 holiday.jpg"),
+            Some("2019-06-15".into())
+        );
     }
 
     #[test]
@@ -2396,7 +2557,10 @@ mod tests {
 
     #[test]
     fn test_exif_date_str_parses() {
-        assert_eq!(parse_exif_date_str("2022:04:18 14:30:00"), Some("2022-04-18".into()));
+        assert_eq!(
+            parse_exif_date_str("2022:04:18 14:30:00"),
+            Some("2022-04-18".into())
+        );
         assert_eq!(parse_exif_date_str("0000:00:00 00:00:00"), None);
     }
 
@@ -2411,7 +2575,10 @@ mod tests {
     fn test_uuid_stem_detection() {
         assert!(is_uuid_stem("4b0bdd13-72f4-4f25-99cf-6f4474f6d447"));
         assert!(!is_uuid_stem("not-a-uuid"));
-        assert_eq!(parse_date_filename("4b0bdd13-72f4-4f25-99cf-6f4474f6d447.jpg"), None);
+        assert_eq!(
+            parse_date_filename("4b0bdd13-72f4-4f25-99cf-6f4474f6d447.jpg"),
+            None
+        );
         // hex chars inside UUID should not produce false date
         assert_eq!(extract_slug("4b0bdd13-72f4-4f25-99cf-6f4474f6d447"), None);
     }
@@ -2419,14 +2586,26 @@ mod tests {
     #[test]
     fn test_picsart_date() {
         // Picsart_YY-MM-DD_HH-MM-SS-mmm
-        assert_eq!(parse_date_filename("Picsart_24-11-24_00-15-22-784.jpg"), Some("2024-11-24".into()));
-        assert_eq!(parse_date_filename("Picsart_25-02-09_13-33-35-838.png"), Some("2025-02-09".into()));
+        assert_eq!(
+            parse_date_filename("Picsart_24-11-24_00-15-22-784.jpg"),
+            Some("2024-11-24".into())
+        );
+        assert_eq!(
+            parse_date_filename("Picsart_25-02-09_13-33-35-838.png"),
+            Some("2025-02-09".into())
+        );
     }
 
     #[test]
     fn test_snap_date() {
-        assert_eq!(parse_date_filename("snap202405051452.jpg"), Some("2024-05-05".into()));
-        assert_eq!(parse_date_filename("snap202505041450.jpg"), Some("2025-05-04".into()));
+        assert_eq!(
+            parse_date_filename("snap202405051452.jpg"),
+            Some("2024-05-05".into())
+        );
+        assert_eq!(
+            parse_date_filename("snap202505041450.jpg"),
+            Some("2025-05-04".into())
+        );
     }
 
     #[test]
@@ -2434,7 +2613,8 @@ mod tests {
         // phoneImageCapture1764072777554 → ~2025-12-25
         assert!(parse_date_filename("phoneImageCapture1764072777554.jpg").is_some());
         // Revolut trailing timestamp
-        let f = "Revolut_receipt_transaction_d46bace5-3508-47ea-82fd-cf7215ce5d95_1639813806453.jpg";
+        let f =
+            "Revolut_receipt_transaction_d46bace5-3508-47ea-82fd-cf7215ce5d95_1639813806453.jpg";
         assert_eq!(parse_date_filename(f), Some("2021-12-18".into()));
     }
 
@@ -2514,11 +2694,19 @@ mod tests {
     fn test_best_mtime_priority1_filename_secs() {
         let entry = ImportEntry {
             source_path: "x.jpg".into(),
-            content_hash: String::new(), partial_hash: String::new(),
-            file_size: 0, ext: "jpg".into(), wrong_ext: None,
-            derived_date: Some("2023-07-01".into()), date_source: "filename".into(),
-            exif_raw: None, derived_slug: None, caption_slug: None,
-            slug_source: "none".into(), counter: None, target_path: None,
+            content_hash: String::new(),
+            partial_hash: String::new(),
+            file_size: 0,
+            ext: "jpg".into(),
+            wrong_ext: None,
+            derived_date: Some("2023-07-01".into()),
+            date_source: "filename".into(),
+            exif_raw: None,
+            derived_slug: None,
+            caption_slug: None,
+            slug_source: "none".into(),
+            counter: None,
+            target_path: None,
             status: ImportStatus::Pending,
             source_mtime_secs: Some(1_000_000_000),
             filename_secs: Some(1_689_430_222), // 2023-07-15 14:30:22
@@ -2533,11 +2721,19 @@ mod tests {
         let src_secs = date_hms_to_secs(2023, 7, 15, 14, 30, 0);
         let entry = ImportEntry {
             source_path: "x.jpg".into(),
-            content_hash: String::new(), partial_hash: String::new(),
-            file_size: 0, ext: "jpg".into(), wrong_ext: None,
-            derived_date: Some("2023-07-01".into()), date_source: "filename".into(),
-            exif_raw: None, derived_slug: None, caption_slug: None,
-            slug_source: "none".into(), counter: None, target_path: None,
+            content_hash: String::new(),
+            partial_hash: String::new(),
+            file_size: 0,
+            ext: "jpg".into(),
+            wrong_ext: None,
+            derived_date: Some("2023-07-01".into()),
+            date_source: "filename".into(),
+            exif_raw: None,
+            derived_slug: None,
+            caption_slug: None,
+            slug_source: "none".into(),
+            counter: None,
+            target_path: None,
             status: ImportStatus::Pending,
             source_mtime_secs: Some(src_secs),
             filename_secs: None,
@@ -2554,11 +2750,19 @@ mod tests {
         let src_secs = date_hms_to_secs(2022, 12, 1, 0, 0, 0); // Dec 2022 ≠ Jul 2023
         let entry = ImportEntry {
             source_path: "x.jpg".into(),
-            content_hash: String::new(), partial_hash: String::new(),
-            file_size: 0, ext: "jpg".into(), wrong_ext: None,
-            derived_date: Some("2023-07-01".into()), date_source: "filename".into(),
-            exif_raw: None, derived_slug: None, caption_slug: None,
-            slug_source: "none".into(), counter: None, target_path: None,
+            content_hash: String::new(),
+            partial_hash: String::new(),
+            file_size: 0,
+            ext: "jpg".into(),
+            wrong_ext: None,
+            derived_date: Some("2023-07-01".into()),
+            date_source: "filename".into(),
+            exif_raw: None,
+            derived_slug: None,
+            caption_slug: None,
+            slug_source: "none".into(),
+            counter: None,
+            target_path: None,
             status: ImportStatus::Pending,
             source_mtime_secs: Some(src_secs),
             filename_secs: None,
