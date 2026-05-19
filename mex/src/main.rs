@@ -549,8 +549,8 @@ fn run_loop(
                     // Multimedia keyboard keys — control the running mpv instance.
                     (_, KeyCode::Media(MediaKeyCode::Play))
                     | (_, KeyCode::Media(MediaKeyCode::Pause))
-                    | (_, KeyCode::Media(MediaKeyCode::PlayPause)) => app.mpv_play_pause(),
-                    (_, KeyCode::Media(MediaKeyCode::Stop)) => app.mpv_stop(),
+                    | (_, KeyCode::Media(MediaKeyCode::PlayPause)) => app.view_selected(),
+                    (_, KeyCode::Media(MediaKeyCode::Stop)) => app.mpv_play_pause(),
                     (_, KeyCode::Media(MediaKeyCode::TrackNext)) => app.view_next_video(),
                     (_, KeyCode::Media(MediaKeyCode::TrackPrevious)) => app.view_prev_video(),
 
