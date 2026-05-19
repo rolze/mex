@@ -4,6 +4,7 @@ Each UC file is the source of truth for its feature. This index lists what exist
 
 | UC | Title | What it covers |
 |----|-------|----------------|
+| [UC-00](UC-00.md) | Key concepts & UX | Foundational principles, layout, modes, and interaction model |
 | [UC-01](UC-01.md) | Config | Per-machine `target_root`, `views_root`, and `db_path`; first-run guided setup |
 | [UC-02](UC-02.md) | Browse Media Files | Keyboard-driven TUI file list with live text filter |
 | [UC-03](UC-03.md) | File Details | Split-pane metadata and image preview for the selected file |
