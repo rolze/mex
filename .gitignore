@@ -1,3 +1,4 @@
 .mex.db
 mex-media-root/
 .venv/
+.gemini/
