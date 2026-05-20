@@ -2,6 +2,8 @@
 
 A personal, opinionated terminal media browser and importer written in **Rust + Ratatui**. It fits one mental model (mine) — fork it if yours differs.
 
+![Sem&Mex](sem-and-mex.png)
+
 ## What it does
 
 - **Browses** a large media library (tested to 50 000+ files) from a SQLite-backed index (`.mex.db`) — instant, keyboard-only, no mouse required.

@@ -4,33 +4,38 @@ A lightweight companion image viewer for [mex](../README.md), written in **Rust 
 
 ## What it does
 
-- **Opens** a single image in a native GTK4 window, scaled to fit.
-- **Shows** the filename and tags below the image — passed directly from mex, no database access needed.
+- **Single-image mode** — opens one image scaled to fit, with filename and tags shown below.
+- **Grid mode** — shows a 256 px thumbnail grid for 2+ selected images; click any thumbnail to view full-size. Thumbnails are cached on disk (WebP, libvips) so repeat opens are instant.
 - **Stays out of the way** — mex remains fully interactive while sem is open.
 
 ## Usage
 
-```
-sem <path> [--tags <comma-separated-tags>]
-```
-
 ```sh
-# Open an image standalone
-sem /mnt/photos/2023/2023-05-12_sunset.jpg
+# Single image (press p on a cursor image in mex)
+sem /mnt/photos/sunset.jpg --tags "travel,holiday"
 
-# Open with tags (as mex does it)
-sem /mnt/photos/2023/2023-05-12_sunset.jpg --tags "travel,holiday"
+# Grid view (press p with 2+ images selected in mex)
+sem --files /tmp/mex-sem-1234.txt --cache-dir /mnt/photos/.mex.db.cache/
 ```
 
-Press **Escape** or close the window to quit.
+Manifest file format (`--files`): tab-separated `path\ttags`, one image per line.
+
+Press **Escape** to go back (grid → close; single-from-grid → back to grid).
 
 ## mex integration
 
-In mex, press `p` on any image file — sem opens in a new window with the file's tags pre-loaded. Videos still go to mpv. See [spec/UC-15.md](../spec/UC-15.md).
+In mex:
+- `p` on a cursor image → single-image view in sem.
+- `p` with ≥ 2 images selected → grid view in sem.
+- Videos still go to mpv.
+
+See [spec/UC-15.md](../spec/UC-15.md).
 
 ## Build
 
-Requires GTK4 ≥ 4.8 and libadwaita ≥ 1.4 development headers.
+Requires:
+- GTK4 ≥ 4.8 and libadwaita ≥ 1.4 development headers.
+- **libvips** ≥ 8.x + `libvips-dev` (for thumbnail generation).
 
 ```sh
 # Install to ~/.cargo/bin (recommended for use with mex)
@@ -48,4 +53,6 @@ cargo build
 |---------|-------|
 | UI | `gtk4`, `libadwaita` |
 | CLI args | `clap` |
+| Thumbnails | `libvips` |
+| Cache keys | `sha2`, `hex` |
 | Error handling | `anyhow` |

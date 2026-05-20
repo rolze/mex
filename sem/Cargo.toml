@@ -12,3 +12,6 @@ gtk4 = { version = "0.8", features = ["v4_8"] }
 libadwaita = { version = "0.6", features = ["v1_5"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+libvips = "2.0.2"
+sha2 = "0.10"
+hex = "0.4"

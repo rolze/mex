@@ -2261,6 +2261,74 @@ impl App {
         }
     }
 
+    /// Open the selected image files in `sem` grid mode.
+    /// Writes a tab-separated manifest to /tmp, then spawns `sem --files <path> --cache-dir <dir>`.
+    /// Non-image files in the selection are silently skipped.
+    pub fn open_selection_in_sem(&mut self) {
+        if self.target_root.is_empty() {
+            self.status_message = Some("sem: target_root not configured".into());
+            return;
+        }
+
+        let mut indices: Vec<usize> = self.selection.iter().copied().collect();
+        indices.sort_unstable();
+
+        let image_entries: Vec<(PathBuf, Vec<String>)> = indices
+            .iter()
+            .filter_map(|&i| self.filtered.get(i))
+            .filter(|f| {
+                let ext = std::path::Path::new(&f.target_path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or_default();
+                IMAGE_EXTS.contains(&ext.as_str())
+            })
+            .map(|f| {
+                let path = PathBuf::from(&self.target_root).join(&f.target_path);
+                (path, f.tags.clone())
+            })
+            .collect();
+
+        if image_entries.is_empty() {
+            self.status_message = Some("sem: selection contains no image files".into());
+            return;
+        }
+
+        let manifest: String = image_entries
+            .iter()
+            .map(|(path, tags)| format!("{}\t{}", path.display(), tags.join(",")))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let micros = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros())
+            .unwrap_or(0);
+        let manifest_path = std::env::temp_dir().join(format!("mex-sem-{micros}.txt"));
+
+        if let Err(e) = std::fs::write(&manifest_path, &manifest) {
+            self.status_message = Some(format!("sem: failed to write manifest: {e}"));
+            return;
+        }
+
+        let cache_dir = format!("{}.cache", self.db_path);
+
+        match std::process::Command::new("sem")
+            .args(["--files", manifest_path.to_str().unwrap_or("")])
+            .args(["--cache-dir", &cache_dir])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => {}
+            Err(e) => {
+                self.status_message = Some(format!("sem: failed to spawn: {e}"));
+            }
+        }
+    }
+
     /// Open the cursor image in `sem`. Tags are passed as a comma-separated
     /// `--tags` argument so sem can display them without DB access.
     pub fn open_in_sem(&mut self) {
@@ -2296,8 +2364,14 @@ impl App {
     }
 
     /// Open the file under the cursor in the appropriate viewer.
-    /// Images go to `sem`; videos go to the remote-controlled mpv instance.
+    /// With ≥2 files selected, images open in sem grid mode.
+    /// Otherwise: image → sem single-image, video → mpv.
     pub fn view_selected(&mut self) {
+        // Grid mode: 2 or more selected files (any type); sem will filter to images.
+        if self.selection.len() >= 2 {
+            self.open_selection_in_sem();
+            return;
+        }
         let path = match self.filtered.get(self.selected) {
             Some(f) if !self.target_root.is_empty() => {
                 PathBuf::from(&self.target_root).join(&f.target_path)
