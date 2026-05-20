@@ -1,2 +1,5 @@
 /target/
 test.db
+.mex.db
+.mex.db-journal
+.mex.db.cache
