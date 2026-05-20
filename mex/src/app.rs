@@ -2261,8 +2261,42 @@ impl App {
         }
     }
 
-    /// Open the file under the cursor in the remote-controlled mpv instance.
-    /// Only video files (by extension) are accepted; others show an error.
+    /// Open the cursor image in `sem`. Tags are passed as a comma-separated
+    /// `--tags` argument so sem can display them without DB access.
+    pub fn open_in_sem(&mut self) {
+        let file = match self.filtered.get(self.selected) {
+            Some(f) if !self.target_root.is_empty() => f.clone(),
+            _ => {
+                self.status_message = Some("sem: no file selected".into());
+                return;
+            }
+        };
+        let path = PathBuf::from(&self.target_root).join(&file.target_path);
+        if !path.exists() {
+            self.status_message = Some(format!("sem: file not found: {}", path.display()));
+            return;
+        }
+        let tags = file.tags.join(",");
+        let mut cmd = std::process::Command::new("sem");
+        cmd.arg(&path);
+        if !tags.is_empty() {
+            cmd.args(["--tags", &tags]);
+        }
+        match cmd
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => {}
+            Err(e) => {
+                self.status_message = Some(format!("sem: failed to spawn: {e}"));
+            }
+        }
+    }
+
+    /// Open the file under the cursor in the appropriate viewer.
+    /// Images go to `sem`; videos go to the remote-controlled mpv instance.
     pub fn view_selected(&mut self) {
         let path = match self.filtered.get(self.selected) {
             Some(f) if !self.target_root.is_empty() => {
@@ -2278,16 +2312,18 @@ impl App {
             .and_then(|e| e.to_str())
             .map(|e| e.to_lowercase())
             .unwrap_or_default();
-        if !VIDEO_EXTENSIONS.contains(&ext.as_str()) {
-            self.status_message = Some(format!("view: not a video file (.{ext})"));
-            return;
-        }
-        if !path.exists() {
-            self.status_message = Some(format!("view: file not found: {}", path.display()));
-            return;
-        }
-        if let Err(e) = self.mpv.open_file(&path) {
-            self.status_message = Some(e.to_string());
+        if IMAGE_EXTS.contains(&ext.as_str()) {
+            self.open_in_sem();
+        } else if VIDEO_EXTENSIONS.contains(&ext.as_str()) {
+            if !path.exists() {
+                self.status_message = Some(format!("view: file not found: {}", path.display()));
+                return;
+            }
+            if let Err(e) = self.mpv.open_file(&path) {
+                self.status_message = Some(e.to_string());
+            }
+        } else {
+            self.status_message = Some(format!("view: unsupported file type (.{ext})"));
         }
     }
 

@@ -597,12 +597,10 @@ fn run_loop(
                     (_, KeyCode::Media(MediaKeyCode::TrackNext)) => app.view_next_video(),
                     (_, KeyCode::Media(MediaKeyCode::TrackPrevious)) => app.view_prev_video(),
 
-                    // Letter shortcuts for mpv — fallback for terminals where media keys
-                    // are not delivered (Windows, WSL2, most standard terminal emulators).
-                    // Only active in normal mode (not command or filter input).
-                    // p: open cursor file in mpv (spawns mpv if needed; validates video ext)
-                    // s: toggle pause/resume — requires mpv to be running
-                    // j/k: next/prev video — require mpv to be running
+                    // Letter shortcuts — only active in normal mode.
+                    // p: type-aware open — image → sem (UC-15), video → mpv (UC-13)
+                    // s: toggle mpv pause/resume — requires mpv to be running
+                    // j/k: next/prev video in mpv — require mpv to be running
                     (_, KeyCode::Char('p')) if app.command.is_none() && !app.filter_mode => {
                         app.view_selected()
                     }

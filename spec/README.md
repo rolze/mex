@@ -18,3 +18,4 @@ Each UC file is the source of truth for its feature. This index lists what exist
 | [UC-11](UC-11.md) | Trash & delete | Soft-delete files to trash; permanently delete with `:empty-trash` |
 | [UC-12](UC-12.md) | Open external viewer | Open the cursor file in the system default viewer/player |
 | [UC-13](UC-13.md) | mpv integration | Remote-control mpv for video playback; native Linux and WSL2 supported (see [INSTALL.md](../INSTALL.md)) |
+| [UC-15](UC-15.md) | sem image viewer | Open cursor image in `sem` with `p`; sem is a standalone GTK4 viewer |

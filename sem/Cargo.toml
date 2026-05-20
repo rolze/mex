@@ -1,0 +1,14 @@
+[package]
+name = "sem"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "sem"
+path = "src/main.rs"
+
+[dependencies]
+gtk4 = { version = "0.8", features = ["v4_8"] }
+libadwaita = { version = "0.6", features = ["v1_5"] }
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
