@@ -6,10 +6,9 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-const THUMB_SIZE: i32 = 256;
+const THUMB_SIZE: u32 = 256;
 
-/// Returns the path to a 256 px WebP thumbnail, generating it if needed.
-/// Caller must ensure libvips is initialised (VipsApp alive) before calling.
+/// Returns the path to a 256 px JPEG thumbnail, generating it if needed.
 pub fn ensure_thumbnail(source: &Path, cache_dir: &Path) -> Result<PathBuf> {
     fs::create_dir_all(cache_dir)?;
 
@@ -23,7 +22,7 @@ pub fn ensure_thumbnail(source: &Path, cache_dir: &Path) -> Result<PathBuf> {
         .unwrap_or(0);
 
     let key = cache_key(source, size, mtime);
-    let thumb = cache_dir.join(format!("{}.webp", &key[..16]));
+    let thumb = cache_dir.join(format!("{}.jpg", &key[..16]));
 
     if thumb.exists() {
         return Ok(thumb);
@@ -43,30 +42,14 @@ fn cache_key(path: &Path, size: u64, mtime: u64) -> String {
 }
 
 fn generate(source: &Path, dest: &Path) -> Result<()> {
-    let src = source
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 source path"))?;
-    let dst = dest
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("non-UTF-8 dest path"))?;
+    let img = image::open(source)
+        .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", source.display()))?;
 
-    let opts = libvips::ops::ThumbnailOptions {
-        height: THUMB_SIZE,
-        size: libvips::ops::Size::Both,
-        no_rotate: false,
-        crop: libvips::ops::Interesting::None,
-        linear: false,
-        input_profile: None,
-        output_profile: None,
-        intent: libvips::ops::Intent::Relative,
-        fail_on: libvips::ops::FailOn::None,
-    };
+    let thumb = img.thumbnail(THUMB_SIZE, THUMB_SIZE).into_rgb8();
 
-    let thumb = libvips::ops::thumbnail_with_opts(src, THUMB_SIZE, &opts)
-        .map_err(|e| anyhow::anyhow!("vips thumbnail: {e}"))?;
-
-    libvips::ops::webpsave(&thumb, dst)
-        .map_err(|e| anyhow::anyhow!("vips webpsave: {e}"))?;
+    thumb
+        .save_with_format(dest, image::ImageFormat::Jpeg)
+        .map_err(|e| anyhow::anyhow!("cannot save thumbnail: {e}"))?;
 
     Ok(())
 }

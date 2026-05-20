@@ -5,7 +5,7 @@ A lightweight companion image viewer for [mex](../README.md), written in **Rust 
 ## What it does
 
 - **Single-image mode** — opens one image scaled to fit, with filename and tags shown below.
-- **Grid mode** — shows a 256 px thumbnail grid for 2+ selected images; click any thumbnail to view full-size. Thumbnails are cached on disk (WebP, libvips) so repeat opens are instant.
+- **Grid mode** — shows a 256 px thumbnail grid for 2+ selected images; click any thumbnail to view full-size. Thumbnails are cached on disk (JPEG) so repeat opens are instant.
 - **Stays out of the way** — mex remains fully interactive while sem is open.
 
 ## Usage
@@ -33,9 +33,7 @@ See [spec/UC-15.md](../spec/UC-15.md).
 
 ## Build
 
-Requires:
-- GTK4 ≥ 4.8 and libadwaita ≥ 1.4 development headers.
-- **libvips** ≥ 8.x + `libvips-dev` (for thumbnail generation).
+Requires GTK4 ≥ 4.8 and libadwaita ≥ 1.4 development headers. No other system libraries needed.
 
 ```sh
 # Install to ~/.cargo/bin (recommended for use with mex)
@@ -53,6 +51,6 @@ cargo build
 |---------|-------|
 | UI | `gtk4`, `libadwaita` |
 | CLI args | `clap` |
-| Thumbnails | `libvips` |
+| Thumbnails | `image` (pure Rust) |
 | Cache keys | `sha2`, `hex` |
 | Error handling | `anyhow` |

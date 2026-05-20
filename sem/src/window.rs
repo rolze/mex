@@ -258,12 +258,6 @@ fn build_grid_window(
         let cache_dir = Arc::clone(&cache_dir);
 
         std::thread::spawn(move || {
-            let Ok(_vips) = libvips::VipsApp::new("sem-worker", false) else {
-                eprintln!("sem: failed to initialise libvips");
-                return;
-            };
-            _vips.concurrency_set(2);
-
             for (i, (path, _)) in entries.iter().enumerate() {
                 let result = cache::ensure_thumbnail(path, &cache_dir).ok();
                 if sender.send((i, result)).is_err() {
