@@ -135,10 +135,7 @@ pub fn is_dump_folder(name: &str) -> bool {
     // normalise separators
     s = regex_replace_all(&s, r"[-_.\s]+", " ");
     let tokens: Vec<&str> = s.split_whitespace().collect();
-    !tokens.is_empty()
-        && tokens
-            .iter()
-            .all(|t| DUMP_FOLDER_WORDS.contains(t))
+    !tokens.is_empty() && tokens.iter().all(|t| DUMP_FOLDER_WORDS.contains(t))
 }
 
 // ── Transliteration ───────────────────────────────────────────────────────────
@@ -623,15 +620,23 @@ pub fn derive_caption_slug(filename: &str, folder_slug: Option<&str>) -> Option<
 
     // Strip leading tokens that duplicate folder slug prefix
     let mut fs2 = fs.clone();
-    while !cs.is_empty() && !fs2.is_empty() && cs[0] == fs2[0] {
-        cs.remove(0);
-        fs2.remove(0);
+    while let (Some(c), Some(f)) = (cs.first(), fs2.first()) {
+        if c == f {
+            cs.remove(0);
+            fs2.remove(0);
+        } else {
+            break;
+        }
     }
     // Strip trailing tokens that duplicate folder slug suffix
     let mut fs3 = fs.clone();
-    while !cs.is_empty() && !fs3.is_empty() && cs.last().unwrap() == fs3.last().unwrap() {
-        cs.pop();
-        fs3.pop();
+    while let (Some(c), Some(f)) = (cs.last(), fs3.last()) {
+        if c == f {
+            cs.pop();
+            fs3.pop();
+        } else {
+            break;
+        }
     }
 
     if cs.is_empty() {
@@ -1735,7 +1740,12 @@ pub fn find_filename_timestamp(base: &str) -> Option<i64> {
                 let mn = parse_2digit_u(b, j + 12);
                 let sc = parse_2digit_u(b, j + 15);
                 let yr = if yy <= 30 { 2000 + yy } else { 1900 + yy };
-                if (1..=12).contains(&mo) && (1..=31).contains(&dy) && hh <= 23 && mn <= 59 && sc <= 59 {
+                if (1..=12).contains(&mo)
+                    && (1..=31).contains(&dy)
+                    && hh <= 23
+                    && mn <= 59
+                    && sc <= 59
+                {
                     return Some(date_hms_to_secs(
                         yr as i64, mo as i64, dy as i64, hh as i64, mn as i64, sc as i64,
                     ));
@@ -2009,7 +2019,9 @@ pub fn assign_counters(
         }
 
         let counter = counters[&date_prefix];
-        *counters.get_mut(&date_prefix).unwrap() += 1;
+        if let Some(c) = counters.get_mut(&date_prefix) {
+            *c += 1;
+        }
 
         let ext = &entries[idx].ext;
         let ext_with_dot = format!(".{ext}");
@@ -2092,7 +2104,11 @@ pub fn execute_import(
 
     for entry in &mut pending {
         attempted += 1;
-        let rel_tgt = entry.target_path.as_ref().unwrap();
+        let rel_tgt = if let Some(ref p) = entry.target_path {
+            p
+        } else {
+            continue;
+        };
         let abs_tgt = target_root.join(rel_tgt);
 
         // Announce which file is starting — visible immediately, before the
