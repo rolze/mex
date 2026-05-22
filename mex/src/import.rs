@@ -1963,7 +1963,8 @@ pub fn assign_counters(
         v
     };
 
-    let mut counters: HashMap<String, u32> = HashMap::new(); // date_prefix → next counter
+    let mut counters: HashMap<String, u32> = HashMap::new(); // date_prefix → next counter (non-caption files)
+    let mut caption_counters: HashMap<String, u32> = HashMap::new(); // "{date_prefix}-{caption}" → next collision counter
     let mut seen_paths: HashSet<String> = HashSet::new(); // collision guard for no-slug+caption
 
     for idx in pending_indices {
@@ -2018,37 +2019,92 @@ pub fn assign_counters(
             counters.insert(date_prefix.clone(), db_max.max(fs_max) + 1);
         }
 
-        let counter = counters[&date_prefix];
-        if let Some(c) = counters.get_mut(&date_prefix) {
-            *c += 1;
-        }
-
         let ext = &entries[idx].ext;
         let ext_with_dot = format!(".{ext}");
         let cap = entries[idx].caption_slug.clone();
 
-        let target_path = if slug.is_none() {
+        let (target_path, assigned_counter) = if slug.is_none() {
             if let Some(ref c) = cap {
-                // No event slug + caption: prefer without counter; add counter only on collision
+                // No event slug + caption: prefer plain path (no counter); add counter only on
+                // collision. A collision occurs if another batch entry, an existing DB row, or an
+                // existing file on disk already occupies the plain path.
                 let plain = format!("{year}/{date_prefix}-{c}{ext_with_dot}");
-                if seen_paths.contains(&plain) {
-                    let p = format!("{year}/{date_prefix}-{c}-{counter:04}{ext_with_dot}");
+                let plain_exists_on_disk = target_root.join(&plain).exists();
+                let plain_exists_in_db = conn
+                    .query_row(
+                        "SELECT 1 FROM media WHERE target_path = ?1 AND status IN ('moved','trashed','deleted')",
+                        rusqlite::params![plain],
+                        |_| Ok(()),
+                    )
+                    .is_ok();
+                if seen_paths.contains(&plain) || plain_exists_on_disk || plain_exists_in_db {
+                    // Collision: use a per-caption counter that resets to 0001 for each caption.
+                    let cap_key = format!("{date_prefix}-{c}");
+                    if !caption_counters.contains_key(&cap_key) {
+                        let cap_pattern = format!("{year}/{date_prefix}-{c}-%");
+                        let db_max: u32 = conn
+                            .query_row(
+                                "SELECT COALESCE(MAX(counter), 0) FROM media WHERE target_path LIKE ?1 AND status IN ('moved','trashed','deleted')",
+                                rusqlite::params![cap_pattern],
+                                |row| row.get::<_, u32>(0),
+                            )
+                            .unwrap_or(0);
+                        let mut fs_max: u32 = 0;
+                        let yr_dir = target_root.join(year);
+                        let cap_prefix = format!("{date_prefix}-{c}-");
+                        if let Ok(rd) = fs::read_dir(&yr_dir) {
+                            for entry in rd.flatten() {
+                                if let Some(name) = entry.file_name().to_str() {
+                                    if name.starts_with(&cap_prefix) {
+                                        let rest = &name[cap_prefix.len()..];
+                                        let digits: String = rest.chars().take(4).collect();
+                                        if digits.len() == 4
+                                            && digits.chars().all(|ch| ch.is_ascii_digit())
+                                        {
+                                            let n: u32 = digits.parse().unwrap_or(0);
+                                            if n > fs_max {
+                                                fs_max = n;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        caption_counters.insert(cap_key.clone(), db_max.max(fs_max) + 1);
+                    }
+                    let cap_ctr = caption_counters[&cap_key];
+                    *caption_counters.get_mut(&cap_key).unwrap() += 1;
+                    let p = format!("{year}/{date_prefix}-{c}-{cap_ctr:04}{ext_with_dot}");
                     seen_paths.insert(p.clone());
-                    p
+                    (p, Some(cap_ctr))
                 } else {
+                    // First of this caption: plain path, no counter in filename.
                     seen_paths.insert(plain.clone());
-                    plain
+                    (plain, None)
                 }
             } else {
-                format!("{year}/{date_prefix}-{counter:04}{ext_with_dot}")
+                // No slug, no caption: use global day counter.
+                let counter = counters[&date_prefix];
+                *counters.get_mut(&date_prefix).unwrap() += 1;
+                (format!("{year}/{date_prefix}-{counter:04}{ext_with_dot}"), Some(counter))
             }
         } else if let Some(ref c) = cap {
-            format!("{year}/{date_prefix}-{counter:04}-{c}{ext_with_dot}")
+            let counter = counters[&date_prefix];
+            *counters.get_mut(&date_prefix).unwrap() += 1;
+            (
+                format!("{year}/{date_prefix}-{counter:04}-{c}{ext_with_dot}"),
+                Some(counter),
+            )
         } else {
-            format!("{year}/{date_prefix}-{counter:04}{ext_with_dot}")
+            let counter = counters[&date_prefix];
+            *counters.get_mut(&date_prefix).unwrap() += 1;
+            (
+                format!("{year}/{date_prefix}-{counter:04}{ext_with_dot}"),
+                Some(counter),
+            )
         };
 
-        entries[idx].counter = Some(counter);
+        entries[idx].counter = assigned_counter;
         entries[idx].target_path = Some(target_path);
     }
 
@@ -2809,5 +2865,140 @@ mod tests {
         assert_eq!(extract_slug("snap202405051452"), None);
         // hex garbage filtered
         assert_eq!(extract_slug("5554ba2b-20ff-4d67-8d75-9ba83036495d"), None);
+    }
+
+    // ── assign_counters caption collision tests ───────────────────────────────
+
+    fn make_entry(source: &str, date: &str, caption: Option<&str>) -> ImportEntry {
+        ImportEntry {
+            source_path: source.into(),
+            content_hash: String::new(),
+            partial_hash: String::new(),
+            file_size: 0,
+            ext: "jpg".into(),
+            wrong_ext: None,
+            derived_date: Some(date.into()),
+            date_source: "filename".into(),
+            exif_raw: None,
+            derived_slug: None,
+            caption_slug: caption.map(str::to_owned),
+            slug_source: "none".into(),
+            counter: None,
+            target_path: None,
+            status: ImportStatus::Pending,
+            source_mtime_secs: None,
+            filename_secs: None,
+        }
+    }
+
+    fn make_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (
+                target_path TEXT, counter INTEGER, status TEXT
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn test_assign_counters_caption_no_collision() {
+        // Single caption file: plain path, no counter stored.
+        let conn = make_db();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut entries = vec![make_entry("a.jpg", "2026-03-22", Some("chisel"))];
+        assign_counters(&mut entries, tmp.path(), &conn).unwrap();
+        assert_eq!(entries[0].target_path.as_deref(), Some("2026/2026-03-22-chisel.jpg"));
+        assert_eq!(entries[0].counter, None, "plain caption path must not store a counter");
+    }
+
+    #[test]
+    fn test_assign_counters_caption_collision_resets_to_0001() {
+        // Two files with the same caption on the same day.
+        // Second gets -0001, not the global day counter.
+        let conn = make_db();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut entries = vec![
+            make_entry("a.jpg", "2026-03-22", Some("chisel")),
+            make_entry("b.jpg", "2026-03-22", Some("chisel")),
+        ];
+        assign_counters(&mut entries, tmp.path(), &conn).unwrap();
+        let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
+        assert!(paths.contains(&"2026/2026-03-22-chisel.jpg"), "plain path missing");
+        assert!(paths.contains(&"2026/2026-03-22-chisel-0001.jpg"), "collision counter must be 0001");
+        // The plain entry has no counter; the collision entry has counter 1.
+        let plain = entries.iter().find(|e| e.target_path.as_deref() == Some("2026/2026-03-22-chisel.jpg")).unwrap();
+        let collision = entries.iter().find(|e| e.target_path.as_deref() == Some("2026/2026-03-22-chisel-0001.jpg")).unwrap();
+        assert_eq!(plain.counter, None);
+        assert_eq!(collision.counter, Some(1));
+    }
+
+    #[test]
+    fn test_assign_counters_caption_collision_increments_per_caption() {
+        // Three files with the same caption: plain, -0001, -0002.
+        let conn = make_db();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut entries = vec![
+            make_entry("a.jpg", "2026-03-22", Some("chisel")),
+            make_entry("b.jpg", "2026-03-22", Some("chisel")),
+            make_entry("c.jpg", "2026-03-22", Some("chisel")),
+        ];
+        assign_counters(&mut entries, tmp.path(), &conn).unwrap();
+        let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
+        assert!(paths.contains(&"2026/2026-03-22-chisel.jpg"));
+        assert!(paths.contains(&"2026/2026-03-22-chisel-0001.jpg"));
+        assert!(paths.contains(&"2026/2026-03-22-chisel-0002.jpg"));
+    }
+
+    #[test]
+    fn test_assign_counters_different_captions_each_reset_to_0001() {
+        // Two captions with two files each: both collisions reset independently to 0001.
+        let conn = make_db();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut entries = vec![
+            make_entry("a.jpg", "2026-03-22", Some("chisel")),
+            make_entry("b.jpg", "2026-03-22", Some("clamp")),
+            make_entry("c.jpg", "2026-03-22", Some("chisel")),
+            make_entry("d.jpg", "2026-03-22", Some("clamp")),
+        ];
+        assign_counters(&mut entries, tmp.path(), &conn).unwrap();
+        let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
+        assert!(paths.contains(&"2026/2026-03-22-chisel-0001.jpg"), "chisel collision must be 0001");
+        assert!(paths.contains(&"2026/2026-03-22-clamp-0001.jpg"), "clamp collision must be 0001");
+    }
+
+    #[test]
+    fn test_assign_counters_caption_collision_respects_existing_db() {
+        // DB already has chisel-0001 → next collision starts at 0002.
+        let conn = make_db();
+        conn.execute(
+            "INSERT INTO media (target_path, counter, status) VALUES ('2026/2026-03-22-chisel-0001.jpg', 1, 'moved')",
+            [],
+        ).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut entries = vec![
+            make_entry("a.jpg", "2026-03-22", Some("chisel")),
+            make_entry("b.jpg", "2026-03-22", Some("chisel")),
+        ];
+        assign_counters(&mut entries, tmp.path(), &conn).unwrap();
+        let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
+        assert!(paths.contains(&"2026/2026-03-22-chisel.jpg"));
+        assert!(paths.contains(&"2026/2026-03-22-chisel-0002.jpg"), "must start after DB max");
+    }
+
+    #[test]
+    fn test_assign_counters_no_caption_uses_global_counter() {
+        // Files without caption use the global day counter (unchanged behaviour).
+        let conn = make_db();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut entries = vec![
+            make_entry("a.jpg", "2026-03-22", None),
+            make_entry("b.jpg", "2026-03-22", None),
+        ];
+        assign_counters(&mut entries, tmp.path(), &conn).unwrap();
+        let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
+        assert!(paths.contains(&"2026/2026-03-22-0001.jpg"));
+        assert!(paths.contains(&"2026/2026-03-22-0002.jpg"));
     }
 }
