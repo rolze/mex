@@ -2393,8 +2393,14 @@ impl App {
                 self.status_message = Some(format!("view: file not found: {}", path.display()));
                 return;
             }
+            let was_ended = self.mpv_ended;
+            self.mpv_ended = false;
             if let Err(e) = self.mpv.open_file(&path) {
                 self.status_message = Some(e.to_string());
+            } else if was_ended {
+                if let Err(e) = self.mpv.play() {
+                    self.status_message = Some(e.to_string());
+                }
             }
         } else {
             self.status_message = Some(format!("view: unsupported file type (.{ext})"));
