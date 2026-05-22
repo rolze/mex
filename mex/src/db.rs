@@ -1,8 +1,212 @@
 use anyhow::Result;
 use regex::Regex;
 use rusqlite::{Connection, OptionalExtension};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
-pub const PATH_RE: &str = r"^(?P<year>\d{4})/(?:\d{4})-(?P<month>0[1-9]|1[0-2])-(?:(?P<day>0[1-9]|[12]\d|3[01])-(?:(?P<day_cap>[a-z0-9-]+)(?:\-(?P<day_coll>\d{4}))?|(?P<day_cnt>\d{4}))|(?P<slug>[a-z0-9-]{3,})-(?P<slug_cnt>\d{4})(?:\-(?P<slug_cap>[a-z0-9-]+))?)\.(?P<ext>[a-z0-9]+)$";
+pub const PATH_RE: &str = r"^(?P<year>\d{4})/(?:\d{4})-(?P<month>0[1-9]|1[0-2])-(?:(?P<day>0[1-9]|[12]\d|3[01])-(?:(?P<day_cap>[a-z0-9-]+)(?:\-(?P<day_coll>\d+))?|(?P<day_cnt>\d{4}))|(?P<slug>[a-z0-9-]{3,})-(?P<slug_cnt>\d{4})(?:\-(?P<slug_cap>[a-z0-9-]+))?)\.(?P<ext>[a-z0-9]+)$";
+
+// ── Shared naming helpers ────────────────────────────────────────────────────
+
+/// Scan `yr_dir` for the highest numeric counter under the filename pattern
+/// `{prefix}-{N}.*`, skipping any names listed in `skip_basenames`.
+///
+/// The counter `N` is the digit run immediately after the final `-{prefix}-`
+/// separator and before the next `.` or end of filename, so both zero-padded
+/// (`0001`) and plain (`2`, `3`, …) forms are handled.  Returns 0 if no
+/// matching file is found.
+pub(crate) fn fs_counter_max(
+    yr_dir: &Path,
+    prefix: &str,
+    skip_basenames: &HashSet<String>,
+) -> u32 {
+    let search_prefix = format!("{prefix}-");
+    let mut max: u32 = 0;
+    if let Ok(rd) = std::fs::read_dir(yr_dir) {
+        for entry in rd.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                if skip_basenames.contains(name) {
+                    continue;
+                }
+                if let Some(rest) = name.strip_prefix(&search_prefix) {
+                    // digits up to the first non-digit character
+                    let digit_end = rest
+                        .find(|c: char| !c.is_ascii_digit())
+                        .unwrap_or(rest.len());
+                    if digit_end > 0 {
+                        if let Ok(n) = rest[..digit_end].parse::<u32>() {
+                            if n > max {
+                                max = n;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    max
+}
+
+/// Rename `old_rel` → `new_rel` relative to `target_root`.
+/// Creates the parent directory if needed.
+/// No-ops silently when `old_rel == new_rel` or the source file is absent on disk.
+pub(crate) fn rename_file_rel(
+    target_root: &Path,
+    old_rel: &str,
+    new_rel: &str,
+) -> anyhow::Result<()> {
+    let old_abs = target_root.join(old_rel);
+    let new_abs = target_root.join(new_rel);
+    if old_abs == new_abs {
+        return Ok(());
+    }
+    if old_abs.exists() {
+        if let Some(parent) = new_abs.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::rename(&old_abs, &new_abs)?;
+    }
+    Ok(())
+}
+
+/// Determine the target path for a caption-only file (no event slug).
+///
+/// Tries the plain form `{year}/{date_prefix}-{caption}.{ext}` first.
+/// If that path is occupied — present in `seen_paths`, existing on disk and not
+/// in `skip_disk_paths`, or in the DB and not among `exclude_ids` — falls back
+/// to `{year}/{date_prefix}-{caption}-{N}.{ext}` with a counter starting at **2**
+/// (the plain path is implicitly "version 1").
+///
+/// Per-caption counter state is kept in `caption_counters` across calls so that
+/// consecutive collisions produce consecutive values.
+///
+/// Returns `(target_path, counter)` where `counter` is `None` for the plain form.
+pub(crate) fn next_caption_path(
+    conn: &Connection,
+    target_root: &Path,
+    year: &str,
+    date_prefix: &str,
+    caption: &str,
+    ext: &str,
+    seen_paths: &HashSet<String>,
+    skip_disk_paths: &HashSet<&str>,
+    exclude_ids: &[&str],
+    caption_counters: &mut HashMap<String, u32>,
+) -> (String, Option<u32>) {
+    let plain = format!("{year}/{date_prefix}-{caption}.{ext}");
+
+    let in_seen = seen_paths.contains(&plain);
+    let on_disk = !in_seen && {
+        let abs = target_root.join(&plain);
+        abs.exists() && !skip_disk_paths.contains(plain.as_str())
+    };
+    let in_db = !in_seen && !on_disk && {
+        if exclude_ids.is_empty() {
+            conn.query_row(
+                "SELECT 1 FROM media WHERE target_path = ?1 \
+                 AND status IN ('moved','trashed','deleted')",
+                rusqlite::params![plain],
+                |_| Ok(()),
+            )
+            .is_ok()
+        } else {
+            let ph = (0..exclude_ids.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let q = format!(
+                "SELECT 1 FROM media WHERE target_path = ?1 \
+                 AND id NOT IN ({ph}) AND status IN ('moved','trashed','deleted')"
+            );
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+                vec![Box::new(plain.clone())];
+            for id in exclude_ids {
+                params.push(Box::new(id.to_string()));
+            }
+            conn.prepare(&q)
+                .ok()
+                .and_then(|mut stmt| {
+                    stmt.query_row(
+                        params
+                            .iter()
+                            .map(|p| p.as_ref())
+                            .collect::<Vec<_>>()
+                            .as_slice(),
+                        |_| Ok(()),
+                    )
+                    .ok()
+                })
+                .is_some()
+        }
+    };
+
+    if !in_seen && !on_disk && !in_db {
+        return (plain, None);
+    }
+
+    // Collision: find or initialise per-caption counter (minimum 2).
+    let cap_key = format!("{date_prefix}-{caption}");
+    if !caption_counters.contains_key(&cap_key) {
+        let cap_pattern = format!("{year}/{date_prefix}-{caption}-%");
+        let db_max: u32 = if exclude_ids.is_empty() {
+            conn.query_row(
+                "SELECT COALESCE(MAX(counter), 0) FROM media \
+                 WHERE target_path LIKE ?1 AND status IN ('moved','trashed','deleted')",
+                rusqlite::params![cap_pattern],
+                |row| row.get::<_, u32>(0),
+            )
+            .unwrap_or(0)
+        } else {
+            let ph = (0..exclude_ids.len())
+                .map(|i| format!("?{}", i + 2))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let q = format!(
+                "SELECT COALESCE(MAX(counter), 0) FROM media \
+                 WHERE target_path LIKE ?1 AND status IN ('moved','trashed','deleted') \
+                 AND id NOT IN ({ph})"
+            );
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
+                vec![Box::new(cap_pattern)];
+            for id in exclude_ids {
+                params.push(Box::new(id.to_string()));
+            }
+            conn.prepare(&q)
+                .ok()
+                .and_then(|mut stmt| {
+                    stmt.query_row(
+                        params
+                            .iter()
+                            .map(|p| p.as_ref())
+                            .collect::<Vec<_>>()
+                            .as_slice(),
+                        |row| row.get::<_, u32>(0),
+                    )
+                    .ok()
+                })
+                .unwrap_or(0)
+        };
+        // Derive skip-basenames from the full relative paths in skip_disk_paths.
+        let skip_basenames: HashSet<String> = skip_disk_paths
+            .iter()
+            .filter_map(|p| Path::new(p).file_name()?.to_str().map(|s| s.to_string()))
+            .collect();
+        let yr_dir = target_root.join(year);
+        let fs_max = fs_counter_max(
+            &yr_dir,
+            &format!("{date_prefix}-{caption}"),
+            &skip_basenames,
+        );
+        // Start at 2 (plain is "version 1"); respect any existing higher values.
+        caption_counters.insert(cap_key.clone(), db_max.max(fs_max).max(1) + 1);
+    }
+
+    let ctr = *caption_counters.get(&cap_key).unwrap();
+    *caption_counters.get_mut(&cap_key).unwrap() += 1;
+    (format!("{year}/{date_prefix}-{caption}-{ctr}.{ext}"), Some(ctr))
+}
 
 #[derive(Clone, Debug)]
 pub struct MediaFile {
@@ -607,7 +811,7 @@ pub fn fix_caption(
                 if new_caption.is_empty() {
                     final_path = format!("{year}/{year}-{month}-{day}-{:04}.{ext}", counter);
                 } else {
-                    final_path = format!("{year}/{year}-{month}-{day}-{new_caption}-{:04}.{ext}", counter);
+                    final_path = format!("{year}/{year}-{month}-{day}-{new_caption}-{}.{ext}", counter);
                 }
             } else if let Some(slug_m) = caps.name("slug") {
                 let slug = slug_m.as_str();
@@ -621,15 +825,7 @@ pub fn fix_caption(
     }
 
     // Rename on disk
-    let old_abs = Path::new(target_root).join(&target_path);
-    let new_abs = Path::new(target_root).join(&final_path);
-
-    if old_abs != new_abs && old_abs.exists() {
-        if let Some(parent) = new_abs.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::rename(&old_abs, &new_abs)?;
-    }
+    rename_file_rel(Path::new(target_root), &target_path, &final_path)?;
 
     // Update DB
     let stored_caption = if new_caption.is_empty() { None } else { Some(new_caption) };
@@ -678,10 +874,7 @@ pub fn remove_slug_batch(
     file_ids: &[String],
     on_progress: impl Fn(usize, &str),
 ) -> Result<RemoveSlugBatchStats> {
-    use std::{
-        collections::{HashMap, HashSet},
-        path::Path,
-    };
+    use std::path::Path;
 
     if file_ids.is_empty() {
         return Ok(RemoveSlugBatchStats {
@@ -820,28 +1013,8 @@ pub fn remove_slug_batch(
         };
 
         // FS max excluding all batch basenames.
-        let mut fs_max: u32 = 0;
         let yr_dir = Path::new(target_root).join(year);
-        if let Ok(rd) = std::fs::read_dir(&yr_dir) {
-            for entry in rd.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if batch_basenames.contains(name) {
-                        continue;
-                    }
-                    if name.starts_with(&format!("{day_prefix}-")) {
-                        let rest = &name[day_prefix.len() + 1..];
-                        let digits: String = rest.chars().take(4).collect();
-                        if digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()) {
-                            if let Ok(n) = digits.parse::<u32>() {
-                                if n > fs_max {
-                                    fs_max = n;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let fs_max = fs_counter_max(&yr_dir, &day_prefix, &batch_basenames);
 
         day_next.insert(day_prefix, db_max.max(fs_max) + 1);
     }
@@ -854,6 +1027,7 @@ pub fn remove_slug_batch(
     }
     let mut assignments: Vec<Assignment> = Vec::with_capacity(records.len());
     let mut seen_new_paths: HashSet<String> = HashSet::new();
+    let mut caption_counters: HashMap<String, u32> = HashMap::new();
 
     for rec in &records {
         if rec.derived_date.len() < 10 {
@@ -869,67 +1043,20 @@ pub fn remove_slug_batch(
         let day_prefix = format!("{year}-{month}-{day}");
 
         let assignment = if !rec.caption_slug.is_empty() {
-            let plain = format!("{year}/{day_prefix}-{}.{}", rec.caption_slug, rec.ext);
-            // Collision: claimed by another batch file, or occupied by a non-batch path.
-            let in_batch = seen_new_paths.contains(&plain);
-            let on_disk = if !in_batch {
-                let abs = Path::new(target_root).join(&plain);
-                abs.exists() && !batch_old_paths.contains(plain.as_str())
-            } else {
-                false
-            };
-            let in_db = if !in_batch && !on_disk {
-                let ph = (0..batch_ids.len())
-                    .map(|i| format!("?{}", i + 2))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let q = format!(
-                    "SELECT COUNT(*) FROM media WHERE target_path = ?1 AND id NOT IN ({ph}) \
-                     AND status IN ('moved','trashed','deleted')"
-                );
-                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-                    vec![Box::new(plain.clone())];
-                for id in &batch_ids {
-                    params.push(Box::new(id.to_string()));
-                }
-                conn.prepare(&q)
-                    .ok()
-                    .and_then(|mut s| {
-                        s.query_row(
-                            params
-                                .iter()
-                                .map(|p| p.as_ref())
-                                .collect::<Vec<_>>()
-                                .as_slice(),
-                            |row| row.get::<_, i64>(0),
-                        )
-                        .ok()
-                    })
-                    .unwrap_or(0)
-                    > 0
-            } else {
-                false
-            };
-
-            if in_batch || on_disk || in_db {
-                let counter = *day_next.get(&day_prefix).unwrap_or(&1);
-                *day_next.get_mut(&day_prefix).unwrap() += 1;
-                let p = format!(
-                    "{year}/{day_prefix}-{}-{counter:04}.{}",
-                    rec.caption_slug, rec.ext
-                );
-                seen_new_paths.insert(p.clone());
-                Assignment {
-                    new_target_path: p,
-                    stored_counter: Some(counter),
-                }
-            } else {
-                seen_new_paths.insert(plain.clone());
-                Assignment {
-                    new_target_path: plain,
-                    stored_counter: None,
-                }
-            }
+            let (path, stored_counter) = next_caption_path(
+                &conn,
+                Path::new(target_root),
+                year,
+                &day_prefix,
+                &rec.caption_slug,
+                &rec.ext,
+                &seen_new_paths,
+                &batch_old_paths,
+                &batch_ids,
+                &mut caption_counters,
+            );
+            seen_new_paths.insert(path.clone());
+            Assignment { new_target_path: path, stored_counter }
         } else {
             let counter = *day_next.get(&day_prefix).unwrap_or(&1);
             *day_next.get_mut(&day_prefix).unwrap() += 1;
@@ -978,17 +1105,11 @@ pub fn remove_slug_batch(
             continue;
         }
 
-        if old_abs != new_abs && old_abs.exists() {
-            if let Some(parent) = new_abs.parent() {
-                if let Err(e) = std::fs::create_dir_all(parent) {
-                    stats.errors.push((rec.id.clone(), e.to_string()));
-                    continue;
-                }
-            }
-            if let Err(e) = std::fs::rename(&old_abs, &new_abs) {
-                stats.errors.push((rec.id.clone(), e.to_string()));
-                continue;
-            }
+        if let Err(e) =
+            rename_file_rel(Path::new(target_root), &rec.target_path, &asgn.new_target_path)
+        {
+            stats.errors.push((rec.id.clone(), e.to_string()));
+            continue;
         }
 
         // Save old slug as a tag of type "slug".

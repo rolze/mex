@@ -1929,9 +1929,11 @@ fn majority_month(months: &[String]) -> String {
 
 // ── Counter assignment ────────────────────────────────────────────────────────
 
-/// Assign 4-digit counters to all `Pending` entries, setting `target_path`.
+/// Assign counters to all `Pending` entries, setting `target_path`.
 ///
-/// Counter resets to `0001` for each new date-prefix (`yyyy-MM-slug` or `yyyy-MM-DD`).
+/// For slug-based files the counter resets to `0001` for each new `yyyy-MM-slug`
+/// prefix.  For caption-only files the plain path is preferred; a collision triggers
+/// a per-caption counter starting at **2** (`-2`, `-3`, …).
 /// Checks existing DB max counters AND filesystem to avoid collisions with already-moved files.
 pub fn assign_counters(
     entries: &mut [ImportEntry],
@@ -1996,25 +1998,8 @@ pub fn assign_counters(
                 .unwrap_or(0);
 
             // Get max from filesystem
-            let mut fs_max: u32 = 0;
             let yr_dir = target_root.join(year);
-            if let Ok(rd) = fs::read_dir(&yr_dir) {
-                for entry in rd.flatten() {
-                    if let Some(name) = entry.file_name().to_str() {
-                        if name.starts_with(&format!("{date_prefix}-")) {
-                            let rest = &name[date_prefix.len() + 1..];
-                            // Counter is the first 4-digit group
-                            let digits: String = rest.chars().take(4).collect();
-                            if digits.len() == 4 && digits.chars().all(|c| c.is_ascii_digit()) {
-                                let n: u32 = digits.parse().unwrap_or(0);
-                                if n > fs_max {
-                                    fs_max = n;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            let fs_max = crate::db::fs_counter_max(&yr_dir, &date_prefix, &HashSet::new());
 
             counters.insert(date_prefix.clone(), db_max.max(fs_max) + 1);
         }
@@ -2025,63 +2010,21 @@ pub fn assign_counters(
 
         let (target_path, assigned_counter) = if slug.is_none() {
             if let Some(ref c) = cap {
-                // No event slug + caption: prefer plain path (no counter); add counter only on
-                // collision. A collision occurs if another batch entry, an existing DB row, or an
-                // existing file on disk already occupies the plain path.
-                let plain = format!("{year}/{date_prefix}-{c}{ext_with_dot}");
-                let plain_exists_on_disk = target_root.join(&plain).exists();
-                let plain_exists_in_db = conn
-                    .query_row(
-                        "SELECT 1 FROM media WHERE target_path = ?1 AND status IN ('moved','trashed','deleted')",
-                        rusqlite::params![plain],
-                        |_| Ok(()),
-                    )
-                    .is_ok();
-                if seen_paths.contains(&plain) || plain_exists_on_disk || plain_exists_in_db {
-                    // Collision: use a per-caption counter that resets to 0001 for each caption.
-                    let cap_key = format!("{date_prefix}-{c}");
-                    if !caption_counters.contains_key(&cap_key) {
-                        let cap_pattern = format!("{year}/{date_prefix}-{c}-%");
-                        let db_max: u32 = conn
-                            .query_row(
-                                "SELECT COALESCE(MAX(counter), 0) FROM media WHERE target_path LIKE ?1 AND status IN ('moved','trashed','deleted')",
-                                rusqlite::params![cap_pattern],
-                                |row| row.get::<_, u32>(0),
-                            )
-                            .unwrap_or(0);
-                        let mut fs_max: u32 = 0;
-                        let yr_dir = target_root.join(year);
-                        let cap_prefix = format!("{date_prefix}-{c}-");
-                        if let Ok(rd) = fs::read_dir(&yr_dir) {
-                            for entry in rd.flatten() {
-                                if let Some(name) = entry.file_name().to_str() {
-                                    if name.starts_with(&cap_prefix) {
-                                        let rest = &name[cap_prefix.len()..];
-                                        let digits: String = rest.chars().take(4).collect();
-                                        if digits.len() == 4
-                                            && digits.chars().all(|ch| ch.is_ascii_digit())
-                                        {
-                                            let n: u32 = digits.parse().unwrap_or(0);
-                                            if n > fs_max {
-                                                fs_max = n;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        caption_counters.insert(cap_key.clone(), db_max.max(fs_max) + 1);
-                    }
-                    let cap_ctr = caption_counters[&cap_key];
-                    *caption_counters.get_mut(&cap_key).unwrap() += 1;
-                    let p = format!("{year}/{date_prefix}-{c}-{cap_ctr:04}{ext_with_dot}");
-                    seen_paths.insert(p.clone());
-                    (p, Some(cap_ctr))
-                } else {
-                    // First of this caption: plain path, no counter in filename.
-                    seen_paths.insert(plain.clone());
-                    (plain, None)
-                }
+                // No event slug + caption: try plain path; fall back to collision counter.
+                let (path, counter) = crate::db::next_caption_path(
+                    conn,
+                    target_root,
+                    year,
+                    &date_prefix,
+                    c,
+                    ext,
+                    &seen_paths,
+                    &HashSet::new(),
+                    &[],
+                    &mut caption_counters,
+                );
+                seen_paths.insert(path.clone());
+                (path, counter)
             } else {
                 // No slug, no caption: use global day counter.
                 let counter = counters[&date_prefix];
@@ -2916,7 +2859,7 @@ mod tests {
     #[test]
     fn test_assign_counters_caption_collision_resets_to_0001() {
         // Two files with the same caption on the same day.
-        // Second gets -0001, not the global day counter.
+        // Second gets -2 (plain path is "version 1").
         let conn = make_db();
         let tmp = tempfile::tempdir().unwrap();
         let mut entries = vec![
@@ -2926,17 +2869,17 @@ mod tests {
         assign_counters(&mut entries, tmp.path(), &conn).unwrap();
         let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
         assert!(paths.contains(&"2026/2026-03-22-chisel.jpg"), "plain path missing");
-        assert!(paths.contains(&"2026/2026-03-22-chisel-0001.jpg"), "collision counter must be 0001");
-        // The plain entry has no counter; the collision entry has counter 1.
+        assert!(paths.contains(&"2026/2026-03-22-chisel-2.jpg"), "collision counter must be 2");
+        // The plain entry has no counter; the collision entry has counter 2.
         let plain = entries.iter().find(|e| e.target_path.as_deref() == Some("2026/2026-03-22-chisel.jpg")).unwrap();
-        let collision = entries.iter().find(|e| e.target_path.as_deref() == Some("2026/2026-03-22-chisel-0001.jpg")).unwrap();
+        let collision = entries.iter().find(|e| e.target_path.as_deref() == Some("2026/2026-03-22-chisel-2.jpg")).unwrap();
         assert_eq!(plain.counter, None);
-        assert_eq!(collision.counter, Some(1));
+        assert_eq!(collision.counter, Some(2));
     }
 
     #[test]
     fn test_assign_counters_caption_collision_increments_per_caption() {
-        // Three files with the same caption: plain, -0001, -0002.
+        // Three files with the same caption: plain, -2, -3.
         let conn = make_db();
         let tmp = tempfile::tempdir().unwrap();
         let mut entries = vec![
@@ -2947,13 +2890,13 @@ mod tests {
         assign_counters(&mut entries, tmp.path(), &conn).unwrap();
         let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
         assert!(paths.contains(&"2026/2026-03-22-chisel.jpg"));
-        assert!(paths.contains(&"2026/2026-03-22-chisel-0001.jpg"));
-        assert!(paths.contains(&"2026/2026-03-22-chisel-0002.jpg"));
+        assert!(paths.contains(&"2026/2026-03-22-chisel-2.jpg"));
+        assert!(paths.contains(&"2026/2026-03-22-chisel-3.jpg"));
     }
 
     #[test]
     fn test_assign_counters_different_captions_each_reset_to_0001() {
-        // Two captions with two files each: both collisions reset independently to 0001.
+        // Two captions with two files each: both collisions start at 2 independently.
         let conn = make_db();
         let tmp = tempfile::tempdir().unwrap();
         let mut entries = vec![
@@ -2964,16 +2907,16 @@ mod tests {
         ];
         assign_counters(&mut entries, tmp.path(), &conn).unwrap();
         let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
-        assert!(paths.contains(&"2026/2026-03-22-chisel-0001.jpg"), "chisel collision must be 0001");
-        assert!(paths.contains(&"2026/2026-03-22-clamp-0001.jpg"), "clamp collision must be 0001");
+        assert!(paths.contains(&"2026/2026-03-22-chisel-2.jpg"), "chisel collision must be 2");
+        assert!(paths.contains(&"2026/2026-03-22-clamp-2.jpg"), "clamp collision must be 2");
     }
 
     #[test]
     fn test_assign_counters_caption_collision_respects_existing_db() {
-        // DB already has chisel-0001 → next collision starts at 0002.
+        // DB already has chisel-2 → next collision starts at 3.
         let conn = make_db();
         conn.execute(
-            "INSERT INTO media (target_path, counter, status) VALUES ('2026/2026-03-22-chisel-0001.jpg', 1, 'moved')",
+            "INSERT INTO media (target_path, counter, status) VALUES ('2026/2026-03-22-chisel-2.jpg', 2, 'moved')",
             [],
         ).unwrap();
         let tmp = tempfile::tempdir().unwrap();
@@ -2984,7 +2927,7 @@ mod tests {
         assign_counters(&mut entries, tmp.path(), &conn).unwrap();
         let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
         assert!(paths.contains(&"2026/2026-03-22-chisel.jpg"));
-        assert!(paths.contains(&"2026/2026-03-22-chisel-0002.jpg"), "must start after DB max");
+        assert!(paths.contains(&"2026/2026-03-22-chisel-3.jpg"), "must start after DB max");
     }
 
     #[test]
