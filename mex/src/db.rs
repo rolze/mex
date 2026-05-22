@@ -40,6 +40,7 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
                LEFT JOIN media_tags mt ON mt.media_id = m.id
                LEFT JOIN tags t ON t.id = mt.tag_id
                WHERE m.target_path IS NOT NULL
+                 AND m.status != 'deleted'
                GROUP BY m.id
                ORDER BY m.target_path";
 
@@ -1530,5 +1531,48 @@ mod tests {
         assert_eq!(folder_of("folder/"), "folder");
         assert_eq!(folder_of("a///b"), "a//");
         assert_eq!(folder_of("/"), "");
+    }
+
+    /// `load_files` must return `moved` and `trashed` rows but never `deleted` ones.
+    #[test]
+    fn load_files_excludes_deleted_status() {
+        use rusqlite::Connection;
+        use std::fs;
+
+        let dir = std::env::temp_dir()
+            .join(format!("mex_load_files_test_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("mex.db");
+
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (
+                id TEXT PRIMARY KEY,
+                target_path TEXT,
+                derived_date TEXT,
+                ext TEXT,
+                os_date TEXT,
+                derived_slug TEXT,
+                caption_slug TEXT,
+                source_path TEXT,
+                status TEXT,
+                missing_on_disk INTEGER DEFAULT 0
+             );
+             CREATE TABLE media_tags (media_id TEXT, tag_id TEXT);
+             CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT, type TEXT);
+             INSERT INTO media VALUES ('m1','2024/moved.jpg','2024-01-01','jpg','','','','','moved',0);
+             INSERT INTO media VALUES ('m2','2024/trashed.jpg','2024-01-02','jpg','','','','','trashed',0);
+             INSERT INTO media VALUES ('m3','2024/deleted.jpg','2024-01-03','jpg','','','','','deleted',0);",
+        ).unwrap();
+        drop(conn);
+
+        let files = load_files(db_path.to_str().unwrap()).unwrap();
+        let ids: Vec<&str> = files.iter().map(|f| f.id.as_str()).collect();
+
+        assert!(ids.contains(&"m1"), "moved file must be in load_files result");
+        assert!(ids.contains(&"m2"), "trashed file must be in load_files result");
+        assert!(!ids.contains(&"m3"), "deleted file must NOT be in load_files result");
+
+        fs::remove_dir_all(&dir).ok();
     }
 }
