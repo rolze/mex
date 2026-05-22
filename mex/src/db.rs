@@ -4,9 +4,44 @@ use rusqlite::{Connection, OptionalExtension};
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
+    sync::OnceLock,
 };
 
 pub const PATH_RE: &str = r"^(?P<year>\d{4})/(?:\d{4})-(?P<month>0[1-9]|1[0-2])-(?:(?P<day>0[1-9]|[12]\d|3[01])-(?:(?P<day_cap>[a-z0-9-]+)(?:\-(?P<day_coll>\d+))?|(?P<day_cnt>\d{4}))|(?P<slug>[a-z0-9-]{3,})-(?P<slug_cnt>\d{4})(?:\-(?P<slug_cap>[a-z0-9-]+))?)\.(?P<ext>[a-z0-9]+)$";
+
+// ── Sort helpers ─────────────────────────────────────────────────────────────
+
+/// Returns a sort key `(base, collision)` for a `target_path` so that
+/// collision files (`cap-2.ext`, `cap-3.ext`, …) sort immediately after
+/// their origin (`cap.ext`) rather than before it.
+///
+/// A trailing `-N` before the final extension is treated as a collision
+/// counter.  All other paths (no digit suffix) get collision = 0.
+///
+/// Examples:
+/// * `"2024/2024-01-01-chisel.mp4"`   → `("2024/2024-01-01-chisel", 0)`
+/// * `"2024/2024-01-01-chisel-2.mp4"` → `("2024/2024-01-01-chisel", 2)`
+/// * `"2024/2024-01-01-chisel-wood.mp4"` → `("2024/2024-01-01-chisel-wood", 0)`
+fn path_sort_key(path: &str) -> (&str, u64) {
+    static COLL_RE: OnceLock<Regex> = OnceLock::new();
+    let re = COLL_RE.get_or_init(|| Regex::new(r"^(.*)-(\d+)\.[^./]+$").unwrap());
+
+    if let Some(caps) = re.captures(path) {
+        let base_end = caps.get(1).unwrap().end();
+        let n: u64 = caps[2].parse().unwrap_or(0);
+        return (&path[..base_end], n);
+    }
+
+    // Strip extension to get a comparable base (so "cap.ext" key == "cap" not "cap.ext").
+    static EXT_RE: OnceLock<Regex> = OnceLock::new();
+    let ext_re = EXT_RE.get_or_init(|| Regex::new(r"^(.*)\.[^./]+$").unwrap());
+    if let Some(caps) = ext_re.captures(path) {
+        let base_end = caps.get(1).unwrap().end();
+        return (&path[..base_end], 0);
+    }
+
+    (path, 0)
+}
 
 // ── Shared naming helpers ────────────────────────────────────────────────────
 
@@ -291,6 +326,11 @@ pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
     for r in rows {
         files.push(r?);
     }
+    files.sort_by(|a, b| {
+        let ka = path_sort_key(&a.target_path);
+        let kb = path_sort_key(&b.target_path);
+        ka.0.cmp(kb.0).then(ka.1.cmp(&kb.1))
+    });
     Ok(files)
 }
 
@@ -1299,6 +1339,11 @@ pub fn load_trashed_files(db_path: &str, limit: usize) -> Result<Vec<MediaFile>>
     for r in rows {
         files.push(r?);
     }
+    files.sort_by(|a, b| {
+        let ka = path_sort_key(&a.target_path);
+        let kb = path_sort_key(&b.target_path);
+        ka.0.cmp(kb.0).then(ka.1.cmp(&kb.1))
+    });
     Ok(files)
 }
 
