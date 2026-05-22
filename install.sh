@@ -120,19 +120,34 @@ fi
 
 MISSING_DEPS=()
 
+# ldconfig lives in /sbin or /usr/sbin which may not be on PATH in a
+# non-interactive curl|bash session — resolve it explicitly.
+_LDCONFIG=$(command -v ldconfig 2>/dev/null \
+    || { for d in /sbin /usr/sbin /usr/local/sbin; do [[ -x "$d/ldconfig" ]] && echo "$d/ldconfig" && break; done; })
+
 _has_lib() {
-    ldconfig -p 2>/dev/null | grep -q "$1"
+    local soname="$1" pkg="${2:-}"
+    # Primary: scan the shared-library cache
+    if [[ -n "$_LDCONFIG" ]] && "$_LDCONFIG" -p 2>/dev/null | grep -q "${soname}"; then
+        return 0
+    fi
+    # Fallback: dpkg-query (Debian / Ubuntu)
+    if [[ -n "$pkg" ]] && \
+       dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null | grep -q 'install ok installed'; then
+        return 0
+    fi
+    return 1
 }
 
-if ! _has_lib 'libgtk-4'; then
+if ! _has_lib 'libgtk-4' 'libgtk-4-1'; then
     MISSING_DEPS+=("libgtk-4-1")
 fi
-if ! _has_lib 'libadwaita-1'; then
+if ! _has_lib 'libadwaita-1' 'libadwaita-1-0'; then
     MISSING_DEPS+=("libadwaita-1-0")
 fi
 if [[ "$SEM_VARIANT" == *"-vips" ]]; then
-    if ! _has_lib 'libvips'; then
-        # Detect Ubuntu/Debian version to suggest the right package name
+    if ! _has_lib 'libvips' 'libvips42' && ! _has_lib 'libvips' 'libvips42t64'; then
+        # Suggest the right package name for the running Ubuntu/Debian version
         if grep -q "24\." /etc/os-release 2>/dev/null; then
             MISSING_DEPS+=("libvips42t64")
         else
