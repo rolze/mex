@@ -1,6 +1,8 @@
-# Installing mex
+# Installing mex and sem
 
-## Native Linux
+## mex
+
+### Native Linux
 
 ```bash
 cargo build --release
@@ -9,9 +11,73 @@ cargo build --release
 
 No additional dependencies beyond Rust stable.
 
+### Pre-built binary (Linux x86_64)
+
+Download `mex-linux-x86_64` from the [latest release](https://github.com/rolze/mex/releases/latest),
+make it executable, and put it on your PATH:
+
+```bash
+chmod +x mex-linux-x86_64
+sudo mv mex-linux-x86_64 /usr/local/bin/mex
+```
+
+This is a fully static musl binary — no runtime dependencies.
+
 ---
 
-## Windows / WSL2
+## sem
+
+`sem` is the companion GTK4 image viewer launched by `mex`. It requires GTK4 and libadwaita at
+runtime (dynamically linked).
+
+### Choosing a binary
+
+Two pre-built variants are provided:
+
+| Binary | Thumbnail backend | Extra runtime dep |
+|--------|-------------------|-------------------|
+| `sem-linux-x86_64` | pure Rust (`image` crate) | — |
+| `sem-linux-x86_64-vips` | libvips (faster for large libraries) | `libvips42` |
+
+### Pre-built binary (Linux x86_64)
+
+**1 — Install runtime libraries**
+
+For `sem-linux-x86_64`:
+```bash
+sudo apt install libgtk-4-1 libadwaita-1-0
+```
+
+For `sem-linux-x86_64-vips` (additionally):
+```bash
+# Ubuntu 22.04 / Debian 12
+sudo apt install libvips42
+# Ubuntu 24.04+
+sudo apt install libvips42t64
+```
+
+**2 — Download and install**
+
+```bash
+chmod +x sem-linux-x86_64          # or sem-linux-x86_64-vips
+sudo mv sem-linux-x86_64 /usr/local/bin/sem
+```
+
+### Build from source
+
+```bash
+cd sem/
+
+# Default (image crate backend)
+cargo build --release
+
+# With libvips backend (requires libvips-dev)
+cargo build --release --features vips
+```
+
+---
+
+## mex — Windows / WSL2
 
 mex runs in WSL2 and controls a **native Windows mpv.exe** for video playback.
 This requires a one-time bridge setup so WSL can talk to mpv's Windows named pipe.
