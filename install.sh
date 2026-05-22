@@ -163,11 +163,13 @@ if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
     info "  sudo apt install ${MISSING_DEPS[*]}"
 fi
 
-# mpv is required for video playback (press 'p' on a video file in mex)
+# mpv is preferred for video playback — enables IPC controls (pause/resume,
+# next/prev, media keys, live status). mex falls back to the OS default
+# player if mpv is absent, but full integration requires mpv.
 if ! command -v mpv &>/dev/null; then
     echo ""
-    yellow "mpv not found — video playback will not work."
-    info "Install it with:"
+    yellow "mpv not found — video will open in the OS default player (reduced integration)."
+    info "Install mpv for full IPC controls (pause, next/prev, media keys):"
     info "  sudo apt install mpv"
 fi
 
