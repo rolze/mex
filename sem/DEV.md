@@ -207,5 +207,5 @@ sem/
 
 ## Related specs
 
-- [`spec/UC-15.md`](../spec/UC-15.md) — full feature spec for sem & mex integration
+- [`spec/UC-15-sem-viewer.md`](../spec/UC-15-sem-viewer.md) — full feature spec for sem & mex integration
 - [`ARCHITECTURE.md`](../ARCHITECTURE.md) — mex architecture (the TUI side)
