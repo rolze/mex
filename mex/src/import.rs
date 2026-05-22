@@ -1927,6 +1927,74 @@ fn majority_month(months: &[String]) -> String {
         .unwrap_or_default()
 }
 
+// ── Within-batch deduplication ───────────────────────────────────────────────
+
+/// Mark within-batch duplicate `Pending` entries as `ImportStatus::Duplicate`
+/// *before* counter assignment.
+///
+/// Files are grouped by `(file_size, partial_hash)`.  Within each group, the
+/// entry that sorts first by `(derived_date, derived_slug, source_path)` — the
+/// same key used by `assign_counters` — is kept as `Pending`; the rest are
+/// demoted to `Duplicate`.  This prevents the skipped duplicates from
+/// "consuming" a counter slot and causing gaps (e.g. `-2` missing, `-3` present).
+///
+/// `file_size == 0` entries are never hashed or demoted (empty files are rare
+/// and not worth the special-casing).
+pub fn deduplicate_within_batch(entries: &mut [ImportEntry]) {
+    use std::collections::HashMap;
+
+    // Gather indices of Pending entries with a non-zero file_size.
+    let mut size_groups: HashMap<u64, Vec<usize>> = HashMap::new();
+    for (i, e) in entries.iter().enumerate() {
+        if e.status == ImportStatus::Pending && e.file_size > 0 {
+            size_groups.entry(e.file_size).or_default().push(i);
+        }
+    }
+
+    for (_size, mut indices) in size_groups {
+        if indices.len() < 2 {
+            continue;
+        }
+
+        // Compute partial hash for each candidate entry.
+        let mut hash_groups: HashMap<String, Vec<usize>> = HashMap::new();
+        for &idx in &indices {
+            let path = &entries[idx].source_path;
+            match partial_hash_chunk(path, PARTIAL_HASH_BYTES) {
+                Ok(h) => hash_groups.entry(h).or_default().push(idx),
+                Err(_) => {} // unreadable file; leave as-is, execution will handle it
+            }
+        }
+
+        for (_hash, mut group) in hash_groups {
+            if group.len() < 2 {
+                continue;
+            }
+
+            // Sort group by the same key used in assign_counters.
+            group.sort_by(|&a, &b| {
+                let ea = &entries[a];
+                let eb = &entries[b];
+                let da = ea.derived_date.as_deref().unwrap_or("");
+                let db = eb.derived_date.as_deref().unwrap_or("");
+                da.cmp(db)
+                    .then(
+                        ea.derived_slug
+                            .as_deref()
+                            .unwrap_or("")
+                            .cmp(eb.derived_slug.as_deref().unwrap_or("")),
+                    )
+                    .then(ea.source_path.cmp(&eb.source_path))
+            });
+
+            // Keep first; mark the rest as Duplicate.
+            for &idx in group.iter().skip(1) {
+                entries[idx].status = ImportStatus::Duplicate;
+            }
+        }
+    }
+}
+
 // ── Counter assignment ────────────────────────────────────────────────────────
 
 /// Assign counters to all `Pending` entries, setting `target_path`.
@@ -2943,5 +3011,140 @@ mod tests {
         let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
         assert!(paths.contains(&"2026/2026-03-22-0001.jpg"));
         assert!(paths.contains(&"2026/2026-03-22-0002.jpg"));
+    }
+
+    // ── deduplicate_within_batch tests ───────────────────────────────────────
+
+    fn make_entry_with_file(
+        tmp: &tempfile::TempDir,
+        filename: &str,
+        content: &[u8],
+        date: &str,
+        caption: Option<&str>,
+    ) -> ImportEntry {
+        let path = tmp.path().join(filename);
+        std::fs::write(&path, content).unwrap();
+        let size = content.len() as u64;
+        ImportEntry {
+            source_path: path,
+            content_hash: String::new(),
+            partial_hash: String::new(),
+            file_size: size,
+            ext: "png".into(),
+            wrong_ext: None,
+            derived_date: Some(date.into()),
+            date_source: "filename".into(),
+            exif_raw: None,
+            derived_slug: None,
+            caption_slug: caption.map(str::to_owned),
+            slug_source: "none".into(),
+            counter: None,
+            target_path: None,
+            status: ImportStatus::Pending,
+            source_mtime_secs: None,
+            filename_secs: None,
+        }
+    }
+
+    #[test]
+    fn test_deduplicate_within_batch_marks_duplicate() {
+        // chisel (1).png and chisel (2).png have identical content → second is Duplicate.
+        let tmp = tempfile::tempdir().unwrap();
+        let content = b"fake image data for chisel";
+        let mut entries = vec![
+            make_entry_with_file(&tmp, "chisel (1).png", content, "2026-03-22", Some("chisel")),
+            make_entry_with_file(&tmp, "chisel (2).png", content, "2026-03-22", Some("chisel")),
+        ];
+        deduplicate_within_batch(&mut entries);
+        // The first (alphabetically earlier) must survive as Pending.
+        assert_eq!(entries[0].status, ImportStatus::Pending);
+        assert_eq!(entries[1].status, ImportStatus::Duplicate);
+    }
+
+    #[test]
+    fn test_deduplicate_within_batch_no_collision_on_different_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut entries = vec![
+            make_entry_with_file(&tmp, "chisel.png", b"image A", "2026-03-22", Some("chisel")),
+            make_entry_with_file(
+                &tmp,
+                "chisel (1).png",
+                b"image B different",
+                "2026-03-22",
+                Some("chisel"),
+            ),
+        ];
+        deduplicate_within_batch(&mut entries);
+        assert_eq!(entries[0].status, ImportStatus::Pending);
+        assert_eq!(entries[1].status, ImportStatus::Pending);
+    }
+
+    #[test]
+    fn test_dedup_then_assign_no_counter_gap() {
+        // Reproduces the Downloads scenario: chisel.png (unique), chisel (1).png and
+        // chisel (2).png (identical). After dedup, only two Pending entries remain and
+        // the first collision counter must be 2, not 3.
+        let tmp_src = tempfile::tempdir().unwrap();
+        let tmp_lib = tempfile::tempdir().unwrap();
+        let conn = make_db();
+
+        let unique = b"chisel image original";
+        let dup_content = b"chisel image copy identical";
+
+        // Alphabetical sort: "chisel (1)" < "chisel (2)" < "chisel"
+        let mut entries = vec![
+            make_entry_with_file(
+                &tmp_src,
+                "chisel (1).png",
+                dup_content,
+                "2026-03-22",
+                Some("chisel"),
+            ),
+            make_entry_with_file(
+                &tmp_src,
+                "chisel (2).png",
+                dup_content,
+                "2026-03-22",
+                Some("chisel"),
+            ),
+            make_entry_with_file(
+                &tmp_src,
+                "chisel.png",
+                unique,
+                "2026-03-22",
+                Some("chisel"),
+            ),
+        ];
+
+        deduplicate_within_batch(&mut entries);
+
+        // chisel (2).png must be marked duplicate before assign_counters runs.
+        let dup_count = entries
+            .iter()
+            .filter(|e| e.status == ImportStatus::Duplicate)
+            .count();
+        assert_eq!(dup_count, 1, "exactly one duplicate expected");
+
+        assign_counters(&mut entries, tmp_lib.path(), &conn).unwrap();
+
+        let pending_paths: Vec<_> = entries
+            .iter()
+            .filter(|e| e.status == ImportStatus::Pending)
+            .filter_map(|e| e.target_path.as_deref())
+            .collect();
+        assert_eq!(pending_paths.len(), 2, "two files should be importable");
+        assert!(
+            pending_paths.contains(&"2026/2026-03-22-chisel.png"),
+            "plain path must be present"
+        );
+        assert!(
+            pending_paths.contains(&"2026/2026-03-22-chisel-2.png"),
+            "first collision must be -2, not -3"
+        );
+        // Ensure the gap (-3 without -2) does NOT appear.
+        let has_3 = pending_paths
+            .iter()
+            .any(|p| p.contains("chisel-3"));
+        assert!(!has_3, "counter must not skip to -3");
     }
 }

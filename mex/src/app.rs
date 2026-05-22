@@ -1256,6 +1256,10 @@ impl App {
                 };
             }
             ImportMsg::ScanDone(mut entries) => {
+                // Pre-deduplicate within the batch so that duplicate files don't
+                // consume counter slots before assign_counters runs.
+                crate::import::deduplicate_within_batch(&mut entries);
+
                 // Assign counters now that we have target_root
                 let target_root = std::path::Path::new(&self.target_root);
                 if let Ok(conn) = rusqlite::Connection::open(&self.db_path) {
