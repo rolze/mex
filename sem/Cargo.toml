@@ -7,6 +7,9 @@ edition = "2021"
 name = "sem"
 path = "src/main.rs"
 
+[features]
+vips = ["dep:libvips"]
+
 [dependencies]
 gtk4 = { version = "0.8", features = ["v4_8"] }
 libadwaita = { version = "0.6", features = ["v1_5"] }
@@ -15,3 +18,4 @@ anyhow = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "rayon"] }
 sha2 = "0.10"
 hex = "0.4"
+libvips = { version = "2.1", optional = true }

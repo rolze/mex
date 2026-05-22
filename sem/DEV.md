@@ -22,14 +22,36 @@ environments without a forwarded display.
 | libadwaita dev headers | 1.4 | `libadwaita-1-dev` |
 | pkg-config | any | `pkg-config` |
 
-No other system libraries are required. Thumbnail generation uses the
-pure-Rust `image` crate (no `libvips`, `libjpeg`, or `libwebp` needed).
+No other system libraries are required for the default build. Thumbnail
+generation uses the pure-Rust `image` crate (no `libvips`, `libjpeg`, or
+`libwebp` needed).
 
 Install build deps on Debian/Ubuntu:
 
 ```sh
 sudo apt install libgtk-4-dev libadwaita-1-dev pkg-config
 ```
+
+### Optional: libvips backend
+
+Enable the `vips` Cargo feature for faster thumbnailing with wider format
+support (HEIF, AVIF, TIFF, RAW, etc.). Requires libvips 8.16+ at build and
+runtime.
+
+Install the extra dep on Ubuntu 26.04:
+
+```sh
+sudo apt install libvips-dev
+```
+
+Build with the feature:
+
+```sh
+cargo build --features vips
+cargo build --release --features vips
+```
+
+The default build (without `--features vips`) continues to work on any system.
 
 ---
 
@@ -42,9 +64,15 @@ cd sem
 cargo build
 # binary: sem/target/debug/sem
 
+# Debug build with libvips backend (requires libvips-dev)
+cargo build --features vips
+
 # Release build
 cargo build --release
 # binary: sem/target/release/sem
+
+# Release build with libvips backend
+cargo build --release --features vips
 ```
 
 ### Make available to mex
@@ -107,13 +135,16 @@ glib::idle_add_local(move || {
 });
 ```
 
-### `libvips` Rust crate version mismatch
+### `libvips` Rust crate — historical property-name bug
 
-The `libvips = "2.0.2"` crate was generated against a newer libvips that
-renamed `import-profile` / `export-profile` to `input-profile` /
-`output-profile`. On systems with libvips ≤ 8.15, every call to
-`thumbnail_with_opts` fails at runtime with `"no property named 'input-profile'"`.
-sem does **not** use libvips; use the `image` crate instead.
+The `libvips` Rust crate was generated against libvips 8.16+, which renamed
+`import-profile` / `export-profile` to `input-profile` / `output-profile`.
+On systems with libvips ≤ 8.15, every call to `thumbnail_with_opts` fails at
+runtime with `"no property named 'input-profile'"`.
+
+sem's optional `vips` feature requires libvips ≥ 8.16. Ubuntu 26.04 ships
+8.18 so the issue does not arise there. On older systems use the default
+`image`-crate build (no `--features vips`).
 
 ### `gtk4::ContentFit` requires feature flag
 

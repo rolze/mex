@@ -983,6 +983,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libvips"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4b2cc8a43c2040946fc4ae6e0842d19b0ac0d9694b341197cf2f2e90d20169e"
+dependencies = [
+ "num-derive",
+ "num-traits",
+]
+
+[[package]]
 name = "log"
 version = "0.4.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1398,6 +1408,7 @@ dependencies = [
  "hex",
  "image",
  "libadwaita",
+ "libvips",
  "sha2",
 ]
 

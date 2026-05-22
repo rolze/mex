@@ -42,14 +42,35 @@ fn cache_key(path: &Path, size: u64, mtime: u64) -> String {
 }
 
 fn generate(source: &Path, dest: &Path) -> Result<()> {
-    let img = image::open(source)
-        .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", source.display()))?;
+    #[cfg(feature = "vips")]
+    {
+        use libvips::ops;
+        let src = source
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path: {}", source.display()))?;
+        let dst = dest
+            .to_str()
+            .ok_or_else(|| anyhow::anyhow!("non-UTF-8 path: {}", dest.display()))?;
+        let opts = ops::ThumbnailOptions {
+            height: THUMB_SIZE as i32,
+            ..Default::default()
+        };
+        let image = ops::thumbnail_with_opts(src, THUMB_SIZE as i32, &opts)
+            .map_err(|e| anyhow::anyhow!("libvips thumbnail {}: {e}", source.display()))?;
+        image
+            .image_write_to_file(dst)
+            .map_err(|e| anyhow::anyhow!("libvips write {}: {e}", dest.display()))?;
+        return Ok(());
+    }
 
-    let thumb = img.thumbnail(THUMB_SIZE, THUMB_SIZE).into_rgb8();
-
-    thumb
-        .save_with_format(dest, image::ImageFormat::Jpeg)
-        .map_err(|e| anyhow::anyhow!("cannot save thumbnail: {e}"))?;
-
-    Ok(())
+    #[cfg(not(feature = "vips"))]
+    {
+        let img = image::open(source)
+            .map_err(|e| anyhow::anyhow!("cannot open {}: {e}", source.display()))?;
+        let thumb = img.thumbnail(THUMB_SIZE, THUMB_SIZE).into_rgb8();
+        thumb
+            .save_with_format(dest, image::ImageFormat::Jpeg)
+            .map_err(|e| anyhow::anyhow!("cannot save thumbnail: {e}"))?;
+        Ok(())
+    }
 }

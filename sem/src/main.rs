@@ -25,6 +25,10 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    #[cfg(feature = "vips")]
+    let _vips = libvips::VipsApp::new("sem", false)
+        .map_err(|e| anyhow::anyhow!("cannot initialise libvips: {e}"))?;
+
     let args = Args::parse();
 
     match (args.path, args.files) {
