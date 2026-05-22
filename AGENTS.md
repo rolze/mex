@@ -13,7 +13,17 @@ Every UC document (`spec/UC-XX.md`) is the source of truth for its feature.
 
 This keeps the UC files useful as a living reference rather than historical artefacts.
 
-## End-to-end / visual testing with tmux
+## Product name: "Sem & Mex"
+
+The product pair is always written **"Sem & Mex"** — Sem first, ampersand separator, capital S and M.
+
+**Rule:** In all documentation, comments, headings, and commit messages, write `sem & mex` (or `Sem & Mex`) — never `mex and sem`, `mex & sem`, `mex + sem`, or any other reversed or alternative form.
+
+This applies to prose that refers to the two tools together as a product pair. It does **not** apply to:
+- Sentences describing the runtime relationship (e.g. "mex spawns sem", "launched by mex") — these describe causality, not the product name.
+- Operational code where argument/file order is functionally irrelevant (e.g. `chmod +x mex sem`).
+
+## Testing
 
 Use tmux to run the TUI and observe real terminal output:
 

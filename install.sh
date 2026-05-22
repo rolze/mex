@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — install mex and sem from the latest GitHub release
+# install.sh — install sem and mex from the latest GitHub release
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/rolze/mex/main/install.sh | bash
@@ -8,7 +8,7 @@
 #   1. Verifies Linux x86_64 and that curl is available
 #   2. Detects whether libvips is present and picks the right sem variant
 #   3. Fetches the latest release tag from the GitHub API
-#   4. Downloads mex and sem to a temp dir, makes them executable
+#   4. Downloads sem and mex to a temp dir, makes them executable
 #   5. Installs to /usr/local/bin (system-wide) or ~/.local/bin (user)
 #   6. Checks runtime deps and warns if any are missing
 
