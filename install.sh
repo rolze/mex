@@ -10,7 +10,7 @@
 #   3. Fetches the latest release tag from the GitHub API
 #   4. Downloads sem and mex to a temp dir, makes them executable
 #   5. Installs to /usr/local/bin (system-wide) or ~/.local/bin (user)
-#   6. Checks runtime deps and warns if any are missing
+#   6. Checks runtime deps (sem libraries, mpv for video) and warns if any are missing
 
 set -euo pipefail
 
@@ -161,6 +161,14 @@ if [[ ${#MISSING_DEPS[@]} -gt 0 ]]; then
     yellow "Missing runtime libraries detected — sem may not start."
     info "Install them with:"
     info "  sudo apt install ${MISSING_DEPS[*]}"
+fi
+
+# mpv is required for video playback (press 'p' on a video file in mex)
+if ! command -v mpv &>/dev/null; then
+    echo ""
+    yellow "mpv not found — video playback will not work."
+    info "Install it with:"
+    info "  sudo apt install mpv"
 fi
 
 # ── done ──────────────────────────────────────────────────────────────────────
