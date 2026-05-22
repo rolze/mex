@@ -2801,6 +2801,38 @@ impl App {
     /// Group key for a file: `yyyy-MM-<slug>` when a slug is present, else `yyyy-MM-DD`.
     /// Matches MEX filename convention: slug files have no day component; day files have DD.
     fn group_key(f: &MediaFile) -> String {
+        // Derive the group key from the filename (MEX convention):
+        //   yyyy-MM-<slug>-####[…]  →  "yyyy-MM-slug"  (slug = non-numeric 3rd segment)
+        //   yyyy-MM-DD-[…]          →  "yyyy-MM-DD"    (DD = 2-digit day)
+        // This is correct even when `derived_date` (EXIF/OS) differs from the
+        // year-month encoded in the filename.
+        let filename = std::path::Path::new(&f.target_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let stem = match filename.rfind('.') {
+            Some(dot) => &filename[..dot],
+            None => filename,
+        };
+        let mut parts = stem.splitn(4, '-');
+        let p0 = parts.next().unwrap_or("");
+        let p1 = parts.next().unwrap_or("");
+        let p2 = parts.next().unwrap_or("");
+        if p0.len() == 4
+            && p0.chars().all(|c| c.is_ascii_digit())
+            && p1.len() == 2
+            && p1.chars().all(|c| c.is_ascii_digit())
+            && !p2.is_empty()
+        {
+            if !p2.chars().all(|c| c.is_ascii_digit()) {
+                // Third segment is the slug (non-numeric → slug group)
+                return format!("{p0}-{p1}-{p2}");
+            } else if p2.len() == 2 {
+                // Two-digit day → date group
+                return format!("{p0}-{p1}-{p2}");
+            }
+        }
+        // Fallback for filenames that don't match MEX pattern (e.g. test fakes)
         if !f.derived_slug.is_empty() {
             let month = if f.derived_date.len() >= 7 {
                 &f.derived_date[..7]
@@ -3444,6 +3476,27 @@ mod tests {
         )
     }
 
+    /// Build a test App from a pre-built list of `MediaFile` structs.
+    /// Useful when tests need realistic `target_path` values or heterogeneous
+    /// `derived_date` / `derived_slug` combinations that `make_grouped_app`
+    /// cannot express.
+    fn make_app_from_files(files: Vec<crate::db::MediaFile>) -> App {
+        let (tx, _rx) = mpsc::channel();
+        let image_state = ThreadProtocol::new(tx, None);
+        let picker = Picker::halfblocks();
+        App::new(
+            "test.db".into(),
+            String::new(),
+            String::new(),
+            files,
+            picker,
+            image_state,
+            "halfblocks".into(),
+            vec![],
+            String::new(),
+        )
+    }
+
     // ── Home (non-selecting) ────────────────────────────────────────────────
 
     #[test]
@@ -3638,6 +3691,69 @@ mod tests {
             app.selected, 2,
             "cursor should stay at last item when no next group exists"
         );
+    }
+
+    // ── Regression: group_key must use filename slug, not derived_date ───────
+
+    /// Shift-End must select the whole slug group even when files within it
+    /// carry different `derived_date` values (i.e. mismatched EXIF dates).
+    ///
+    /// Real-world data that triggered this bug (from /srv/media/mex.db):
+    ///   2001-07-nature-0001-bartl.jpg   derived_date = 2001-07-13
+    ///   2001-07-nature-0015-teppan.jpg  derived_date = 2001-07-13
+    ///   2001-07-nature-0016-apfel.jpg   derived_date = 2001-02-21  ← different month!
+    ///   2001-07-nature-0017-bartl.jpg   derived_date = 2001-08-27  ← different month!
+    ///   2001-07-nature-0018-blume.jpg   derived_date = 2001-08-27  ← different month!
+    ///
+    /// The old `group_key` computed "yyyy-MM" from `derived_date`, so 0016 got key
+    /// "2001-02-nature" and 0017/0018 got "2001-08-nature" — breaking the group.
+    #[test]
+    fn shift_end_groups_by_filename_slug_not_derived_date() {
+        fn mf(idx: usize, path: &str, date: &str, slug: &str) -> crate::db::MediaFile {
+            crate::db::MediaFile {
+                id: idx.to_string(),
+                target_path: path.to_string(),
+                derived_date: date.to_string(),
+                ext: "jpg".into(),
+                tags: vec![],
+                tag_types: vec![],
+                derived_slug: slug.to_string(),
+                caption_slug: String::new(),
+                os_date: String::new(),
+                orig_filename: String::new(),
+                status: "moved".into(),
+                missing_on_disk: false,
+            }
+        }
+
+        let files = vec![
+            mf(0, "2001/2001-07-nature-0001-bartl.jpg",  "2001-07-13", "nature"),
+            mf(1, "2001/2001-07-nature-0004-blume.jpg",  "2001-07-13", "nature"),
+            mf(2, "2001/2001-07-nature-0015-teppan.jpg", "2001-07-13", "nature"),
+            mf(3, "2001/2001-07-nature-0016-apfel.jpg",  "2001-02-21", "nature"),
+            mf(4, "2001/2001-07-nature-0017-bartl.jpg",  "2001-08-27", "nature"),
+            mf(5, "2001/2001-07-uni-0001.jpg",           "2001-07-15", "uni"),
+        ];
+
+        let mut app = make_app_from_files(files);
+        app.selected = 0;
+        app.jump_slug_day_next(); // Shift-End
+
+        assert!(
+            app.selection.contains(&3),
+            "index 3 (0016-apfel, derived_date=2001-02-21) must be in selection"
+        );
+        assert!(
+            app.selection.contains(&4),
+            "index 4 (0017-bartl, derived_date=2001-08-27) must be in selection"
+        );
+        assert_eq!(
+            app.selection,
+            [0, 1, 2, 3, 4].into_iter().collect(),
+            "all 5 nature files must be selected"
+        );
+        assert!(!app.selection.contains(&5), "uni group must NOT be selected");
+        assert_eq!(app.selected, 5, "cursor must overshoot to start of uni group");
     }
 
     // ── Shift-Up/Down (toggle both, skip re-toggle when continuing) ─────────
