@@ -1,5 +1,21 @@
 # Installing mex and sem
 
+## Quick install (Linux x86_64)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rolze/mex/main/install.sh | bash
+```
+
+The script:
+- Downloads the latest `mex` and `sem` binaries from the [GitHub releases page](https://github.com/rolze/mex/releases/latest)
+- Auto-detects `libvips` and picks the faster `sem-vips` variant if available
+- Installs to `/usr/local/bin` (system-wide) or `~/.local/bin` (user-only) — whichever is writable
+- Checks that required runtime libraries are present and prints the exact `apt install` command if any are missing
+
+> **Requirements**: Linux x86_64, `curl`
+
+---
+
 ## mex
 
 ### Native Linux
