@@ -14,7 +14,7 @@ crossterm = "0.28"
 rusqlite = { version = "0.31", features = ["bundled"] }
 anyhow = "1"
 ratatui-image = { version = "11", default-features = false, features = ["image-defaults", "crossterm"] }
-image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "bmp", "gif", "webp"] }
 filetime = "0.2"
 kamadak-exif = "0.5"
 sha2 = "0.10"

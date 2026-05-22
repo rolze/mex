@@ -30,12 +30,15 @@ No argument.  Operates on the explicitly selected files, or the cursor file if n
 
 ### Detection scope
 
-Detection relies on the `image` crate's magic-byte reader.  With the current feature set (`jpeg`, `png`) the following mismatches are caught:
+Detection relies on the `image` crate's magic-byte reader.  With the current feature set (`jpeg`, `png`, `bmp`, `gif`, `webp`) the following mismatches are caught:
 
 | Actual format | Wrong ext example |
 |---------------|-------------------|
 | JPEG | `.png`, `.bmp`, … |
 | PNG  | `.jpg`, `.jpeg`, … |
+| BMP  | `.jpg`, `.png`, … |
+| GIF  | `.jpg`, `.png`, … |
+| WEBP | `.jpg`, `.png`, … |
 
 RAW formats and video files are not probed and are left unchanged.
 
