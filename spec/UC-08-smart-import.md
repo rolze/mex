@@ -94,6 +94,7 @@ the cursor:
 - Dedup set loaded at execute time: `HashMap<(file_size, partial_hash), target_path>` from all `status='moved'` rows with non-NULL `partial_hash`.
 - `INSERT OR REPLACE INTO media` — all existing columns plus `partial_hash`; no other schema changes.
 - Import tag: `import-YY-MM-DD` with type `mex` (2-digit year, e.g. `import-25-01-15`); a second import on the same day gets `import-25-01-15_2`, a third `_3`, etc.
+- Background DB workers (`:import`, `:remove-slug`, `:fix-os-time`) open dedicated SQLite connections with a 5 s `busy_timeout` to reduce transient lock failures while the UI keeps its own connection open.
 
 ---
 

@@ -233,6 +233,8 @@ pub struct MpvState {
     pub status: crate::player::MpvStatus,
     /// Receive channel for mpv property-change events from the background listener thread.
     pub event_rx: std::sync::mpsc::Receiver<crate::player::MpvEvent>,
+    /// Lifecycle handle for the background listener thread.
+    pub listener: crate::player::MpvListenerHandle,
     /// True when mpv reached the end of the current file naturally (not user-paused).
     pub ended: bool,
 }
@@ -263,6 +265,16 @@ pub struct FixOsTimeWorker {
 pub struct EmptyTrashWorker {
     pub state: EmptyTrashState,
     pub rx: Option<std::sync::mpsc::Receiver<EmptyTrashMsg>>,
+}
+
+const SQLITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+fn open_worker_connection(db_path: &str) -> Result<rusqlite::Connection, String> {
+    let conn =
+        rusqlite::Connection::open(db_path).map_err(|e| format!("failed to open DB — {e}"))?;
+    conn.busy_timeout(SQLITE_BUSY_TIMEOUT)
+        .map_err(|e| format!("failed to configure DB busy-timeout — {e}"))?;
+    Ok(conn)
 }
 
 pub struct App {
@@ -342,6 +354,8 @@ impl App {
         let all_tags: Vec<String> = tag_set.into_iter().collect();
         let all_tag_types: Vec<String> = type_set.into_iter().collect();
         let mpv_socket = crate::player::default_socket_path();
+        let (mpv_event_tx, mpv_event_rx) = mpsc::channel();
+        let mpv_listener = crate::player::start_event_listener(mpv_socket.clone(), mpv_event_tx);
         Self {
             conn,
             db_path,
@@ -390,11 +404,8 @@ impl App {
                 controller: MpvController::new(mpv_socket.clone(), mpv_path.clone()),
                 path: mpv_path,
                 status: MpvStatus::Disconnected,
-                event_rx: {
-                    let (tx, rx) = mpsc::channel();
-                    crate::player::start_event_listener(mpv_socket, tx);
-                    rx
-                },
+                event_rx: mpv_event_rx,
+                listener: mpv_listener,
                 ended: false,
             },
             import: ImportWorker {
@@ -1435,10 +1446,10 @@ impl App {
         self.import.rx = Some(rx);
 
         std::thread::spawn(move || {
-            let mut conn = match rusqlite::Connection::open(&db_path) {
+            let mut conn = match open_worker_connection(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(ImportMsg::CopyError(e.to_string()));
+                    let _ = tx.send(ImportMsg::CopyError(format!("import: {e}")));
                     return;
                 }
             };
@@ -1720,12 +1731,10 @@ impl App {
         self.remove_slug.rx = Some(rx);
 
         std::thread::spawn(move || {
-            let conn = match rusqlite::Connection::open(&db_path) {
+            let conn = match open_worker_connection(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(RemoveSlugMsg::Done(format!(
-                        "remove-slug: failed to open DB — {e}"
-                    )));
+                    let _ = tx.send(RemoveSlugMsg::Done(format!("remove-slug: {e}")));
                     return;
                 }
             };
@@ -1840,12 +1849,10 @@ impl App {
         self.fix_os_time.rx = Some(rx);
 
         std::thread::spawn(move || {
-            let conn = match rusqlite::Connection::open(&db_path) {
+            let conn = match open_worker_connection(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(FixOsTimeMsg::Done(format!(
-                        "fix-os-time: failed to open DB — {e}"
-                    )));
+                    let _ = tx.send(FixOsTimeMsg::Done(format!("fix-os-time: {e}")));
                     return;
                 }
             };
@@ -2114,11 +2121,11 @@ impl App {
         self.empty_trash.rx = Some(rx);
 
         std::thread::spawn(move || {
-            let conn = match rusqlite::Connection::open(&db_path) {
+            let conn = match open_worker_connection(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = tx.send(EmptyTrashMsg::Done(0, ids.len()));
-                    eprintln!("empty-trash: failed to open DB — {e}");
+                    eprintln!("empty-trash: {e}");
                     return;
                 }
             };

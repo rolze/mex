@@ -44,3 +44,4 @@ When the trash is non-empty, `[🗑 N trashed]` is shown in the filter bar so th
 * Max 100 files per `:empty-trash` invocation.
 * `status='deleted'` rows are retained in DB forever as a dedup guard — see [[UC-08.md]].
 * Import dedup set includes `trashed` and `deleted` rows so those files are never reimported.
+* `:empty-trash` runs in a background worker with its own SQLite connection and a 5 s `busy_timeout` to avoid transient lock errors while the UI connection remains open.

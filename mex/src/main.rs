@@ -212,6 +212,8 @@ fn main() -> Result<()> {
     let views_root = cfg.views_root;
     let mpv_path = cfg.mpv_path;
     let conn = Connection::open(&db_path).context("Failed to open DB")?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .context("Failed to configure DB busy-timeout")?;
     db::init_db(&conn).context("Failed to initialise DB")?;
     let files = db::load_files(&conn).context("Failed to load files from DB")?;
     let import_source_dirs = db::load_recent_import_source_dirs(&conn).unwrap_or_default();

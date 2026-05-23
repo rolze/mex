@@ -6,6 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -130,21 +131,69 @@ pub enum MpvEvent {
 
 // ── Event listener ────────────────────────────────────────────────────────────
 
+/// Handle for the background mpv event-listener thread.
+///
+/// Dropping this handle signals the thread to stop and waits for it to exit.
+pub struct MpvListenerHandle {
+    stop_tx: Option<mpsc::Sender<()>>,
+    join: Option<JoinHandle<()>>,
+}
+
+impl MpvListenerHandle {
+    /// Request listener shutdown and block until the thread exits.
+    pub fn stop(&mut self) {
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+impl Drop for MpvListenerHandle {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn stop_requested(stop_rx: &mpsc::Receiver<()>) -> bool {
+    match stop_rx.try_recv() {
+        Ok(()) | Err(mpsc::TryRecvError::Disconnected) => true,
+        Err(mpsc::TryRecvError::Empty) => false,
+    }
+}
+
+fn sleep_or_stop(stop_rx: &mpsc::Receiver<()>, dur: Duration) -> bool {
+    match stop_rx.recv_timeout(dur) {
+        Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => true,
+        Err(mpsc::RecvTimeoutError::Timeout) => false,
+    }
+}
+
 /// Spawn a background thread that subscribes to mpv property events via the
 /// IPC socket and forwards them to `tx` as `MpvEvent` messages.
 ///
 /// The thread reconnects automatically whenever the socket disappears.
-pub fn start_event_listener(socket_path: PathBuf, tx: mpsc::Sender<MpvEvent>) {
-    std::thread::spawn(move || {
+pub fn start_event_listener(socket_path: PathBuf, tx: mpsc::Sender<MpvEvent>) -> MpvListenerHandle {
+    let (stop_tx, stop_rx) = mpsc::channel::<()>();
+    let join = std::thread::spawn(move || {
         loop {
+            if stop_requested(&stop_rx) {
+                break;
+            }
             match UnixStream::connect(&socket_path) {
                 Ok(stream) => {
                     // Clone for writing before moving stream into BufReader.
                     let mut write_stream = match stream.try_clone() {
                         Ok(s) => s,
                         Err(_) => {
-                            let _ = tx.send(MpvEvent::Disconnected);
-                            std::thread::sleep(Duration::from_millis(500));
+                            if tx.send(MpvEvent::Disconnected).is_err() {
+                                break;
+                            }
+                            if sleep_or_stop(&stop_rx, Duration::from_millis(500)) {
+                                break;
+                            }
                             continue;
                         }
                     };
@@ -167,14 +216,21 @@ pub fn start_event_listener(socket_path: PathBuf, tx: mpsc::Sender<MpvEvent>) {
                         }
                     }
                     if !ok {
-                        let _ = tx.send(MpvEvent::Disconnected);
-                        std::thread::sleep(Duration::from_millis(500));
+                        if tx.send(MpvEvent::Disconnected).is_err() {
+                            break;
+                        }
+                        if sleep_or_stop(&stop_rx, Duration::from_millis(500)) {
+                            break;
+                        }
                         continue;
                     }
 
                     // Read property-change events until the socket closes.
                     let mut reader = BufReader::new(stream);
                     loop {
+                        if stop_requested(&stop_rx) {
+                            return;
+                        }
                         let mut line = String::new();
                         match reader.read_line(&mut line) {
                             Ok(0) => break, // EOF — mpv exited
@@ -195,16 +251,27 @@ pub fn start_event_listener(socket_path: PathBuf, tx: mpsc::Sender<MpvEvent>) {
                         }
                     }
 
-                    let _ = tx.send(MpvEvent::Disconnected);
-                    std::thread::sleep(Duration::from_millis(500));
+                    if tx.send(MpvEvent::Disconnected).is_err() {
+                        break;
+                    }
+                    if sleep_or_stop(&stop_rx, Duration::from_millis(500)) {
+                        break;
+                    }
                 }
                 Err(_) => {
                     // mpv not running yet — retry later.
-                    std::thread::sleep(Duration::from_millis(500));
+                    if sleep_or_stop(&stop_rx, Duration::from_millis(500)) {
+                        break;
+                    }
                 }
             }
         }
     });
+
+    MpvListenerHandle {
+        stop_tx: Some(stop_tx),
+        join: Some(join),
+    }
 }
 
 /// Parse a single JSON line from the mpv IPC socket into an `MpvEvent`.
@@ -411,5 +478,16 @@ mod tests {
     fn default_socket_path_is_stable_within_process() {
         // Two calls in the same process must return the same path.
         assert_eq!(default_socket_path(), default_socket_path());
+    }
+
+    #[test]
+    fn listener_can_be_stopped_while_disconnected() {
+        let socket =
+            std::env::temp_dir().join(format!("mex-mpv-missing-{}.sock", std::process::id()));
+        let (tx, _rx) = std::sync::mpsc::channel::<MpvEvent>();
+        let mut listener = start_event_listener(socket, tx);
+        // Give the thread a moment to enter its reconnect loop, then stop it.
+        std::thread::sleep(Duration::from_millis(20));
+        listener.stop();
     }
 }

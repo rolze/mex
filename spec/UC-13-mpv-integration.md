@@ -47,6 +47,8 @@ The Status box is a general-purpose feedback area; other subsystems also write t
 mpv state is mirrored in real time via a background thread that subscribes to
 `observe_property` events (`pause`, `filename`, `idle-active`) on the IPC socket and
 reconnects automatically when mpv is restarted.
+The listener has an explicit shutdown handle; when mex exits, the thread is signalled
+to stop and joined cleanly.
 
 ### Notes
 
