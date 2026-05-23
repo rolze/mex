@@ -19,7 +19,7 @@ syntax.
 |---|---|---|
 | `target_root` | Yes | Absolute path to the local media root (prefixed to all `target_path` values from the DB) |
 | `views_root` | Yes | Absolute path where `:create-view` materialises named view directories (see UC-06); created on disk if it does not exist |
-| `db_path` | Yes | Path to the `.mex.db` SQLite database file; persisted after first resolution so subsequent launches skip discovery |
+| `db_path` | Yes | Absolute path to the `.mex.db` SQLite database file; relative inputs are expanded and persisted as absolute so subsequent launches skip discovery |
 
 Example:
 ```
@@ -34,8 +34,8 @@ db_path = /home/user/photos/.mex.db
 1. If `db_path` is in config and the file exists → use it.
 2. If `db_path` is in config but the file is missing → print reason and prompt the user to enter a new path (pre-filled with the current value).
 3. If `db_path` is absent from config → attempt auto-discovery (search `.`, `../`, `../../` for `.mex.db`); if found, adopt silently and save to config.
-4. If still unresolved → prompt the user; default answer is `./.mex.db` (press Enter to accept).
-5. The resolved path is saved to config. If the file does not yet exist it is **created as an empty database** with the full schema (tables: `media`, `tags`, `media_tags`).
+4. If still unresolved → prompt the user; default answer is an absolute `<cwd>/.mex.db` path (press Enter to accept).
+5. The resolved path is saved to config as an absolute path. If the file does not yet exist it is **created as an empty database** with the full schema (tables: `media`, `tags`, `media_tags`).
 6. Cancelling at the prompt (empty input when no current value and no default accepted) exits mex.
 
 ### Step 2 — Resolve media root (`target_root`)
@@ -67,11 +67,11 @@ The main browser opens using the confirmed database, media root, and views root.
 4. All other keys are ignored while the version screen is active.
 
 **Acceptance Criteria:**
-- First-time users are prompted for `db_path` before anything else; pressing Enter creates `./.mex.db`.
+- First-time users are prompted for `db_path` before anything else; pressing Enter accepts the shown absolute default (`<cwd>/.mex.db`) and creates that file.
 - A new database file is scaffolded with the correct schema and starts empty (0 files).
 - First-time users are prompted for `target_root` and `views_root` before the TUI opens.
 - A broken/moved root or missing DB file is detected on next launch and re-prompted.
-- The resolved `db_path` is saved to config so subsequent launches skip discovery.
+- The resolved `db_path` is saved to config as an absolute path so subsequent launches skip discovery.
 - The media DB is never written to during configuration.
 - Users can preview referenced media files (images load from `target_root + target_path`).
 - Config is stored in `~/.config/mex/config.toml`, not in `.mex.db`.

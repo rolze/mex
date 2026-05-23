@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Per-installation mex configuration.
 ///
@@ -23,9 +23,9 @@ pub struct Config {
     pub target_root: String,
     /// Root directory where `:create-view` materialises named view directories.
     pub views_root: String,
-    /// Absolute (or relative) path to the `.mex.db` SQLite database.
-    /// Resolved once at startup and persisted so subsequent launches don't
-    /// need filesystem discovery.
+    /// Absolute path to the `.mex.db` SQLite database.
+    /// Relative inputs are expanded at startup and the absolute value is
+    /// persisted so subsequent launches don't need filesystem discovery.
     pub db_path: String,
     /// Path to the mpv binary.  Empty string means "not yet resolved" —
     /// `main.rs` will fill it in at startup.  Typical values:
@@ -40,6 +40,40 @@ fn config_path() -> PathBuf {
         .join(".config")
         .join("mex")
         .join("config.toml")
+}
+
+fn absolutize_db_path_from_base(path: &str, base: &Path) -> String {
+    if path.is_empty() || Path::new(path).is_absolute() {
+        return path.to_string();
+    }
+    base.join(path).to_string_lossy().into_owned()
+}
+
+fn default_db_path_from_base(base: &Path) -> String {
+    base.join(".mex.db").to_string_lossy().into_owned()
+}
+
+/// Expand a relative `db_path` against the startup working directory.
+///
+/// Absolute inputs are returned unchanged. This does not canonicalize
+/// symlinks or `..` segments.
+pub fn absolutize_db_path(path: &str) -> std::result::Result<String, String> {
+    if path.is_empty() || Path::new(path).is_absolute() {
+        return Ok(path.to_string());
+    }
+    let cwd = std::env::current_dir()
+        .map_err(|e| format!("could not resolve current working directory for db_path: {e}"))?;
+    Ok(absolutize_db_path_from_base(path, &cwd))
+}
+
+/// Build the default database path shown when `db_path` is not configured.
+///
+/// The returned path is absolute and based on the startup working directory.
+pub fn default_db_path() -> std::result::Result<String, String> {
+    let cwd = std::env::current_dir().map_err(|e| {
+        format!("could not resolve current working directory for default db path: {e}")
+    })?;
+    Ok(default_db_path_from_base(&cwd))
 }
 
 /// Read the local config file. Returns `Config::default()` if the file does
@@ -180,15 +214,26 @@ pub fn validate_views_root(root: &str) -> Result<(), String> {
 /// `current` — already-configured value (may be empty on first run).
 /// `reason`  — explains why we are asking (e.g. "db not found").
 ///
-/// When `current` is empty the default `./.mex.db` is offered.
+/// When `current` is empty an absolute default path is offered.
 /// Returns `Some(path)` on success, `None` if the user cancels.
 pub fn prompt_db_path(current: &str, reason: &str) -> Option<String> {
     eprintln!("mex: {reason}");
+    let default = if current.is_empty() {
+        match default_db_path() {
+            Ok(path) => path,
+            Err(err) => {
+                eprintln!("mex: {err}");
+                return None;
+            }
+        }
+    } else {
+        String::new()
+    };
     if !current.is_empty() {
         eprintln!("  current: {current}");
         eprint!("  new path (Enter to keep current, Ctrl-C to quit): ");
     } else {
-        eprint!("  db path [default: ./.mex.db]: ");
+        eprint!("  db path [default: {default}]: ");
     }
     io::stderr().flush().ok();
 
@@ -199,7 +244,7 @@ pub fn prompt_db_path(current: &str, reason: &str) -> Option<String> {
     if trimmed.is_empty() && !current.is_empty() {
         Some(current.to_string())
     } else if trimmed.is_empty() {
-        Some("./.mex.db".to_string()) // accept the default
+        Some(default)
     } else {
         Some(trimmed)
     }
@@ -238,6 +283,7 @@ pub fn prompt_mpv_path(suggestion: &str) -> Option<String> {
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::{Path, PathBuf};
     use tempfile::NamedTempFile;
 
     fn load_from_str(text: &str) -> Config {
@@ -309,5 +355,42 @@ mod tests {
         assert_eq!(cfg.views_root, "/home/user/views");
         assert_eq!(cfg.db_path, "/home/user/.mex.db");
         assert_eq!(cfg.mpv_path, "mpv");
+    }
+
+    #[test]
+    fn absolutize_db_path_from_base_expands_relative_path() {
+        let base = Path::new("/tmp/mex");
+        let got = absolutize_db_path_from_base("shared/.mex.db", base);
+        let expected = base.join("shared/.mex.db").to_string_lossy().into_owned();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn absolutize_db_path_from_base_preserves_absolute_path() {
+        let base = Path::new("/tmp/mex");
+        let abs = PathBuf::from("/var/lib/mex/.mex.db")
+            .to_string_lossy()
+            .into_owned();
+        let got = absolutize_db_path_from_base(&abs, base);
+        assert_eq!(got, abs);
+    }
+
+    #[test]
+    fn absolutize_db_path_from_base_keeps_parent_segments() {
+        let base = Path::new("/tmp/mex");
+        let got = absolutize_db_path_from_base("../shared/.mex.db", base);
+        let expected = base
+            .join("../shared/.mex.db")
+            .to_string_lossy()
+            .into_owned();
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn default_db_path_from_base_points_to_hidden_db() {
+        let base = Path::new("/tmp/mex");
+        let got = default_db_path_from_base(base);
+        let expected = base.join(".mex.db").to_string_lossy().into_owned();
+        assert_eq!(got, expected);
     }
 }

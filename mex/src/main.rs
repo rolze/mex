@@ -32,13 +32,23 @@ fn find_db() -> Option<String> {
     None
 }
 
+fn absolutize_db_path_or_exit(path: &str) -> String {
+    match config::absolutize_db_path(path) {
+        Ok(absolute) => absolute,
+        Err(reason) => {
+            eprintln!("mex: {reason}");
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Resolve the path to `.mex.db`, prompting the user when necessary.
 ///
 /// Priority:
 /// 1. `cfg.db_path` is set and the file exists → use it.
 /// 2. `cfg.db_path` is set but the file is missing → re-prompt (pre-filled).
 /// 3. `cfg.db_path` is empty → try `find_db()` discovery; if found, adopt silently.
-/// 4. Still nothing → prompt with default `./.mex.db` (creates a fresh DB).
+/// 4. Still nothing → prompt with an absolute default `<cwd>/.mex.db`.
 ///
 /// The resolved path is written back into `cfg` and persisted to the config
 /// file. `db::init_db()` is then called by the caller to create/migrate the
@@ -47,15 +57,22 @@ fn resolve_db_path(cfg: &mut config::Config) -> String {
     loop {
         // Case 1 & 2: config already has a value.
         if !cfg.db_path.is_empty() {
-            if Path::new(&cfg.db_path).exists() {
-                eprintln!("mex: database:   {}", cfg.db_path);
-                return cfg.db_path.clone();
+            let normalized = absolutize_db_path_or_exit(&cfg.db_path);
+            if Path::new(&normalized).exists() {
+                if normalized != cfg.db_path {
+                    cfg.db_path = normalized.clone();
+                    if let Err(e) = config::save_config(cfg) {
+                        eprintln!("mex: warning — could not save config: {e}");
+                    }
+                }
+                eprintln!("mex: database:   {normalized}");
+                return normalized;
             }
             // File missing — re-prompt.
-            let reason = format!("database file not found: {}", cfg.db_path);
-            match config::prompt_db_path(&cfg.db_path, &reason) {
+            let reason = format!("database file not found: {normalized}");
+            match config::prompt_db_path(&normalized, &reason) {
                 Some(path) => {
-                    cfg.db_path = path;
+                    cfg.db_path = absolutize_db_path_or_exit(&path);
                     if let Err(e) = config::save_config(cfg) {
                         eprintln!("mex: warning — could not save config: {e}");
                     }
@@ -70,6 +87,7 @@ fn resolve_db_path(cfg: &mut config::Config) -> String {
 
         // Case 3: auto-discover via filesystem walk.
         if let Some(found) = find_db() {
+            let found = absolutize_db_path_or_exit(&found);
             eprintln!("mex: database:   {found} (auto-discovered)");
             cfg.db_path = found.clone();
             if let Err(e) = config::save_config(cfg) {
@@ -82,7 +100,7 @@ fn resolve_db_path(cfg: &mut config::Config) -> String {
         let reason = "no database found";
         match config::prompt_db_path("", reason) {
             Some(path) => {
-                cfg.db_path = path;
+                cfg.db_path = absolutize_db_path_or_exit(&path);
                 if let Err(e) = config::save_config(cfg) {
                     eprintln!("mex: warning — could not save config: {e}");
                 }
