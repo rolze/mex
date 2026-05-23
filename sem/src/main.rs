@@ -5,8 +5,13 @@ use anyhow::Result;
 use clap::Parser;
 use std::path::PathBuf;
 
+#[cfg(feature = "vips")]
+const LONG_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\nvips: yes");
+#[cfg(not(feature = "vips"))]
+const LONG_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "\nvips: no");
+
 #[derive(Parser)]
-#[command(name = "sem", about = "Lightweight image viewer for mex")]
+#[command(name = "sem", version, long_version = LONG_VERSION, about = "Lightweight image viewer for mex")]
 struct Args {
     /// Image path (single-image mode)
     path: Option<PathBuf>,

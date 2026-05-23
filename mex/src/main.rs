@@ -461,6 +461,12 @@ fn run_loop(
                 }
 
                 match (key.modifiers, key.code) {
+                    // Version screen: only Esc is handled; all other keys are consumed silently.
+                    (_, KeyCode::Esc) if app.version_screen => {
+                        app.version_screen = false;
+                    }
+                    (_, _) if app.version_screen => {}
+
                     // Esc: exit filter mode → cancel command → clear selection → close preview → clear filter
                     (_, KeyCode::Esc) => {
                         if app.filter_mode {

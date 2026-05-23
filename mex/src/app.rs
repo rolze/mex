@@ -3,6 +3,7 @@ use crate::import::{ImportEntry, ImportMsg, ImportStatus};
 use crate::player::{
     MpvController, MpvEvent, MpvStatus, RemoteController, MPV_SOCKET, VIDEO_EXTENSIONS,
 };
+use crate::version::VersionInfo;
 use image::DynamicImage;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
 use std::{
@@ -26,6 +27,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "remove-slug",
     "tag",
     "untag",
+    "version",
 ];
 
 // ── Import state ──────────────────────────────────────────────────────────────
@@ -243,6 +245,8 @@ pub struct App {
     pub import_path_changed_at: Option<Instant>,
     /// Remote controller for mpv (UC-13).
     pub mpv: MpvController,
+    /// Path to the mpv binary as configured (mirrors `Config::mpv_path`).
+    pub mpv_path: String,
     /// Live playback state mirrored from the background mpv event listener.
     pub mpv_status: MpvStatus,
     /// Receive channel for mpv property-change events from the background listener thread.
@@ -255,6 +259,10 @@ pub struct App {
     pub filter_mode: bool,
     /// Active inline caption editor (F2). `None` = not editing.
     pub caption_edit: Option<CaptionEdit>,
+    /// When true the `:version` info screen is shown instead of the media list.
+    pub version_screen: bool,
+    /// Version/environment info collected when `:version` was last executed.
+    pub version_info: Option<VersionInfo>,
 }
 
 impl App {
@@ -337,7 +345,8 @@ impl App {
             import_source_dirs,
             import_path_hint: None,
             import_path_changed_at: None,
-            mpv: MpvController::new(MPV_SOCKET, mpv_path),
+            mpv: MpvController::new(MPV_SOCKET, mpv_path.clone()),
+            mpv_path,
             mpv_status: MpvStatus::Disconnected,
             mpv_event_rx: {
                 let (tx, rx) = mpsc::channel();
@@ -347,6 +356,8 @@ impl App {
             mpv_ended: false,
             filter_mode: false,
             caption_edit: None,
+            version_screen: false,
+            version_info: None,
         }
     }
 
@@ -1055,6 +1066,19 @@ impl App {
 
         if trimmed == "q" || trimmed == "quit" {
             self.quit = true;
+            return;
+        }
+
+        if trimmed == "version" {
+            self.version_info = Some(crate::version::collect(
+                &self.db_path,
+                &self.target_root,
+                &self.views_root,
+                &self.mpv_path,
+                &self.image_protocol_name,
+                self.all_files.len(),
+            ));
+            self.version_screen = true;
             return;
         }
 

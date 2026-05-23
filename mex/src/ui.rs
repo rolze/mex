@@ -105,6 +105,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         _ => {}
     }
 
+    // Version screen takes over the main area, leaving the filter bar visible.
+    if app.version_screen {
+        let outer_chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(3)])
+            .split(area);
+        draw_version_screen(frame, app, outer_chunks[0]);
+        draw_filter(frame, app, outer_chunks[1]);
+        return;
+    }
+
     // Outer: bottom bar (3 lines) + main content
     let outer_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1432,5 +1443,124 @@ fn draw_empty_trash_deleting(frame: &mut Frame, app: &App, area: Rect, done: usi
     let para = Paragraph::new(text)
         .block(block)
         .alignment(Alignment::Center);
+    frame.render_widget(para, area);
+}
+
+// ── :version screen ───────────────────────────────────────────────────────────
+
+fn draw_version_screen(frame: &mut Frame, app: &App, area: Rect) {
+    use ratatui::text::Text;
+
+    let info = match &app.version_info {
+        Some(i) => i,
+        None => return,
+    };
+
+    let dim = Style::default().fg(Color::DarkGray);
+    let label_style = Style::default().fg(Color::Cyan);
+    let ok_style = Style::default().fg(Color::Green);
+    let err_style = Style::default().fg(Color::Red);
+    let val_style = Style::default();
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    macro_rules! kv {
+        ($key:expr, $val:expr) => {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {:<16}", $key), label_style),
+                Span::styled($val.to_string(), val_style),
+            ]));
+        };
+    }
+
+    lines.push(Line::from(vec![
+        Span::styled("  mex  ", label_style),
+        Span::styled(
+            info.mex_version.clone(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("    OS: {} ({})", info.os, info.arch),
+            dim,
+        ),
+    ]));
+
+    let sem_ver_display = if info.sem_found {
+        let vips = match info.sem_vips {
+            Some(true) => "  vips: yes",
+            Some(false) => "  vips: no",
+            None => "",
+        };
+        format!("{}{}", info.sem_version, vips)
+    } else {
+        "not found".to_string()
+    };
+    lines.push(Line::from(vec![
+        Span::styled("  sem  ", label_style),
+        Span::styled(
+            sem_ver_display,
+            if info.sem_found {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                err_style
+            },
+        ),
+        Span::styled(format!("    Config: {}", info.config_path), dim),
+    ]));
+
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(Span::styled(
+        "  Settings",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    kv!("target_root", &info.target_root);
+    kv!("views_root", &info.views_root);
+
+    let db_detail = if !info.db_file_size.is_empty() {
+        format!(
+            "{}  ({}, {} files)",
+            info.db_path, info.db_file_size, info.total_files
+        )
+    } else {
+        format!("{}  ({} files)", info.db_path, info.total_files)
+    };
+    kv!("db_path", db_detail);
+    kv!("mpv_path", &info.mpv_path);
+    kv!("image protocol", &info.image_protocol);
+
+    lines.push(Line::from(""));
+
+    lines.push(Line::from(Span::styled(
+        "  Dependencies",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    for dep in &info.dep_statuses {
+        let (icon, icon_style) = if dep.found {
+            ("✓", ok_style)
+        } else {
+            ("✗", err_style)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:<16}", dep.name), label_style),
+            Span::styled(format!("{} ", icon), icon_style),
+            Span::styled(
+                dep.detail.clone(),
+                if dep.found { val_style } else { dim },
+            ),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Press Esc to close",
+        dim,
+    )));
+
+    let text = Text::from(lines);
+    let block = Block::default().borders(Borders::ALL).title(" Version ");
+    let para = Paragraph::new(text)
+        .block(block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }

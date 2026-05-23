@@ -1,7 +1,7 @@
 ## UC-01 · Config
 
 **Actor:** User  
-**Goal:** Configure mex settings — the local base directory of the media files, the views root, and the database file path.
+**Goal:** Configure mex settings — the local base directory of the media files, the views root, and the database file path. The command `:version` displays all relevant settings, dependency versions, and debugging information in the main screen.
 
 **Context:** The `.mex.db` media database is shared across devices and locations. Each local
 mex installation keeps its own config in `~/.config/mex/config.toml` so that each machine
@@ -44,6 +44,22 @@ db_path = /home/user/photos/.mex.db
 
 ### Step 4 — Open TUI
 The main browser opens using the confirmed database, media root, and views root.
+
+### :version command
+
+1. User types `:version` and presses Enter.
+2. mex collects the following information and replaces the media list with a version screen:
+   - **Sem & Mex versions**: mex version from build metadata; sem version obtained by
+     running `sem --version` (errors shown verbatim for debugging).
+   - **OS and architecture**: detected at runtime via `std::env::consts`.
+   - **Config file path**: `~/.config/mex/config.toml` (tilde-abbreviated).
+   - **Settings**: all four config values (`target_root`, `views_root`, `db_path`,
+     `mpv_path`), plus the active image protocol (e.g. kitty / sixel / halfblocks).
+   - **Database**: file size and total file count from `db_path`.
+   - **Dependencies**: `sem`, `mpv`, `socat` — each shows ✓ with resolved path when
+     found on PATH, or ✗ with an installation hint when missing.
+3. Pressing **Esc** closes the version screen and returns to the media list.
+4. All other keys are ignored while the version screen is active.
 
 **Acceptance Criteria:**
 - First-time users are prompted for `db_path` before anything else; pressing Enter creates `./.mex.db`.
