@@ -212,6 +212,8 @@ pub struct ImageState {
     /// Path of the image currently loaded (or in-flight).
     pub current_path: Option<std::path::PathBuf>,
     pub cache: std::collections::HashMap<std::path::PathBuf, image::DynamicImage>,
+    /// LRU order: front = least recently used, back = most recently used.
+    pub cache_order: std::collections::VecDeque<std::path::PathBuf>,
     /// True while bg encode is in flight.
     pub is_loading: bool,
     /// Advances each tick for spinner animation.
@@ -379,6 +381,7 @@ impl App {
                 protocol_name: image_protocol_name,
                 current_path: None,
                 cache: HashMap::new(),
+                cache_order: std::collections::VecDeque::new(),
                 is_loading: false,
                 spinner_frame: 0,
                 encode_dispatch_count: 0,
@@ -2755,6 +2758,9 @@ impl App {
         if let Some(cached) = self.image.cache.get(&path) {
             let proto: StatefulProtocol = self.image.picker.new_resize_protocol(cached.clone());
             self.image.protocol.replace_protocol(proto);
+            // Promote to MRU position.
+            self.image.cache_order.retain(|p| p != &path);
+            self.image.cache_order.push_back(path.clone());
             self.image.current_path = Some(path);
             self.image.is_loading = true;
             self.image.encode_dispatch_count += 1;
@@ -2766,19 +2772,15 @@ impl App {
             .and_then(|r| r.decode().map_err(std::io::Error::other))
         {
             Ok(dyn_img) => {
-                if self.image.cache.len() >= CACHE_MAX {
-                    let victims: Vec<PathBuf> = self
-                        .image
-                        .cache
-                        .keys()
-                        .filter(|k| *k != &path)
-                        .take(CACHE_MAX / 3)
-                        .cloned()
-                        .collect();
-                    for k in victims {
-                        self.image.cache.remove(&k);
+                // Evict LRU entries until we are below the cap.
+                while self.image.cache.len() >= CACHE_MAX {
+                    if let Some(lru) = self.image.cache_order.pop_front() {
+                        self.image.cache.remove(&lru);
+                    } else {
+                        break;
                     }
                 }
+                self.image.cache_order.push_back(path.clone());
                 self.image.cache.insert(path.clone(), dyn_img.clone());
                 let proto: StatefulProtocol = self.image.picker.new_resize_protocol(dyn_img);
                 self.image.protocol.replace_protocol(proto);
@@ -3466,6 +3468,34 @@ mod tests {
         assert_eq!(app.image.cache.len(), 2);
         app.move_up();
         assert_eq!(app.image.cache.len(), 2, "cache must not evict prematurely");
+    }
+
+    /// Re-accessing a cached image must promote it to MRU so the least-recently-used
+    /// entry ends up at the front of `cache_order`.
+    #[test]
+    fn cache_hit_promotes_to_mru() {
+        let mut app = make_test_app(&["rolze.jpg", "bg.png", "rolze.jpg"]);
+        app.toggle_preview(); // loads rolze.jpg
+        app.move_down(); // loads bg.png
+                         // At this point order: front=rolze.jpg (LRU), back=bg.png (MRU).
+        app.image.current_path = None; // force cache-hit path on next call
+        app.move_up(); // re-accesses rolze.jpg from cache
+
+        let root = std::path::PathBuf::from(app.target_root.clone());
+        let rolze = root.join("rolze.jpg");
+        let bg = root.join("bg.png");
+        // rolze.jpg was just re-accessed → must be MRU (back).
+        assert_eq!(
+            app.image.cache_order.back().as_deref(),
+            Some(&rolze),
+            "re-accessed image must be at MRU position"
+        );
+        // bg.png was not accessed since → must be LRU (front).
+        assert_eq!(
+            app.image.cache_order.front().as_deref(),
+            Some(&bg),
+            "least-recently-used image must be at LRU position"
+        );
     }
 
     // ── Timing tests ────────────────────────────────────────────────────────

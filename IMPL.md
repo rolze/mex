@@ -76,7 +76,7 @@ Caching is layered by what each layer *avoids*, not by data identity:
 
 | Layer | Avoids | Invalidation trigger |
 |---|---|---|
-| Decoded-image cache | Disk read + image decode | Capacity eviction |
+| Decoded-image cache | Disk read + image decode | LRU capacity eviction (cap = 30) |
 | Encoded-protocol cache | Resize + terminal-escape encoding | Path change |
 | Terminal-side image store (Kitty) | Re-transmitting pixels | Terminal resize |
 
