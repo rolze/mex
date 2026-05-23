@@ -675,7 +675,7 @@ pub fn fix_date(conn: &Connection, target_root: &str, file_id: &str, new_date: &
     Ok(())
 }
 
-/// Read the hh:mm:ss components from a file's mtime (local time).
+/// Read the hh:mm:ss components from a file's mtime (UTC time-of-day).
 /// Returns `None` if the file doesn't exist or metadata is unavailable.
 fn read_file_hms(path: &std::path::Path) -> Option<(u8, u8, u8)> {
     use std::time::UNIX_EPOCH;
