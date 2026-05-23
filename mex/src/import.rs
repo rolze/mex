@@ -10,6 +10,7 @@
 
 use anyhow::{Context, Result};
 use filetime::FileTime;
+use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
@@ -17,6 +18,7 @@ use std::{
     fs,
     io::{BufReader, Read},
     path::{Component, Path, PathBuf},
+    sync::OnceLock,
 };
 
 // ── Supported extensions ──────────────────────────────────────────────────────
@@ -128,12 +130,12 @@ pub fn is_dump_folder(name: &str) -> bool {
     let mut s = name.to_lowercase();
     // transliterate umlauts
     s = transliterate(&s);
+    // normalise separators first so \b word boundaries in regexes work correctly
+    s = replace_sep(&s);
     // strip 4-digit years
-    s = regex_replace_all(&s, r"\b(?:19|20)\d{2}\b", " ");
+    s = strip_years(&s);
     // strip short numbers (month/day)
-    s = regex_replace_all(&s, r"\b\d{1,2}\b", " ");
-    // normalise separators
-    s = regex_replace_all(&s, r"[-_.\s]+", " ");
+    s = strip_month_day_numbers(&s);
     let tokens: Vec<&str> = s.split_whitespace().collect();
     !tokens.is_empty() && tokens.iter().all(|t| DUMP_FOLDER_WORDS.contains(t))
 }
@@ -154,11 +156,9 @@ pub fn transliterate(s: &str) -> String {
     out
 }
 
-// ── Minimal regex helpers (avoid regex crate dependency) ─────────────────────
-// We implement the handful of patterns needed with hand-rolled matchers.
+// ── String helpers ────────────────────────────────────────────────────────────
 
-/// Replace all occurrences of a simple literal sequence with `replacement`.
-/// Only used for sep-normalisation; not a general regex engine.
+/// Replace runs of `[-_.\s]` with a single space.
 fn replace_sep(s: &str) -> String {
     // Replace runs of [-_.\s] with single space
     let mut out = String::with_capacity(s.len());
@@ -177,76 +177,23 @@ fn replace_sep(s: &str) -> String {
     out
 }
 
-/// Very small hand-rolled "regex" replacer for the specific patterns we need.
-fn regex_replace_all(s: &str, pattern: &str, replacement: &str) -> String {
-    match pattern {
-        // strip 4-digit years 1900–2099
-        r"\b(?:19|20)\d{2}\b" => {
-            let bytes = s.as_bytes();
-            let mut out = String::with_capacity(s.len());
-            let mut i = 0usize;
-            while i < bytes.len() {
-                if i + 4 <= bytes.len() {
-                    let b0 = bytes[i];
-                    let b1 = bytes.get(i + 1).copied().unwrap_or(0);
-                    let b2 = bytes.get(i + 2).copied().unwrap_or(0);
-                    let b3 = bytes.get(i + 3).copied().unwrap_or(0);
-                    if (b0 == b'1' || b0 == b'2')
-                        && b1.is_ascii_digit()
-                        && b2.is_ascii_digit()
-                        && b3.is_ascii_digit()
-                    {
-                        // Check word boundaries
-                        let before_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
-                        let after_ok = i + 4 >= bytes.len() || !bytes[i + 4].is_ascii_digit();
-                        if before_ok && after_ok {
-                            out.push_str(replacement);
-                            i += 4;
-                            continue;
-                        }
-                    }
-                }
-                out.push(s.chars().nth(i).unwrap_or(' '));
-                i += 1;
-            }
-            out
-        }
-        // strip short numbers (1-2 digit)
-        r"\b\d{1,2}\b" => {
-            let bytes = s.as_bytes();
-            let mut out = String::with_capacity(s.len());
-            let mut i = 0usize;
-            while i < bytes.len() {
-                if bytes[i].is_ascii_digit() {
-                    let before_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
-                    // consume digits
-                    let mut j = i;
-                    while j < bytes.len() && bytes[j].is_ascii_digit() {
-                        j += 1;
-                    }
-                    let len = j - i;
-                    let after_ok = j >= bytes.len() || !bytes[j].is_ascii_alphanumeric();
-                    if before_ok && after_ok && len <= 2 {
-                        out.push_str(replacement);
-                        i = j;
-                        continue;
-                    } else {
-                        for &b in bytes.iter().take(j).skip(i) {
-                            out.push(b as char);
-                        }
-                        i = j;
-                        continue;
-                    }
-                }
-                out.push(bytes[i] as char);
-                i += 1;
-            }
-            out
-        }
-        // normalise separators
-        r"[-_.\s]+" => replace_sep(s),
-        _ => s.to_string(),
-    }
+static RE_YEAR: OnceLock<Regex> = OnceLock::new();
+static RE_SHORT_NUM: OnceLock<Regex> = OnceLock::new();
+
+/// Strip 4-digit years (1900–2099) from `s`, replacing each match with a space.
+fn strip_years(s: &str) -> String {
+    RE_YEAR
+        .get_or_init(|| Regex::new(r"\b(?:19|20)\d{2}\b").unwrap())
+        .replace_all(s, " ")
+        .into_owned()
+}
+
+/// Strip standalone 1–2 digit numbers from `s`, replacing each match with a space.
+fn strip_month_day_numbers(s: &str) -> String {
+    RE_SHORT_NUM
+        .get_or_init(|| Regex::new(r"\b\d{1,2}\b").unwrap())
+        .replace_all(s, " ")
+        .into_owned()
 }
 
 // ── UUID helpers ─────────────────────────────────────────────────────────────
@@ -449,7 +396,7 @@ pub fn extract_slug(name: &str) -> Option<String> {
     // Split on letter→digit transitions ("snap202405051452" → "snap 202405051452")
     let s = split_letter_digit(&s);
     // Strip 4-digit years
-    let s = regex_replace_all(&s, r"\b(?:19|20)\d{2}\b", " ");
+    let s = strip_years(&s);
     // Strip 6–8 digit sequences
     let s = strip_long_numbers(&s);
     // Strip all remaining digit-only tokens
@@ -2097,7 +2044,10 @@ pub fn assign_counters(
                 // No slug, no caption: use global day counter.
                 let counter = counters[&date_prefix];
                 *counters.get_mut(&date_prefix).unwrap() += 1;
-                (format!("{year}/{date_prefix}-{counter:04}{ext_with_dot}"), Some(counter))
+                (
+                    format!("{year}/{date_prefix}-{counter:04}{ext_with_dot}"),
+                    Some(counter),
+                )
             }
         } else if let Some(ref c) = cap {
             let counter = counters[&date_prefix];
@@ -2626,7 +2576,33 @@ mod tests {
     fn test_is_dump_folder() {
         assert!(is_dump_folder("2024-01-11-Bilder"));
         assert!(is_dump_folder("2024-Videos"));
+        assert!(is_dump_folder("2025-11-Bilder"));
+        assert!(is_dump_folder("Fotos"));
+        assert!(is_dump_folder("2023_Photos"));
         assert!(!is_dump_folder("paris 2000"));
+        assert!(!is_dump_folder("Vacation"));
+    }
+
+    #[test]
+    fn test_strip_years() {
+        assert_eq!(strip_years("holiday 2024 trip"), "holiday   trip");
+        assert_eq!(strip_years("no_year_here"), "no_year_here");
+        // non-year 4-digit numbers are not stripped
+        assert_eq!(strip_years("item1234"), "item1234");
+        // boundaries: year embedded in longer number is not stripped
+        assert_eq!(strip_years("x20241y"), "x20241y");
+    }
+
+    #[test]
+    fn test_strip_month_day_numbers() {
+        assert_eq!(
+            strip_month_day_numbers("day 5 month 12 end"),
+            "day   month   end"
+        );
+        // 3-digit numbers should not be stripped
+        assert_eq!(strip_month_day_numbers("value 100 ok"), "value 100 ok");
+        // numbers embedded in words should not be stripped
+        assert_eq!(strip_month_day_numbers("abc5def"), "abc5def");
     }
 
     #[test]
@@ -2920,8 +2896,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut entries = vec![make_entry("a.jpg", "2026-03-22", Some("chisel"))];
         assign_counters(&mut entries, tmp.path(), &conn).unwrap();
-        assert_eq!(entries[0].target_path.as_deref(), Some("2026/2026-03-22-chisel.jpg"));
-        assert_eq!(entries[0].counter, None, "plain caption path must not store a counter");
+        assert_eq!(
+            entries[0].target_path.as_deref(),
+            Some("2026/2026-03-22-chisel.jpg")
+        );
+        assert_eq!(
+            entries[0].counter, None,
+            "plain caption path must not store a counter"
+        );
     }
 
     #[test]
@@ -2935,12 +2917,27 @@ mod tests {
             make_entry("b.jpg", "2026-03-22", Some("chisel")),
         ];
         assign_counters(&mut entries, tmp.path(), &conn).unwrap();
-        let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
-        assert!(paths.contains(&"2026/2026-03-22-chisel.jpg"), "plain path missing");
-        assert!(paths.contains(&"2026/2026-03-22-chisel-2.jpg"), "collision counter must be 2");
+        let paths: Vec<_> = entries
+            .iter()
+            .map(|e| e.target_path.as_deref().unwrap())
+            .collect();
+        assert!(
+            paths.contains(&"2026/2026-03-22-chisel.jpg"),
+            "plain path missing"
+        );
+        assert!(
+            paths.contains(&"2026/2026-03-22-chisel-2.jpg"),
+            "collision counter must be 2"
+        );
         // The plain entry has no counter; the collision entry has counter 2.
-        let plain = entries.iter().find(|e| e.target_path.as_deref() == Some("2026/2026-03-22-chisel.jpg")).unwrap();
-        let collision = entries.iter().find(|e| e.target_path.as_deref() == Some("2026/2026-03-22-chisel-2.jpg")).unwrap();
+        let plain = entries
+            .iter()
+            .find(|e| e.target_path.as_deref() == Some("2026/2026-03-22-chisel.jpg"))
+            .unwrap();
+        let collision = entries
+            .iter()
+            .find(|e| e.target_path.as_deref() == Some("2026/2026-03-22-chisel-2.jpg"))
+            .unwrap();
         assert_eq!(plain.counter, None);
         assert_eq!(collision.counter, Some(2));
     }
@@ -2956,7 +2953,10 @@ mod tests {
             make_entry("c.jpg", "2026-03-22", Some("chisel")),
         ];
         assign_counters(&mut entries, tmp.path(), &conn).unwrap();
-        let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
+        let paths: Vec<_> = entries
+            .iter()
+            .map(|e| e.target_path.as_deref().unwrap())
+            .collect();
         assert!(paths.contains(&"2026/2026-03-22-chisel.jpg"));
         assert!(paths.contains(&"2026/2026-03-22-chisel-2.jpg"));
         assert!(paths.contains(&"2026/2026-03-22-chisel-3.jpg"));
@@ -2974,9 +2974,18 @@ mod tests {
             make_entry("d.jpg", "2026-03-22", Some("clamp")),
         ];
         assign_counters(&mut entries, tmp.path(), &conn).unwrap();
-        let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
-        assert!(paths.contains(&"2026/2026-03-22-chisel-2.jpg"), "chisel collision must be 2");
-        assert!(paths.contains(&"2026/2026-03-22-clamp-2.jpg"), "clamp collision must be 2");
+        let paths: Vec<_> = entries
+            .iter()
+            .map(|e| e.target_path.as_deref().unwrap())
+            .collect();
+        assert!(
+            paths.contains(&"2026/2026-03-22-chisel-2.jpg"),
+            "chisel collision must be 2"
+        );
+        assert!(
+            paths.contains(&"2026/2026-03-22-clamp-2.jpg"),
+            "clamp collision must be 2"
+        );
     }
 
     #[test]
@@ -2993,9 +3002,15 @@ mod tests {
             make_entry("b.jpg", "2026-03-22", Some("chisel")),
         ];
         assign_counters(&mut entries, tmp.path(), &conn).unwrap();
-        let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
+        let paths: Vec<_> = entries
+            .iter()
+            .map(|e| e.target_path.as_deref().unwrap())
+            .collect();
         assert!(paths.contains(&"2026/2026-03-22-chisel.jpg"));
-        assert!(paths.contains(&"2026/2026-03-22-chisel-3.jpg"), "must start after DB max");
+        assert!(
+            paths.contains(&"2026/2026-03-22-chisel-3.jpg"),
+            "must start after DB max"
+        );
     }
 
     #[test]
@@ -3008,7 +3023,10 @@ mod tests {
             make_entry("b.jpg", "2026-03-22", None),
         ];
         assign_counters(&mut entries, tmp.path(), &conn).unwrap();
-        let paths: Vec<_> = entries.iter().map(|e| e.target_path.as_deref().unwrap()).collect();
+        let paths: Vec<_> = entries
+            .iter()
+            .map(|e| e.target_path.as_deref().unwrap())
+            .collect();
         assert!(paths.contains(&"2026/2026-03-22-0001.jpg"));
         assert!(paths.contains(&"2026/2026-03-22-0002.jpg"));
     }
@@ -3052,8 +3070,20 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let content = b"fake image data for chisel";
         let mut entries = vec![
-            make_entry_with_file(&tmp, "chisel (1).png", content, "2026-03-22", Some("chisel")),
-            make_entry_with_file(&tmp, "chisel (2).png", content, "2026-03-22", Some("chisel")),
+            make_entry_with_file(
+                &tmp,
+                "chisel (1).png",
+                content,
+                "2026-03-22",
+                Some("chisel"),
+            ),
+            make_entry_with_file(
+                &tmp,
+                "chisel (2).png",
+                content,
+                "2026-03-22",
+                Some("chisel"),
+            ),
         ];
         deduplicate_within_batch(&mut entries);
         // The first (alphabetically earlier) must survive as Pending.
@@ -3107,13 +3137,7 @@ mod tests {
                 "2026-03-22",
                 Some("chisel"),
             ),
-            make_entry_with_file(
-                &tmp_src,
-                "chisel.png",
-                unique,
-                "2026-03-22",
-                Some("chisel"),
-            ),
+            make_entry_with_file(&tmp_src, "chisel.png", unique, "2026-03-22", Some("chisel")),
         ];
 
         deduplicate_within_batch(&mut entries);
@@ -3142,9 +3166,7 @@ mod tests {
             "first collision must be -2, not -3"
         );
         // Ensure the gap (-3 without -2) does NOT appear.
-        let has_3 = pending_paths
-            .iter()
-            .any(|p| p.contains("chisel-3"));
+        let has_3 = pending_paths.iter().any(|p| p.contains("chisel-3"));
         assert!(!has_3, "counter must not skip to -3");
     }
 }
