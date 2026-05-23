@@ -832,7 +832,6 @@ impl App {
         self.caption_edit = None;
     }
 
-
     /// Clears the hint and arms the debounce timer if in import-path context.
     fn on_import_path_changed(&mut self) {
         if self
@@ -1289,7 +1288,8 @@ impl App {
 
                 // Assign counters now that we have target_root
                 let target_root = std::path::Path::new(&self.target_root);
-                if let Err(e) = crate::import::assign_counters(&mut entries, target_root, &self.conn)
+                if let Err(e) =
+                    crate::import::assign_counters(&mut entries, target_root, &self.conn)
                 {
                     self.status_message = Some(format!("import: counter error: {e}"));
                     self.import_state = ImportState::Idle;
@@ -1578,8 +1578,7 @@ impl App {
 
             match crate::import::detect_wrong_ext(&abs_path, &current_ext) {
                 Some(new_ext) => {
-                    if let Err(e) =
-                        crate::db::fix_ext(&self.conn, &self.target_root, id, &new_ext)
+                    if let Err(e) = crate::db::fix_ext(&self.conn, &self.target_root, id, &new_ext)
                     {
                         eprintln!("fix-ext error for {id}: {e}");
                         if first_error.is_none() {
@@ -2056,7 +2055,11 @@ impl App {
             let mut errors = 0usize;
             for id in &ids {
                 let _ = tx.send(EmptyTrashMsg::Progress { done, total });
-                match crate::db::delete_trashed_from_fs(&conn, &target_root, std::slice::from_ref(id)) {
+                match crate::db::delete_trashed_from_fs(
+                    &conn,
+                    &target_root,
+                    std::slice::from_ref(id),
+                ) {
                     Ok((d, e)) => {
                         done += d;
                         errors += e;
@@ -2688,10 +2691,9 @@ impl App {
         }
 
         // Cache miss: read from disk, cache, then encode.
-        match image::ImageReader::open(&path).and_then(|r| {
-            r.decode()
-                .map_err(std::io::Error::other)
-        }) {
+        match image::ImageReader::open(&path)
+            .and_then(|r| r.decode().map_err(std::io::Error::other))
+        {
             Ok(dyn_img) => {
                 if self.image_cache.len() >= CACHE_MAX {
                     let victims: Vec<PathBuf> = self
@@ -2926,11 +2928,7 @@ impl App {
     /// if every index is already selected → remove all; otherwise insert all.
     fn toggle_range(&mut self, lo: usize, hi: usize) {
         let selectable: Vec<usize> = (lo..=hi)
-            .filter(|&i| {
-                self.filtered
-                    .get(i)
-                    .is_some_and(|f| f.status != "trashed")
-            })
+            .filter(|&i| self.filtered.get(i).is_some_and(|f| f.status != "trashed"))
             .collect();
         let all_selected = selectable.iter().all(|i| self.selection.contains(i));
         if all_selected {
@@ -3790,12 +3788,37 @@ mod tests {
         }
 
         let files = vec![
-            mf(0, "2001/2001-07-nature-0001-bartl.jpg",  "2001-07-13", "nature"),
-            mf(1, "2001/2001-07-nature-0004-blume.jpg",  "2001-07-13", "nature"),
-            mf(2, "2001/2001-07-nature-0015-teppan.jpg", "2001-07-13", "nature"),
-            mf(3, "2001/2001-07-nature-0016-apfel.jpg",  "2001-02-21", "nature"),
-            mf(4, "2001/2001-07-nature-0017-bartl.jpg",  "2001-08-27", "nature"),
-            mf(5, "2001/2001-07-uni-0001.jpg",           "2001-07-15", "uni"),
+            mf(
+                0,
+                "2001/2001-07-nature-0001-bartl.jpg",
+                "2001-07-13",
+                "nature",
+            ),
+            mf(
+                1,
+                "2001/2001-07-nature-0004-blume.jpg",
+                "2001-07-13",
+                "nature",
+            ),
+            mf(
+                2,
+                "2001/2001-07-nature-0015-teppan.jpg",
+                "2001-07-13",
+                "nature",
+            ),
+            mf(
+                3,
+                "2001/2001-07-nature-0016-apfel.jpg",
+                "2001-02-21",
+                "nature",
+            ),
+            mf(
+                4,
+                "2001/2001-07-nature-0017-bartl.jpg",
+                "2001-08-27",
+                "nature",
+            ),
+            mf(5, "2001/2001-07-uni-0001.jpg", "2001-07-15", "uni"),
         ];
 
         let mut app = make_app_from_files(files);
@@ -3815,8 +3838,14 @@ mod tests {
             [0, 1, 2, 3, 4].into_iter().collect(),
             "all 5 nature files must be selected"
         );
-        assert!(!app.selection.contains(&5), "uni group must NOT be selected");
-        assert_eq!(app.selected, 5, "cursor must overshoot to start of uni group");
+        assert!(
+            !app.selection.contains(&5),
+            "uni group must NOT be selected"
+        );
+        assert_eq!(
+            app.selected, 5,
+            "cursor must overshoot to start of uni group"
+        );
     }
 
     // ── Shift-Up/Down (toggle both, skip re-toggle when continuing) ─────────
@@ -4639,8 +4668,7 @@ mod tests {
     fn remove_tags_unknown_name_is_noop() {
         let (_dir, mut conn) = make_tag_db();
         crate::db::assign_tag(&mut conn, &["m1".to_string()], "holiday", Some("event")).unwrap();
-        crate::db::remove_tags(&conn, &["m1".to_string()], &["nonexistent".to_string()])
-            .unwrap();
+        crate::db::remove_tags(&conn, &["m1".to_string()], &["nonexistent".to_string()]).unwrap();
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM media_tags WHERE media_id='m1'",

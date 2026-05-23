@@ -86,9 +86,7 @@ pub fn collect(
 /// - found=false: binary not on PATH at all
 /// - found=true, empty version: binary exists but errored
 fn query_sem_version() -> (bool, String, Option<bool>) {
-    let output = std::process::Command::new("sem")
-        .arg("--version")
-        .output();
+    let output = std::process::Command::new("sem").arg("--version").output();
 
     match output {
         Err(_) => (false, String::new(), None),
@@ -193,8 +191,9 @@ fn install_hint(name: &str) -> String {
     match name {
         "sem" => "not found — install from: https://github.com/rolze/mex".to_string(),
         "mpv" => "not found — install with: sudo apt install mpv".to_string(),
-        "socat" => "not found — required for mpv IPC; install with: sudo apt install socat"
-            .to_string(),
+        "socat" => {
+            "not found — required for mpv IPC; install with: sudo apt install socat".to_string()
+        }
         _ => format!("not found — install {name}"),
     }
 }

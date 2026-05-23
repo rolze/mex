@@ -21,7 +21,6 @@ pub struct Config {
     pub mpv_path: String,
 }
 
-
 fn config_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     PathBuf::from(home)

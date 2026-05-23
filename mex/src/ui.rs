@@ -1,7 +1,6 @@
 use crate::app::{App, EmptyTrashState, FixOsTimeState, ImportState, RemoveSlugState};
 use crate::db::folder_of;
 use crate::import::ImportStatus;
-use regex::Regex;
 use crate::player::MpvStatus;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -11,6 +10,7 @@ use ratatui::{
     Frame,
 };
 use ratatui_image::{thread::ThreadProtocol, StatefulImage};
+use regex::Regex;
 
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -258,19 +258,30 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
                 if let Some(ref ed) = app.caption_edit {
                     // Derive structural components using the formal regex.
                     let re = Regex::new(crate::db::PATH_RE).unwrap();
-                    let (stem_prefix, stem_suffix) = if let Some(caps) = re.captures(&f.target_path) {
+                    let (stem_prefix, stem_suffix) = if let Some(caps) = re.captures(&f.target_path)
+                    {
                         let year = caps.name("year").map(|m| m.as_str()).unwrap_or("0000");
                         let month = caps.name("month").map(|m| m.as_str()).unwrap_or("00");
                         let ext = caps.name("ext").map(|m| m.as_str()).unwrap_or("bin");
-                        
+
                         if let Some(day_m) = caps.name("day") {
                             let day = day_m.as_str();
                             let suffix = if caps.name("day_cap").is_some() {
                                 // Pattern 3/4: suffix is collision counter (if exists) + extension
-                                format!("{}.{ext}", caps.name("day_coll").map(|m| format!("-{}", m.as_str())).unwrap_or_default())
+                                format!(
+                                    "{}.{ext}",
+                                    caps.name("day_coll")
+                                        .map(|m| format!("-{}", m.as_str()))
+                                        .unwrap_or_default()
+                                )
                             } else {
                                 // Pattern 5: suffix is counter + extension
-                                format!("{}.{ext}", caps.name("day_cnt").map(|m| format!("-{}", m.as_str())).unwrap_or_default())
+                                format!(
+                                    "{}.{ext}",
+                                    caps.name("day_cnt")
+                                        .map(|m| format!("-{}", m.as_str()))
+                                        .unwrap_or_default()
+                                )
                             };
                             (format!("{year}-{month}-{day}"), suffix)
                         } else if let Some(slug_m) = caps.name("slug") {
@@ -288,7 +299,12 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
                         let (stem, ext) = (&filename[..dot_pos], &filename[dot_pos..]);
                         if !f.caption_slug.is_empty() {
                             let cap_suffix = format!("-{}", f.caption_slug);
-                            (stem.strip_suffix(cap_suffix.as_str()).unwrap_or(stem).to_string(), ext.to_string())
+                            (
+                                stem.strip_suffix(cap_suffix.as_str())
+                                    .unwrap_or(stem)
+                                    .to_string(),
+                                ext.to_string(),
+                            )
                         } else {
                             (stem.to_string(), ext.to_string())
                         }
@@ -321,8 +337,7 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
                         filename_spans.push(Span::styled("_", edit_style));
                     }
                     filename_spans.push(Span::styled(stem_suffix, base_style));
-                    filename_spans
-                        .push(Span::styled(format!(" [{cap_len}/42]"), dim_style));
+                    filename_spans.push(Span::styled(format!(" [{cap_len}/42]"), dim_style));
 
                     let folder_cell = truncate_front(folder_of(&f.target_path), FOLDER_COL - 2);
                     let folder_name = format!("{:<width$}", folder_cell, width = FOLDER_COL - 2);
@@ -336,18 +351,19 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
                         ),
                         Span::styled("/", base_style.fg(folder_sep_fg)),
                     ];
-                    
+
                     // Truncate and pad the re-assembled filename line to match the list layout.
                     let assembled_line = Line::from(filename_spans);
                     let assembled_str = assembled_line.to_string();
                     let filename_cell = truncate_front(&assembled_str, filename_col);
-                    let _filename_padded = format!("{:<width$}", filename_cell, width = filename_col);
-                    
-                    // We need to re-span it to keep styles, but since it's the cursor row we 
-                    // can just use the assembled_line for now as a simpler approximation, 
+                    let _filename_padded =
+                        format!("{:<width$}", filename_cell, width = filename_col);
+
+                    // We need to re-span it to keep styles, but since it's the cursor row we
+                    // can just use the assembled_line for now as a simpler approximation,
                     // or better: just push the assembled spans.
-                    // For now, let's keep it simple and just use the spans we built, 
-                    // but they might overflow. 
+                    // For now, let's keep it simple and just use the spans we built,
+                    // but they might overflow.
                     spans.extend(assembled_line.spans);
 
                     let line = Line::from(spans);
@@ -735,8 +751,8 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             "F2: editing caption  —  ESC cancel  ·  ENTER confirm",
             Style::default().fg(Color::DarkGray),
         ));
-        let widget = Paragraph::new(hint)
-            .block(Block::default().borders(Borders::ALL).title(" Caption "));
+        let widget =
+            Paragraph::new(hint).block(Block::default().borders(Borders::ALL).title(" Caption "));
         frame.render_widget(widget, area);
         return;
     }
@@ -1479,10 +1495,7 @@ fn draw_version_screen(frame: &mut Frame, app: &App, area: Rect) {
             info.mex_version.clone(),
             Style::default().add_modifier(Modifier::BOLD),
         ),
-        Span::styled(
-            format!("    OS: {} ({})", info.os, info.arch),
-            dim,
-        ),
+        Span::styled(format!("    OS: {} ({})", info.os, info.arch), dim),
     ]));
 
     let sem_ver_display = if info.sem_found {
@@ -1544,23 +1557,15 @@ fn draw_version_screen(frame: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(vec![
             Span::styled(format!("  {:<16}", dep.name), label_style),
             Span::styled(format!("{} ", icon), icon_style),
-            Span::styled(
-                dep.detail.clone(),
-                if dep.found { val_style } else { dim },
-            ),
+            Span::styled(dep.detail.clone(), if dep.found { val_style } else { dim }),
         ]));
     }
 
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "  Press Esc to close",
-        dim,
-    )));
+    lines.push(Line::from(Span::styled("  Press Esc to close", dim)));
 
     let text = Text::from(lines);
     let block = Block::default().borders(Borders::ALL).title(" Version ");
-    let para = Paragraph::new(text)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    let para = Paragraph::new(text).block(block).wrap(Wrap { trim: false });
     frame.render_widget(para, area);
 }
