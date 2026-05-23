@@ -1,0 +1,113 @@
+ Rust Architect Review — mex + sem
+
+  -----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+   [CRITICAL] Fresh SQLite connection on every DB call
+   Every public function in db.rs calls Connection::open(db_path) at entry and
+   drops it on return. The empty-trash background thread explicitly calls
+   delete_trashed_from_fs(..., slice::from_ref(id)) inside a per-file loop —
+   N deletions → N connection open/close cycles. This blocks the OS file-table
+   each time and defeats WAL journal reuse. Any busy-timeout or PRAGMA settings
+   also need to be re-applied every call.
+   Fix: pass a &Connection (or &mut Connection for write paths) into db
+   functions instead of a db_path: &str. Accept a connection from the caller;
+   let main.rs or App hold a persistent connection. For read-heavy paths like
+   load_files, a single connection for the session lifetime is fine; for
+   background threads, open once at thread start and reuse.
+
+   [CRITICAL] fix_caption has an unbounded loop with a DB query every iteration
+   db.rs:846–864: while Path::new(...).exists() || conn.query_row(...) { counter
+   += 1; } — no upper bound. For a library with thousands of files at the same
+   date+caption prefix this spins indefinitely. Each iteration fires a SELECT
+   against the DB. It also re-queries the DB to count live rows rather than
+   checking a pre-loaded set, so the query is not even a no-op on a cold cache.
+   Fix: Pre-compute the max counter once (as next_caption_path already does
+   correctly), then generate the path directly. Apply the same pre-compute
+   pattern used in remove_slug_batch and assign_counters.
+
+   [IMPORTANT] regex_replace_all is a fake dispatcher, not a regex engine
+   import.rs:181–249: a function named regex_replace_all takes a &str "pattern"
+   and matches it against hard-coded string literals to decide which hand-rolled
+   byte scanner to call. Adding a new pattern requires adding a new match arm.
+   The regex crate is already a dependency (Cargo.toml). The hand-rolled scanners
+   have subtle bugs (e.g. the year-stripper advances byte-by-byte through UTF-8
+   chars, which is safe only for the ASCII-only inputs expected here, but this
+   assumption is invisible).
+   Fix: Either use regex::Regex directly (compile once with OnceLock), or rename
+   the function to something honest like replace_known_pattern and document that
+   only the three listed patterns are valid inputs. Remove the misleading name.
+
+   [IMPORTANT] Regex::new(PATH_RE) compiled on every caption open
+   app.rs:723 and ui.rs (filter-bar rendering): Regex::new(crate::db::PATH_RE)
+   .unwrap() is called inside enter_caption_edit and inside the draw hot-path.
+   Regex compilation is expensive (microseconds for this pattern). In the draw
+   path this happens every rendered frame when a detail is shown.
+   Fix: Use static CACHED_RE: OnceLock<Regex> = OnceLock::new() in db.rs and
+   expose a pub fn path_re() -> &'static Regex accessor. Both call-sites switch
+   to path_re().captures(...).
+
+   [IMPORTANT] MPV_SOCKET is a fixed /tmp path — multi-instance conflict
+   player.rs:13: pub const MPV_SOCKET: &str = "/tmp/mex-mpv.sock"; This path is
+   process-global. Two mex instances from the same or different users stomp each
+   other's mpv session. The event-listener thread also loops forever with no
+   shutdown signal; if the channel is dropped it returns, but the thread has no
+   way to be proactively stopped (e.g. for a clean test teardown).
+   Fix: Derive the socket path from the process PID:
+     format!("/tmp/mex-mpv-{}.sock", std::process::id())
+   Store the resolved path in App at startup. This also eliminates stale-socket
+   issues after a crash.
+
+   [IMPORTANT] App is a 40-field god struct — 2 800+ lines in one file
+   app.rs: App holds image state, mpv state, 4 separate background-worker
+   (Receiver, state-enum) pairs, filter state, command-bar state, caption-edit
+   state, and selection state all in the same struct. The #[allow(clippy::
+   too_many_arguments)] on App::new is a sign that the constructor is unsound.
+   Every new feature adds more fields and more poll_* / on_*_msg methods.
+   Fix: Extract cohesive sub-structs — FilterState, CommandState, ImportWorker,
+   MpvState, ImageState — and hold them by value inside App. This doesn't require
+   changing any external API but makes each concern independently readable and
+   testable.
+
+   [IMPORTANT] Image cache eviction is random, not LRU
+   app.rs:2670–2679: eviction picks victims via self.image_cache.keys().take(N),
+   which follows HashMap's arbitrary iteration order. A recently-viewed image may
+   be evicted while a stale one from 25 scrolls ago stays. On large libraries
+   this causes unnecessary re-encodes (visible as flicker/spinner).
+   Fix: Replace HashMap<PathBuf, DynamicImage> with a simple hand-rolled LRU
+   (VecDeque<PathBuf> + HashMap) or the lru crate. The VecDeque approach costs
+   ~10 lines and keeps the dependency count flat.
+
+   [NICE-TO-HAVE] read_file_hms comment says "local time", returns UTC
+   db.rs:685–695: the doc comment says "Read the hh:mm:ss components from a
+   file's mtime (local time)." but secs_since_epoch % 86400 is UTC time-of-day.
+   A file written at 23:30 local time in UTC+2 stores mtime 21:30 UTC; the
+   extracted HMS will be 21:30, not 23:30. The stored os_date and the constructed
+   datetime_to_filetime value are therefore inconsistent with local wall-clock
+   time in non-UTC timezones.
+   Fix: Either document this explicitly as UTC ("we store UTC time-of-day") and
+   keep the math, or use a time/chrono crate to convert the UTC timestamp to
+   local time before extracting HMS. The former is simpler and consistent with
+   how SQLite stores datetimes.
+
+   [NICE-TO-HAVE] Config parser silently truncates values containing '='
+   config.rs:43: line.split_once('=') — values that contain a literal '=' (e.g.
+   Windows paths like C:\...\mpv=special) would be silently truncated. The file
+   is labelled config.toml but is not valid TOML; it is a restricted key=value
+   format. This is fine as long as it is documented and paths with '=' are
+   excluded, but the risk is silent data loss.
+   Fix: Document the restriction in the struct doc comment, or switch to the toml
+   crate which is a trivial add.
+
+   [NICE-TO-HAVE] load_recent_import_source_dirs has O(n²) inner scan
+   db.rs:1437: groups.iter_mut().find(|(t, _)| t == &tag_name) scans the full
+   accumulated list for every row. With hundreds of past import tags this is
+   quadratic.
+   Fix: Replace the Vec with an IndexMap or a HashMap<String, usize> (tag →
+   index into a Vec) for O(1) lookup. The import history is user-visible so this
+   is not just a micro-concern.
+
+  -----------------------------------------------------------------------------------------------------------------------------------------------------------
+
+  Final verdict: Concerns Raised
+
+  The codebase is readable, well-commented, and has good test coverage for the slug/date parsing logic. The threading model (background workers → mpscchannels → poll on tick) is sound. The two critical issues (per-call DB connections, unbounded fix_caption loop) should be addressed before the librarygrows further — they will become real latency/correctness problems as media libraries get larger.

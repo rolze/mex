@@ -1898,7 +1898,7 @@ pub fn deduplicate_within_batch(entries: &mut [ImportEntry]) {
         }
     }
 
-    for (_size, mut indices) in size_groups {
+    for (_size, indices) in size_groups {
         if indices.len() < 2 {
             continue;
         }
@@ -1907,9 +1907,9 @@ pub fn deduplicate_within_batch(entries: &mut [ImportEntry]) {
         let mut hash_groups: HashMap<String, Vec<usize>> = HashMap::new();
         for &idx in &indices {
             let path = &entries[idx].source_path;
-            match partial_hash_chunk(path, PARTIAL_HASH_BYTES) {
-                Ok(h) => hash_groups.entry(h).or_default().push(idx),
-                Err(_) => {} // unreadable file; leave as-is, execution will handle it
+            // unreadable file; leave as-is, execution will handle it
+            if let Ok(h) = partial_hash_chunk(path, PARTIAL_HASH_BYTES) {
+                hash_groups.entry(h).or_default().push(idx);
             }
         }
 

@@ -76,11 +76,7 @@ pub fn run_grid(entries: Vec<(PathBuf, Vec<String>)>, cache_dir: PathBuf) -> Res
     Ok(())
 }
 
-fn build_grid_window(
-    app: &Application,
-    entries: Vec<(PathBuf, Vec<String>)>,
-    cache_dir: PathBuf,
-) {
+fn build_grid_window(app: &Application, entries: Vec<(PathBuf, Vec<String>)>, cache_dir: PathBuf) {
     let entries = Arc::new(entries);
     let cache_dir = Arc::new(cache_dir);
     let n = entries.len();
@@ -190,8 +186,7 @@ fn build_grid_window(
                 let name = basename(path);
                 let caption_text = caption_text(&name, tags);
 
-                single_picture
-                    .set_file(Some(&gtk4::gio::File::for_path(path)));
+                single_picture.set_file(Some(&gtk4::gio::File::for_path(path)));
                 single_caption.set_text(&caption_text);
                 title_label.set_label(&name);
                 window.set_title(Some(&name));
@@ -267,17 +262,15 @@ fn build_grid_window(
         });
     }
 
-    glib::idle_add_local(move || {
-        match receiver.try_recv() {
-            Ok((idx, thumb_opt)) => {
-                if let (Some(pic), Some(thumb)) = (cell_pictures.get(idx), thumb_opt) {
-                    pic.set_file(Some(&gtk4::gio::File::for_path(thumb)));
-                }
-                glib::ControlFlow::Continue
+    glib::idle_add_local(move || match receiver.try_recv() {
+        Ok((idx, thumb_opt)) => {
+            if let (Some(pic), Some(thumb)) = (cell_pictures.get(idx), thumb_opt) {
+                pic.set_file(Some(&gtk4::gio::File::for_path(thumb)));
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+            glib::ControlFlow::Continue
         }
+        Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
     });
 
     window.present();
@@ -322,4 +315,3 @@ fn add_escape_to_close(window: &ApplicationWindow) {
     });
     window.add_controller(key_ctrl);
 }
-

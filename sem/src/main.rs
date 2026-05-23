@@ -84,4 +84,3 @@ fn parse_manifest(path: &PathBuf) -> Result<Vec<(PathBuf, Vec<String>)>> {
 
     Ok(entries)
 }
-

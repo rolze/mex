@@ -114,6 +114,7 @@ pub(crate) fn rename_file_rel(
 /// consecutive collisions produce consecutive values.
 ///
 /// Returns `(target_path, counter)` where `counter` is `None` for the plain form.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn next_caption_path(
     conn: &Connection,
     target_root: &Path,
@@ -374,8 +375,8 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             PRIMARY KEY (media_id, tag_id)
         );",
     )?;
-    ensure_schema_v1(&conn)?;
-    ensure_schema_v2(&conn)?;
+    ensure_schema_v1(conn)?;
+    ensure_schema_v2(conn)?;
     Ok(())
 }
 
@@ -1127,7 +1128,7 @@ pub fn remove_slug_batch(
 
         let assignment = if !rec.caption_slug.is_empty() {
             let (path, stored_counter) = next_caption_path(
-                &conn,
+                conn,
                 Path::new(target_root),
                 year,
                 &day_prefix,
