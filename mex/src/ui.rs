@@ -10,7 +10,6 @@ use ratatui::{
     Frame,
 };
 use ratatui_image::{thread::ThreadProtocol, StatefulImage};
-use regex::Regex;
 
 const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -257,7 +256,7 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             if is_cursor {
                 if let Some(ref ed) = app.caption_edit {
                     // Derive structural components using the formal regex.
-                    let re = Regex::new(crate::db::PATH_RE).unwrap();
+                    let re = crate::db::path_re();
                     let (stem_prefix, stem_suffix) = if let Some(caps) = re.captures(&f.target_path)
                     {
                         let year = caps.name("year").map(|m| m.as_str()).unwrap_or("0000");

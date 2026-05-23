@@ -721,9 +721,8 @@ impl App {
     /// Enter the inline caption editor for the file under the cursor.
     /// Pre-selects any existing caption so the first keystroke overwrites it.
     pub fn enter_caption_edit(&mut self) {
-        use regex::Regex;
         if let Some(file) = self.selected_file() {
-            let re = Regex::new(crate::db::PATH_RE).unwrap();
+            let re = crate::db::path_re();
             let current = if let Some(caps) = re.captures(&file.target_path) {
                 caps.name("day_cap")
                     .or_else(|| caps.name("slug_cap"))

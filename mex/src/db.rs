@@ -9,6 +9,13 @@ use std::{
 
 pub const PATH_RE: &str = r"^(?P<year>\d{4})/(?:\d{4})-(?P<month>0[1-9]|1[0-2])-(?:(?P<day>0[1-9]|[12]\d|3[01])-(?:(?P<day_cap>[a-z0-9-]+)(?:\-(?P<day_coll>\d+))?|(?P<day_cnt>\d{4}))|(?P<slug>[a-z0-9-]{3,})-(?P<slug_cnt>\d{4})(?:\-(?P<slug_cap>[a-z0-9-]+))?)\.(?P<ext>[a-z0-9]+)$";
 
+static PATH_REGEX: OnceLock<Regex> = OnceLock::new();
+
+/// Returns the compiled [`PATH_RE`] regex, compiling it exactly once.
+pub fn path_re() -> &'static Regex {
+    PATH_REGEX.get_or_init(|| Regex::new(PATH_RE).unwrap())
+}
+
 // ── Sort helpers ─────────────────────────────────────────────────────────────
 
 /// Returns a sort key `(base, collision)` for a `target_path` so that
@@ -789,8 +796,7 @@ pub fn fix_caption(
         |row| row.get(0),
     )?;
 
-    let re = Regex::new(PATH_RE)?;
-    let caps = re
+    let caps = path_re()
         .captures(&target_path)
         .ok_or_else(|| anyhow::anyhow!("file path does not match formal spec: {target_path}"))?;
 
