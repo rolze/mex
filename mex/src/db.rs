@@ -52,11 +52,7 @@ fn path_sort_key(path: &str) -> (&str, u64) {
 /// separator and before the next `.` or end of filename, so both zero-padded
 /// (`0001`) and plain (`2`, `3`, …) forms are handled.  Returns 0 if no
 /// matching file is found.
-pub(crate) fn fs_counter_max(
-    yr_dir: &Path,
-    prefix: &str,
-    skip_basenames: &HashSet<String>,
-) -> u32 {
+pub(crate) fn fs_counter_max(yr_dir: &Path, prefix: &str, skip_basenames: &HashSet<String>) -> u32 {
     let search_prefix = format!("{prefix}-");
     let mut max: u32 = 0;
     if let Ok(rd) = std::fs::read_dir(yr_dir) {
@@ -155,8 +151,7 @@ pub(crate) fn next_caption_path(
                 "SELECT 1 FROM media WHERE target_path = ?1 \
                  AND id NOT IN ({ph}) AND status IN ('moved','trashed','deleted')"
             );
-            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-                vec![Box::new(plain.clone())];
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(plain.clone())];
             for id in exclude_ids {
                 params.push(Box::new(id.to_string()));
             }
@@ -203,8 +198,7 @@ pub(crate) fn next_caption_path(
                  WHERE target_path LIKE ?1 AND status IN ('moved','trashed','deleted') \
                  AND id NOT IN ({ph})"
             );
-            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> =
-                vec![Box::new(cap_pattern)];
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(cap_pattern)];
             for id in exclude_ids {
                 params.push(Box::new(id.to_string()));
             }
@@ -240,7 +234,10 @@ pub(crate) fn next_caption_path(
 
     let ctr = *caption_counters.get(&cap_key).unwrap();
     *caption_counters.get_mut(&cap_key).unwrap() += 1;
-    (format!("{year}/{date_prefix}-{caption}-{ctr}.{ext}"), Some(ctr))
+    (
+        format!("{year}/{date_prefix}-{caption}-{ctr}.{ext}"),
+        Some(ctr),
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -774,7 +771,9 @@ pub fn fix_ext(conn: &Connection, target_root: &str, file_id: &str, new_ext: &st
 /// Filename surgery is regex-driven:
 /// - The `target_path` is parsed using the definitive regex from `REGEXP.md`.
 /// - All structural components are preserved, and the new caption is substituted.
-/// - If the new path is occupied, a collision counter is added/incremented.
+/// - If the base path is occupied, the max occupied counter is pre-computed from a single
+///   `MAX(counter)` DB query and a single filesystem scan; the new counter is set to
+///   `max + 1` and the path is generated directly (no unbounded loop).
 pub fn fix_caption(
     conn: &Connection,
     target_root: &str,
@@ -803,7 +802,10 @@ pub fn fix_caption(
         let stem = if let Some(day_m) = caps.name("day") {
             let day = day_m.as_str();
             if cap.is_empty() {
-                format!("{year}-{month}-{day}-{}", caps.name("day_cnt").map(|m| m.as_str()).unwrap_or("0001"))
+                format!(
+                    "{year}-{month}-{day}-{}",
+                    caps.name("day_cnt").map(|m| m.as_str()).unwrap_or("0001")
+                )
             } else if let Some(c) = coll {
                 format!("{year}-{month}-{day}-{cap}-{c}")
             } else {
@@ -824,30 +826,82 @@ pub fn fix_caption(
         format!("{year}/{stem}.{ext}")
     };
 
-    let base_new_path = build_with_collision(new_caption, caps.name("day_coll").map(|m| m.as_str()));
+    let base_new_path =
+        build_with_collision(new_caption, caps.name("day_coll").map(|m| m.as_str()));
 
     let mut final_path = base_new_path;
     if final_path != target_path {
-        let mut counter = 2u32;
-        
-        while Path::new(target_root).join(&final_path).exists() || 
-              conn.query_row("SELECT COUNT(*) FROM media WHERE target_path = ?1 AND id != ?2 AND status IN ('moved','trashed','deleted')", rusqlite::params![final_path, file_id], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0 
-        {
-            if let Some(day_m) = caps.name("day") {
+        let base_on_disk = Path::new(target_root).join(&final_path).exists();
+        let base_in_db = !base_on_disk
+            && conn
+                .query_row(
+                    "SELECT COUNT(*) FROM media \
+                     WHERE target_path = ?1 AND id != ?2 \
+                     AND status IN ('moved','trashed','deleted')",
+                    rusqlite::params![final_path, file_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or(0)
+                > 0;
+
+        if base_on_disk || base_in_db {
+            // Pre-compute max occupied counter once (one DB query + one FS scan),
+            // then generate the collision path directly — no unbounded loop.
+            let (db_pattern, fs_prefix) = if let Some(day_m) = caps.name("day") {
                 let day = day_m.as_str();
                 if new_caption.is_empty() {
-                    final_path = format!("{year}/{year}-{month}-{day}-{:04}.{ext}", counter);
+                    (
+                        format!("{year}/{year}-{month}-{day}-%"),
+                        format!("{year}-{month}-{day}"),
+                    )
                 } else {
-                    final_path = format!("{year}/{year}-{month}-{day}-{new_caption}-{}.{ext}", counter);
+                    (
+                        format!("{year}/{year}-{month}-{day}-{new_caption}-%"),
+                        format!("{year}-{month}-{day}-{new_caption}"),
+                    )
                 }
-            } else if let Some(slug_m) = caps.name("slug") {
-                let slug = slug_m.as_str();
-                final_path = format!("{year}/{year}-{month}-{slug}-{:04}{}.{ext}", 
-                    counter,
-                    if new_caption.is_empty() { "".to_string() } else { format!("-{new_caption}") }
-                );
+            } else {
+                let slug = caps.name("slug").map(|m| m.as_str()).unwrap_or("");
+                (
+                    format!("{year}/{year}-{month}-{slug}-%"),
+                    format!("{year}-{month}-{slug}"),
+                )
+            };
+
+            let db_max: u32 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(counter), 0) FROM media \
+                     WHERE target_path LIKE ?1 AND id != ?2 \
+                     AND status IN ('moved','trashed','deleted')",
+                    rusqlite::params![db_pattern, file_id],
+                    |row| row.get::<_, u32>(0),
+                )
+                .unwrap_or(0);
+
+            let yr_dir = Path::new(target_root).join(year);
+            let mut skip_basename = HashSet::new();
+            if let Some(b) = Path::new(&target_path).file_name().and_then(|n| n.to_str()) {
+                skip_basename.insert(b.to_string());
             }
-            counter += 1;
+            let fs_max = fs_counter_max(&yr_dir, &fs_prefix, &skip_basename);
+            let counter = db_max.max(fs_max).max(1) + 1;
+
+            final_path = if let Some(day_m) = caps.name("day") {
+                let day = day_m.as_str();
+                if new_caption.is_empty() {
+                    format!("{year}/{year}-{month}-{day}-{counter:04}.{ext}")
+                } else {
+                    format!("{year}/{year}-{month}-{day}-{new_caption}-{counter}.{ext}")
+                }
+            } else {
+                let slug = caps.name("slug").map(|m| m.as_str()).unwrap_or("");
+                let cap_part = if new_caption.is_empty() {
+                    String::new()
+                } else {
+                    format!("-{new_caption}")
+                };
+                format!("{year}/{year}-{month}-{slug}-{counter:04}{cap_part}.{ext}")
+            };
         }
     }
 
@@ -855,7 +909,11 @@ pub fn fix_caption(
     rename_file_rel(Path::new(target_root), &target_path, &final_path)?;
 
     // Update DB
-    let stored_caption = if new_caption.is_empty() { None } else { Some(new_caption) };
+    let stored_caption = if new_caption.is_empty() {
+        None
+    } else {
+        Some(new_caption)
+    };
     conn.execute(
         "UPDATE media SET target_path = ?1, caption_slug = ?2 WHERE id = ?3",
         rusqlite::params![final_path, stored_caption, file_id],
@@ -1081,7 +1139,10 @@ pub fn remove_slug_batch(
                 &mut caption_counters,
             );
             seen_new_paths.insert(path.clone());
-            Assignment { new_target_path: path, stored_counter }
+            Assignment {
+                new_target_path: path,
+                stored_counter,
+            }
         } else {
             let counter = *day_next.get(&day_prefix).unwrap_or(&1);
             *day_next.get_mut(&day_prefix).unwrap() += 1;
@@ -1130,9 +1191,11 @@ pub fn remove_slug_batch(
             continue;
         }
 
-        if let Err(e) =
-            rename_file_rel(Path::new(target_root), &rec.target_path, &asgn.new_target_path)
-        {
+        if let Err(e) = rename_file_rel(
+            Path::new(target_root),
+            &rec.target_path,
+            &asgn.new_target_path,
+        ) {
             stats.errors.push((rec.id.clone(), e.to_string()));
             continue;
         }
@@ -1582,12 +1645,7 @@ mod tests {
              INSERT INTO media VALUES ('id1', '2022/2022-04-18-0001.jpg', '2022-04-18', 'jpg', '2022-04-18 10:00:00', '', '');",
         ).unwrap();
 
-        let result = fix_date(
-            &conn,
-            dir.to_str().unwrap(),
-            "id1",
-            "2023-06-15",
-        );
+        let result = fix_date(&conn, dir.to_str().unwrap(), "id1", "2023-06-15");
         assert!(result.is_ok(), "fix_date should succeed: {:?}", result);
 
         // Old file gone, new file present.
@@ -1633,12 +1691,7 @@ mod tests {
         ).unwrap();
 
         // File does not exist on disk — fix_date should still update the DB.
-        let result = fix_date(
-            &conn,
-            dir.to_str().unwrap(),
-            "id2",
-            "2023-06-15",
-        );
+        let result = fix_date(&conn, dir.to_str().unwrap(), "id2", "2023-06-15");
         assert!(
             result.is_ok(),
             "fix_date on absent file should succeed: {:?}",
@@ -1676,8 +1729,7 @@ mod tests {
         use rusqlite::Connection;
         use std::fs;
 
-        let dir = std::env::temp_dir()
-            .join(format!("mex_load_files_test_{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mex_load_files_test_{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let db_path = dir.join("mex.db");
 
@@ -1705,9 +1757,183 @@ mod tests {
         let files = load_files(&conn).unwrap();
         let ids: Vec<&str> = files.iter().map(|f| f.id.as_str()).collect();
 
-        assert!(ids.contains(&"m1"), "moved file must be in load_files result");
-        assert!(ids.contains(&"m2"), "trashed file must be in load_files result");
-        assert!(!ids.contains(&"m3"), "deleted file must NOT be in load_files result");
+        assert!(
+            ids.contains(&"m1"),
+            "moved file must be in load_files result"
+        );
+        assert!(
+            ids.contains(&"m2"),
+            "trashed file must be in load_files result"
+        );
+        assert!(
+            !ids.contains(&"m3"),
+            "deleted file must NOT be in load_files result"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    // ── fix_caption tests ──────────────────────────────────────────────────
+
+    fn make_fix_caption_db(dir: &std::path::Path) -> rusqlite::Connection {
+        use rusqlite::Connection;
+        let db_path = dir.join("mex.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (
+                id          TEXT PRIMARY KEY,
+                target_path TEXT,
+                caption_slug TEXT,
+                counter     INTEGER,
+                status      TEXT
+             );",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn fix_caption_adds_caption_no_collision() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("mex_fc_add_{}", std::process::id()));
+        let yr = dir.join("2025");
+        fs::create_dir_all(&yr).unwrap();
+        let old_file = yr.join("2025-11-30-0001.jpg");
+        fs::write(&old_file, b"data").unwrap();
+
+        let conn = make_fix_caption_db(&dir);
+        conn.execute(
+            "INSERT INTO media VALUES ('f1','2025/2025-11-30-0001.jpg',NULL,1,'moved')",
+            [],
+        )
+        .unwrap();
+
+        fix_caption(&conn, dir.to_str().unwrap(), "f1", "chisel").unwrap();
+
+        let tp: String = conn
+            .query_row("SELECT target_path FROM media WHERE id='f1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(tp, "2025/2025-11-30-chisel.jpg");
+        assert!(!old_file.exists(), "old file should be renamed");
+        assert!(
+            yr.join("2025-11-30-chisel.jpg").exists(),
+            "new file must exist"
+        );
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fix_caption_removes_caption_no_collision() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("mex_fc_rm_{}", std::process::id()));
+        let yr = dir.join("2025");
+        fs::create_dir_all(&yr).unwrap();
+        fs::write(yr.join("2025-11-30-chisel.jpg"), b"data").unwrap();
+
+        let conn = make_fix_caption_db(&dir);
+        conn.execute(
+            "INSERT INTO media VALUES ('f1','2025/2025-11-30-chisel.jpg','chisel',NULL,'moved')",
+            [],
+        )
+        .unwrap();
+
+        fix_caption(&conn, dir.to_str().unwrap(), "f1", "").unwrap();
+
+        let tp: String = conn
+            .query_row("SELECT target_path FROM media WHERE id='f1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(tp, "2025/2025-11-30-0001.jpg");
+        assert!(!yr.join("2025-11-30-chisel.jpg").exists());
+        assert!(yr.join("2025-11-30-0001.jpg").exists());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fix_caption_day_collision_precomputes_counter() {
+        // The plain caption path and counter-2 through counter-3 are all occupied;
+        // fix_caption must jump directly to counter 4 without looping per-iteration.
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("mex_fc_coll_{}", std::process::id()));
+        let yr = dir.join("2025");
+        fs::create_dir_all(&yr).unwrap();
+        // File being edited
+        fs::write(yr.join("2025-11-30-0001.jpg"), b"me").unwrap();
+        // Occupying plain and counter-2 on disk
+        fs::write(yr.join("2025-11-30-chisel.jpg"), b"a").unwrap();
+        fs::write(yr.join("2025-11-30-chisel-2.jpg"), b"b").unwrap();
+
+        let conn = make_fix_caption_db(&dir);
+        conn.execute(
+            "INSERT INTO media VALUES ('f1','2025/2025-11-30-0001.jpg',NULL,1,'moved')",
+            [],
+        )
+        .unwrap();
+        // Another file with counter-3 in DB (not on disk — exercises the DB path)
+        conn.execute(
+            "INSERT INTO media VALUES ('f2','2025/2025-11-30-chisel-3.jpg','chisel',3,'moved')",
+            [],
+        )
+        .unwrap();
+
+        fix_caption(&conn, dir.to_str().unwrap(), "f1", "chisel").unwrap();
+
+        let tp: String = conn
+            .query_row("SELECT target_path FROM media WHERE id='f1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        // max counter: FS max = 2 (chisel-2.jpg), DB max = 3 (f2) → next = 4
+        assert_eq!(tp, "2025/2025-11-30-chisel-4.jpg");
+        assert!(!yr.join("2025-11-30-0001.jpg").exists());
+        assert!(yr.join("2025-11-30-chisel-4.jpg").exists());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fix_caption_slug_collision_precomputes_counter() {
+        // Slug-type: removing caption from christmas-0001-old.jpg would produce
+        // christmas-0001.jpg, but that path is occupied; counter-0002 also exists on
+        // disk, so fix_caption must jump to 0003 via pre-computed max.
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("mex_fc_slug_coll_{}", std::process::id()));
+        let yr = dir.join("2025");
+        fs::create_dir_all(&yr).unwrap();
+        // File being edited (slug_cnt=0001, caption=old)
+        fs::write(yr.join("2025-11-christmas-0001-old.jpg"), b"me").unwrap();
+        // Block the base target (0001) and one more counter (0002)
+        fs::write(yr.join("2025-11-christmas-0001.jpg"), b"blocked").unwrap();
+        fs::write(yr.join("2025-11-christmas-0002.jpg"), b"other").unwrap();
+
+        let conn = make_fix_caption_db(&dir);
+        conn.execute(
+            "INSERT INTO media VALUES ('f1','2025/2025-11-christmas-0001-old.jpg','old',1,'moved')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO media VALUES ('f2','2025/2025-11-christmas-0002.jpg',NULL,2,'moved')",
+            [],
+        )
+        .unwrap();
+
+        fix_caption(&conn, dir.to_str().unwrap(), "f1", "").unwrap();
+
+        let tp: String = conn
+            .query_row("SELECT target_path FROM media WHERE id='f1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        // FS max = 2 (0002.jpg), DB max = 2 (f2, counter=2), f1 excluded → next = 3
+        assert_eq!(tp, "2025/2025-11-christmas-0003.jpg");
+        assert!(!yr.join("2025-11-christmas-0001-old.jpg").exists());
+        assert!(yr.join("2025-11-christmas-0003.jpg").exists());
 
         fs::remove_dir_all(&dir).ok();
     }

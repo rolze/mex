@@ -30,7 +30,7 @@ According to the strict filename convention defined in `../REGEXP.md`, each file
    * **Regex-based surgery**: The existing `target_path` is parsed using the regex from `REGEXP.md` to safely extract all structural components (year, month, day/slug, counter, existing caption, and extension).
    * The new caption is substituted into the parsed structure, and the filename is rebuilt cleanly according to its matched pattern format.
    * If the input was cleared, the caption segment and its preceding hyphen are omitted from the rebuilt filename.
-   * If the calculated filename already exists on disk or in the DB (by another live file), a numeric collision counter (`-2`, `-3`, …) is automatically appended, adhering strictly to the formats defined in `REGEXP.md`.
+   * If the calculated filename already exists on disk or in the DB (by another live file), the maximum occupied counter is pre-computed (one `MAX(counter)` DB query + one filesystem scan), and the path is generated directly at `max + 1`, adhering strictly to the formats defined in `REGEXP.md`.
 
 ### Notes
 
