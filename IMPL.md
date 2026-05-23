@@ -1,4 +1,4 @@
-# mex — Architecture Notes
+# mex — Implementation Notes
 
 ## Overview
 
@@ -175,3 +175,59 @@ Run with `cargo test -- --nocapture` from `mex/`:
 | `navigate_away_and_back_dispatches` | 3 encodes for 3 images | Navigate correctly invalidates |
 | `dynimage_is_cached_after_first_load` | cache len == 2 | No premature eviction |
 | `filter_clears_image_state` | path = None | Filter properly resets state |
+
+---
+
+## SQLite connection model
+
+### Problem (before 2026-05-23)
+
+Every public function in `db.rs` called `Connection::open(db_path)` at entry and dropped it on
+return. The empty-trash background thread called `delete_trashed_from_fs(…, slice::from_ref(id))`
+inside a per-file loop — N deletions → N connection open/close cycles. `PRAGMA` settings were
+re-applied on every call.
+
+### Fix
+
+All 16 public db functions now accept a borrowed connection rather than a path string:
+
+```rust
+// before
+pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> { … }
+
+// after
+pub fn load_files(conn: &Connection) -> Result<Vec<MediaFile>> { … }
+```
+
+`assign_tag` is the only function that needs `&mut Connection` because it calls
+`conn.transaction()`, which takes `&mut self`. All other functions only call `execute`,
+`query_row`, `prepare` — all `&self` in rusqlite.
+
+### Connection ownership
+
+| Scope | Owner | Lifetime |
+|---|---|---|
+| Main thread | `App::conn: rusqlite::Connection` | Process lifetime |
+| `main()` bootstrap | Local `conn` in `fn main` | Passed into `App::new()` |
+| Background threads | Local `let conn = Connection::open(&db_path)?` | Thread lifetime |
+
+`Connection` is not `Send`, so background threads cannot borrow `App::conn`. Each thread clones
+`self.db_path: String` and opens its own connection once at thread start.
+
+`db_path: String` is retained in `App` for two reasons:
+1. Background threads clone it to open their own connections.
+2. The thumbnail-cache path is computed as `format!("{}.cache", self.db_path)`.
+
+### Test helpers
+
+- `test_conn() -> Connection` — returns `Connection::open_in_memory().unwrap()` for tests that
+  construct an `App` but don't exercise the database.
+- `make_tag_db()` now returns `(PathBuf, rusqlite::Connection)` — the open file-backed connection
+  is reused directly in tests rather than drop-and-reopen.
+- `db.rs` internal tests (for `fix_date`, `load_files`) were updated to reuse the setup
+  connection for both mutations and post-condition queries, eliminating the drop/reopen pattern.
+
+### Import thread was already correct
+
+`confirm_import` opened one connection (`let mut conn = rusqlite::Connection::open(&db_path)?`)
+and passed `&mut conn` to `execute_import`. No change was needed there.
