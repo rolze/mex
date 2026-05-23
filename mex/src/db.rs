@@ -1475,14 +1475,18 @@ pub fn load_recent_import_source_dirs(conn: &Connection) -> Result<Vec<String>> 
     )?;
 
     // Group source_paths by tag_name; maintain insertion order (rows come ordered by recency).
+    // `tag_index` maps tag_name → index into `groups` for O(1) lookup.
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    let mut tag_index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         let tag_name: String = row.get(0)?;
         let source_path: String = row.get(2)?;
-        if let Some(entry) = groups.iter_mut().find(|(t, _)| t == &tag_name) {
-            entry.1.push(source_path);
+        if let Some(&idx) = tag_index.get(&tag_name) {
+            groups[idx].1.push(source_path);
         } else {
+            let idx = groups.len();
+            tag_index.insert(tag_name.clone(), idx);
             groups.push((tag_name, vec![source_path]));
         }
     }
@@ -1943,5 +1947,48 @@ mod tests {
         assert!(yr.join("2025-11-christmas-0003.jpg").exists());
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `load_recent_import_source_dirs` must group rows by tag and return one
+    /// common-prefix entry per import session, ordered by recency.
+    #[test]
+    fn load_recent_import_source_dirs_groups_by_tag() {
+        use rusqlite::Connection;
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT, type TEXT);
+             CREATE TABLE media_tags (media_id TEXT, tag_id TEXT);
+             CREATE TABLE media (
+                 id TEXT PRIMARY KEY, target_path TEXT, derived_date TEXT,
+                 ext TEXT, os_date TEXT, derived_slug TEXT, caption_slug TEXT,
+                 source_path TEXT, status TEXT, moved_at INTEGER DEFAULT 0,
+                 missing_on_disk INTEGER DEFAULT 0
+             );
+
+             -- Two import sessions: import-2 is more recent
+             INSERT INTO tags VALUES ('t1', 'import-1', 'mex');
+             INSERT INTO tags VALUES ('t2', 'import-2', 'mex');
+
+             -- Session import-1: two files under /home/user/old/
+             INSERT INTO media VALUES ('m1','a','2024','jpg','','','','/home/user/old/a.jpg','moved',10,0);
+             INSERT INTO media VALUES ('m2','b','2024','jpg','','','','/home/user/old/b.jpg','moved',11,0);
+             INSERT INTO media_tags VALUES ('m1', 't1');
+             INSERT INTO media_tags VALUES ('m2', 't1');
+
+             -- Session import-2: two files under /home/user/new/
+             INSERT INTO media VALUES ('m3','c','2024','jpg','','','','/home/user/new/c.jpg','moved',20,0);
+             INSERT INTO media VALUES ('m4','d','2024','jpg','','','','/home/user/new/d.jpg','moved',21,0);
+             INSERT INTO media_tags VALUES ('m3', 't2');
+             INSERT INTO media_tags VALUES ('m4', 't2');",
+        )
+        .unwrap();
+
+        let dirs = load_recent_import_source_dirs(&conn).unwrap();
+
+        // Most recent session comes first.
+        assert_eq!(dirs.len(), 2);
+        assert_eq!(dirs[0], "/home/user/new");
+        assert_eq!(dirs[1], "/home/user/old");
     }
 }
