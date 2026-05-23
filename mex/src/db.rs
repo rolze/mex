@@ -266,9 +266,7 @@ pub struct MediaFile {
     pub missing_on_disk: bool,
 }
 
-pub fn load_files(db_path: &str) -> Result<Vec<MediaFile>> {
-    let conn = Connection::open(db_path)?;
-
+pub fn load_files(conn: &Connection) -> Result<Vec<MediaFile>> {
     let sql = "SELECT m.id, m.target_path, COALESCE(m.derived_date,''), m.ext,
                       COALESCE(GROUP_CONCAT(t.name || CHAR(30) || t.type, CHAR(31)),''),
                       COALESCE(m.derived_slug,''), COALESCE(m.caption_slug,''),
@@ -347,8 +345,7 @@ pub fn folder_of(path: &str) -> &str {
 ///
 /// Safe to call every startup — all statements use `CREATE TABLE IF NOT EXISTS`
 /// and `ensure_schema_v1` is a no-op when already at the current version.
-pub fn init_db(db_path: &str) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+pub fn init_db(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS media (
             id           TEXT PRIMARY KEY,
@@ -420,8 +417,7 @@ pub fn ensure_schema_v2(conn: &Connection) -> Result<()> {
 ///
 /// Called lazily when the terminal preview is opened for a file and mex checks
 /// whether the physical file exists under `target_root`.
-pub fn set_missing_on_disk(db_path: &str, media_id: &str, missing: bool) -> Result<()> {
-    let conn = Connection::open(db_path)?;
+pub fn set_missing_on_disk(conn: &Connection, media_id: &str, missing: bool) -> Result<()> {
     conn.execute(
         "UPDATE media SET missing_on_disk = ?1 WHERE id = ?2",
         rusqlite::params![missing as i64, media_id],
@@ -441,13 +437,11 @@ pub fn set_missing_on_disk(db_path: &str, media_id: &str, missing: bool) -> Resu
 ///
 /// Returns the effective tag type that was used (for status messages).
 pub fn assign_tag(
-    db_path: &str,
+    conn: &mut Connection,
     media_ids: &[String],
     tag_name: &str,
     tag_type: Option<&str>,
 ) -> Result<String> {
-    let mut conn = Connection::open(db_path)?;
-
     let existing: Option<(i64, String)> = conn
         .query_row(
             "SELECT id, type FROM tags WHERE name = ?1 COLLATE NOCASE",
@@ -501,12 +495,10 @@ pub fn assign_tag(
 /// - `tag_names` non-empty → remove only the named tags (case-insensitive).
 ///
 /// Returns the number of `media_tags` rows deleted.
-pub fn remove_tags(db_path: &str, media_ids: &[String], tag_names: &[String]) -> Result<usize> {
+pub fn remove_tags(conn: &Connection, media_ids: &[String], tag_names: &[String]) -> Result<usize> {
     if media_ids.is_empty() {
         return Ok(0);
     }
-
-    let conn = Connection::open(db_path)?;
 
     let id_ph: String = std::iter::repeat_n("?", media_ids.len())
         .collect::<Vec<_>>()
@@ -584,11 +576,9 @@ pub fn rename_file_date(basename: &str, new_date: &str) -> String {
 /// check** is performed before any mutation. If the filesystem does not permit
 /// `set_file_mtime` (e.g. exFAT via WSL2), the function returns an error
 /// immediately and nothing is changed on disk or in the DB.
-pub fn fix_date(db_path: &str, target_root: &str, file_id: &str, new_date: &str) -> Result<()> {
+pub fn fix_date(conn: &Connection, target_root: &str, file_id: &str, new_date: &str) -> Result<()> {
     use filetime::{set_file_mtime, FileTime};
     use std::path::Path;
-
-    let conn = Connection::open(db_path)?;
 
     // Fetch current target_path and stored os_date (as fallback for time component).
     let (target_path, old_os_date): (String, Option<String>) = conn.query_row(
@@ -737,10 +727,8 @@ fn days_from_epoch(year: i64, month: i64, day: i64) -> i64 {
 /// `new_ext` must be the canonical extension detected from the file's magic bytes
 /// (e.g. `"jpg"`).  The caller is responsible for detection; this function only
 /// does the rename + DB update.
-pub fn fix_ext(db_path: &str, target_root: &str, file_id: &str, new_ext: &str) -> Result<()> {
+pub fn fix_ext(conn: &Connection, target_root: &str, file_id: &str, new_ext: &str) -> Result<()> {
     use std::path::Path;
-
-    let conn = Connection::open(db_path)?;
 
     let target_path: String = conn.query_row(
         "SELECT target_path FROM media WHERE id = ?1",
@@ -788,14 +776,13 @@ pub fn fix_ext(db_path: &str, target_root: &str, file_id: &str, new_ext: &str) -
 /// - All structural components are preserved, and the new caption is substituted.
 /// - If the new path is occupied, a collision counter is added/incremented.
 pub fn fix_caption(
-    db_path: &str,
+    conn: &Connection,
     target_root: &str,
     file_id: &str,
     new_caption: &str,
 ) -> Result<()> {
     use std::path::Path;
 
-    let conn = Connection::open(db_path)?;
     let target_path: String = conn.query_row(
         "SELECT target_path FROM media WHERE id = ?1",
         [file_id],
@@ -909,7 +896,7 @@ pub struct RemoveSlugBatchStats {
 ///
 /// `on_progress(index, file_id)` is called before each file is processed.
 pub fn remove_slug_batch(
-    db_path: &str,
+    conn: &Connection,
     target_root: &str,
     file_ids: &[String],
     on_progress: impl Fn(usize, &str),
@@ -923,8 +910,6 @@ pub fn remove_slug_batch(
             errors: Vec::new(),
         });
     }
-
-    let conn = Connection::open(db_path)?;
 
     // ── 1. Load all records ────────────────────────────────────────────────
     struct Rec {
@@ -1202,10 +1187,8 @@ pub fn remove_slug_batch(
 /// Returns `Ok(true)` when the mtime was updated, `Ok(false)` when the file
 /// was skipped (no `derived_date` stored, or the target file does not exist on
 /// disk — both are non-fatal).
-pub fn fix_os_time(db_path: &str, target_root: &str, file_id: &str) -> Result<bool> {
+pub fn fix_os_time(conn: &Connection, target_root: &str, file_id: &str) -> Result<bool> {
     use std::path::Path;
-
-    let conn = Connection::open(db_path)?;
 
     let (target_path, derived_date, source_path): (String, Option<String>, String) = conn
         .query_row(
@@ -1244,11 +1227,10 @@ pub fn fix_os_time(db_path: &str, target_root: &str, file_id: &str) -> Result<bo
 /// Mark media files as trashed (`status = 'trashed'`).
 ///
 /// Returns the number of rows updated.
-pub fn trash_files(db_path: &str, media_ids: &[String]) -> Result<usize> {
+pub fn trash_files(conn: &Connection, media_ids: &[String]) -> Result<usize> {
     if media_ids.is_empty() {
         return Ok(0);
     }
-    let conn = Connection::open(db_path)?;
     let ph: String = std::iter::repeat_n("?", media_ids.len())
         .collect::<Vec<_>>()
         .join(",");
@@ -1262,11 +1244,10 @@ pub fn trash_files(db_path: &str, media_ids: &[String]) -> Result<usize> {
 /// Restore trashed media files to normal (`status = 'moved'`).
 ///
 /// Returns the number of rows updated.
-pub fn keep_files(db_path: &str, media_ids: &[String]) -> Result<usize> {
+pub fn keep_files(conn: &Connection, media_ids: &[String]) -> Result<usize> {
     if media_ids.is_empty() {
         return Ok(0);
     }
-    let conn = Connection::open(db_path)?;
     let ph: String = std::iter::repeat_n("?", media_ids.len())
         .collect::<Vec<_>>()
         .join(",");
@@ -1278,9 +1259,7 @@ pub fn keep_files(db_path: &str, media_ids: &[String]) -> Result<usize> {
 }
 
 /// Load up to `limit` trashed files (`status = 'trashed'`), ordered by `target_path`.
-pub fn load_trashed_files(db_path: &str, limit: usize) -> Result<Vec<MediaFile>> {
-    let conn = Connection::open(db_path)?;
-
+pub fn load_trashed_files(conn: &Connection, limit: usize) -> Result<Vec<MediaFile>> {
     let sql = format!(
         "SELECT m.id, m.target_path, COALESCE(m.derived_date,''), m.ext,
                 COALESCE(GROUP_CONCAT(t.name || CHAR(30) || t.type, CHAR(31)),''),
@@ -1352,7 +1331,7 @@ pub fn load_trashed_files(db_path: &str, limit: usize) -> Result<Vec<MediaFile>>
 /// Each file is processed independently; FS errors are non-fatal and counted.
 /// Returns `(deleted, errors)`.
 pub fn delete_trashed_from_fs(
-    db_path: &str,
+    conn: &Connection,
     target_root: &str,
     media_ids: &[String],
 ) -> Result<(usize, usize)> {
@@ -1360,7 +1339,6 @@ pub fn delete_trashed_from_fs(
         return Ok((0, 0));
     }
 
-    let conn = Connection::open(db_path)?;
     let ph: String = std::iter::repeat_n("?", media_ids.len())
         .collect::<Vec<_>>()
         .join(",");
@@ -1414,9 +1392,7 @@ pub fn delete_trashed_from_fs(
 /// Each `import-*` tag (type `mex`) covers exactly one `:import <path>` run.
 /// The common path prefix of all `source_path` values for a tag group equals
 /// the directory that was passed to `:import`.
-pub fn load_recent_import_source_dirs(db_path: &str) -> Result<Vec<String>> {
-    let conn = Connection::open(db_path)?;
-
+pub fn load_recent_import_source_dirs(conn: &Connection) -> Result<Vec<String>> {
     // Collect (tag_name, max_moved_at, source_path) rows for all import sessions.
     let mut stmt = conn.prepare(
         "SELECT t.name, MAX(m.moved_at), m.source_path \
@@ -1488,8 +1464,7 @@ fn common_path_prefix(paths: &[String]) -> String {
 }
 
 /// Count files with `status = 'trashed'`.
-pub fn count_trashed(db_path: &str) -> Result<usize> {
-    let conn = Connection::open(db_path)?;
+pub fn count_trashed(conn: &Connection) -> Result<usize> {
     let n: i64 = conn.query_row(
         "SELECT COUNT(*) FROM media WHERE status = 'trashed'",
         [],
@@ -1606,10 +1581,9 @@ mod tests {
              CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT);
              INSERT INTO media VALUES ('id1', '2022/2022-04-18-0001.jpg', '2022-04-18', 'jpg', '2022-04-18 10:00:00', '', '');",
         ).unwrap();
-        drop(conn);
 
         let result = fix_date(
-            db_path.to_str().unwrap(),
+            &conn,
             dir.to_str().unwrap(),
             "id1",
             "2023-06-15",
@@ -1624,7 +1598,6 @@ mod tests {
         );
 
         // DB should reflect new path and date.
-        let conn = Connection::open(&db_path).unwrap();
         let (tp, dd, od): (String, String, String) = conn
             .query_row(
                 "SELECT target_path, derived_date, os_date FROM media WHERE id='id1'",
@@ -1658,11 +1631,10 @@ mod tests {
              CREATE TABLE tags (id TEXT PRIMARY KEY, name TEXT);
              INSERT INTO media VALUES ('id2', '2022/2022-04-18-0001.jpg', '2022-04-18', 'jpg', NULL, '', '');",
         ).unwrap();
-        drop(conn);
 
         // File does not exist on disk — fix_date should still update the DB.
         let result = fix_date(
-            db_path.to_str().unwrap(),
+            &conn,
             dir.to_str().unwrap(),
             "id2",
             "2023-06-15",
@@ -1673,7 +1645,6 @@ mod tests {
             result
         );
 
-        let conn = Connection::open(&db_path).unwrap();
         let (tp, dd): (String, String) = conn
             .query_row(
                 "SELECT target_path, derived_date FROM media WHERE id='id2'",
@@ -1730,9 +1701,8 @@ mod tests {
              INSERT INTO media VALUES ('m2','2024/trashed.jpg','2024-01-02','jpg','','','','','trashed',0);
              INSERT INTO media VALUES ('m3','2024/deleted.jpg','2024-01-03','jpg','','','','','deleted',0);",
         ).unwrap();
-        drop(conn);
 
-        let files = load_files(db_path.to_str().unwrap()).unwrap();
+        let files = load_files(&conn).unwrap();
         let ids: Vec<&str> = files.iter().map(|f| f.id.as_str()).collect();
 
         assert!(ids.contains(&"m1"), "moved file must be in load_files result");

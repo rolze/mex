@@ -155,6 +155,7 @@ const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
 
 pub struct App {
     pub db_path: String,
+    pub conn: rusqlite::Connection,
     pub target_root: String,
     /// Root directory where `:create-view` materialises named view directories.
     pub views_root: String,
@@ -268,6 +269,7 @@ pub struct App {
 impl App {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        conn: rusqlite::Connection,
         db_path: String,
         target_root: String,
         views_root: String,
@@ -298,6 +300,7 @@ impl App {
         let all_tags: Vec<String> = tag_set.into_iter().collect();
         let all_tag_types: Vec<String> = type_set.into_iter().collect();
         Self {
+            conn,
             db_path,
             target_root,
             views_root,
@@ -812,7 +815,7 @@ impl App {
             None => return,
         };
 
-        match crate::db::fix_caption(&self.db_path, &self.target_root, &file_id, &new_caption) {
+        match crate::db::fix_caption(&self.conn, &self.target_root, &file_id, &new_caption) {
             Ok(()) => {
                 if let Err(e) = self.reload_preserve_cursor() {
                     self.status_message = Some(format!("caption: reload failed: {e}"));
@@ -1286,13 +1289,11 @@ impl App {
 
                 // Assign counters now that we have target_root
                 let target_root = std::path::Path::new(&self.target_root);
-                if let Ok(conn) = rusqlite::Connection::open(&self.db_path) {
-                    if let Err(e) = crate::import::assign_counters(&mut entries, target_root, &conn)
-                    {
-                        self.status_message = Some(format!("import: counter error: {e}"));
-                        self.import_state = ImportState::Idle;
-                        return;
-                    }
+                if let Err(e) = crate::import::assign_counters(&mut entries, target_root, &self.conn)
+                {
+                    self.status_message = Some(format!("import: counter error: {e}"));
+                    self.import_state = ImportState::Idle;
+                    return;
                 }
                 self.import_state = ImportState::Preview { entries, scroll: 0 };
             }
@@ -1502,7 +1503,7 @@ impl App {
         let mut errors = 0usize;
         let mut first_error: Option<String> = None;
         for id in &ids {
-            if let Err(e) = crate::db::fix_date(&self.db_path, &self.target_root, id, date_str) {
+            if let Err(e) = crate::db::fix_date(&self.conn, &self.target_root, id, date_str) {
                 eprintln!("fix-date error for {id}: {e}");
                 if first_error.is_none() {
                     first_error = Some(e.to_string());
@@ -1578,7 +1579,7 @@ impl App {
             match crate::import::detect_wrong_ext(&abs_path, &current_ext) {
                 Some(new_ext) => {
                     if let Err(e) =
-                        crate::db::fix_ext(&self.db_path, &self.target_root, id, &new_ext)
+                        crate::db::fix_ext(&self.conn, &self.target_root, id, &new_ext)
                     {
                         eprintln!("fix-ext error for {id}: {e}");
                         if first_error.is_none() {
@@ -1648,8 +1649,17 @@ impl App {
         self.remove_slug_rx = Some(rx);
 
         std::thread::spawn(move || {
+            let conn = match rusqlite::Connection::open(&db_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(RemoveSlugMsg::Done(format!(
+                        "remove-slug: failed to open DB — {e}"
+                    )));
+                    return;
+                }
+            };
             let result =
-                crate::db::remove_slug_batch(&db_path, &target_root, &targets, |done, current| {
+                crate::db::remove_slug_batch(&conn, &target_root, &targets, |done, current| {
                     let _ = tx.send(RemoveSlugMsg::Progress {
                         done,
                         total,
@@ -1759,6 +1769,15 @@ impl App {
         self.fix_os_time_rx = Some(rx);
 
         std::thread::spawn(move || {
+            let conn = match rusqlite::Connection::open(&db_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(FixOsTimeMsg::Done(format!(
+                        "fix-os-time: failed to open DB — {e}"
+                    )));
+                    return;
+                }
+            };
             let mut updated = 0usize;
             let mut skipped = 0usize;
             let mut errors = 0usize;
@@ -1771,7 +1790,7 @@ impl App {
                     current: id.clone(),
                 });
 
-                match crate::db::fix_os_time(&db_path, &target_root, id) {
+                match crate::db::fix_os_time(&conn, &target_root, id) {
                     Ok(true) => updated += 1,
                     Ok(false) => skipped += 1,
                     Err(e) => {
@@ -1856,7 +1875,7 @@ impl App {
             return;
         }
 
-        match crate::db::assign_tag(&self.db_path, &ids, tag_name, tag_type) {
+        match crate::db::assign_tag(&mut self.conn, &ids, tag_name, tag_type) {
             Err(e) => {
                 self.status_message = Some(format!("tag: {e}"));
             }
@@ -1897,7 +1916,7 @@ impl App {
             return;
         }
 
-        match crate::db::remove_tags(&self.db_path, &ids, tag_names) {
+        match crate::db::remove_tags(&self.conn, &ids, tag_names) {
             Err(e) => {
                 self.status_message = Some(format!("untag: {e}"));
             }
@@ -1953,7 +1972,7 @@ impl App {
             return;
         }
 
-        match crate::db::trash_files(&self.db_path, &ids) {
+        match crate::db::trash_files(&self.conn, &ids) {
             Err(e) => {
                 self.status_message = Some(format!("trash: {e}"));
             }
@@ -1976,7 +1995,7 @@ impl App {
             _ => return,
         };
 
-        match crate::db::keep_files(&self.db_path, &[id]) {
+        match crate::db::keep_files(&self.conn, &[id]) {
             Err(e) => {
                 self.status_message = Some(format!("keep: {e}"));
             }
@@ -1994,7 +2013,7 @@ impl App {
 
     /// Load up to 100 trashed files and enter the preview state.
     pub fn start_empty_trash(&mut self) {
-        match crate::db::load_trashed_files(&self.db_path, 100) {
+        match crate::db::load_trashed_files(&self.conn, 100) {
             Err(e) => {
                 self.status_message = Some(format!("empty-trash: {e}"));
             }
@@ -2024,12 +2043,20 @@ impl App {
         self.empty_trash_rx = Some(rx);
 
         std::thread::spawn(move || {
+            let conn = match rusqlite::Connection::open(&db_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(EmptyTrashMsg::Done(0, ids.len()));
+                    eprintln!("empty-trash: failed to open DB — {e}");
+                    return;
+                }
+            };
             // Delete one by one so we can report progress.
             let mut done = 0usize;
             let mut errors = 0usize;
             for id in &ids {
                 let _ = tx.send(EmptyTrashMsg::Progress { done, total });
-                match crate::db::delete_trashed_from_fs(&db_path, &target_root, std::slice::from_ref(id)) {
+                match crate::db::delete_trashed_from_fs(&conn, &target_root, std::slice::from_ref(id)) {
                     Ok((d, e)) => {
                         done += d;
                         errors += e;
@@ -2168,7 +2195,7 @@ impl App {
 
     /// Reload `all_files` from the DB and re-apply the current filter.
     pub fn reload(&mut self) -> anyhow::Result<()> {
-        self.all_files = crate::db::load_files(&self.db_path)?;
+        self.all_files = crate::db::load_files(&self.conn)?;
         // Rebuild the tag and type sets from the fresh data.
         let mut tag_set: BTreeSet<String> = BTreeSet::new();
         let mut type_set: BTreeSet<String> = BTreeSet::new();
@@ -2609,7 +2636,7 @@ impl App {
         }
 
         // Persist to DB (best-effort; ignore errors to keep the UI responsive).
-        let _ = set_missing_on_disk(&self.db_path, &id, should_be_missing);
+        let _ = set_missing_on_disk(&self.conn, &id, should_be_missing);
     }
 
     /// Load image for current selection and send to the background encoder thread.
@@ -3196,6 +3223,10 @@ mod tests {
         dir.to_string_lossy().into_owned()
     }
 
+    fn test_conn() -> rusqlite::Connection {
+        rusqlite::Connection::open_in_memory().unwrap()
+    }
+
     /// Build a test App where each entry in `image_names` becomes one
     /// MediaFile with that name as `target_path` (relative to test_media_root).
     fn make_test_app(image_names: &[&str]) -> App {
@@ -3222,6 +3253,7 @@ mod tests {
             })
             .collect();
         App::new(
+            test_conn(),
             "test.db".into(),
             root,
             String::new(),
@@ -3277,6 +3309,7 @@ mod tests {
             });
         }
         App::new(
+            test_conn(),
             "test.db".into(),
             root,
             String::new(),
@@ -3492,6 +3525,7 @@ mod tests {
             }
         }
         App::new(
+            test_conn(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -3513,6 +3547,7 @@ mod tests {
         let image_state = ThreadProtocol::new(tx, None);
         let picker = Picker::halfblocks();
         App::new(
+            test_conn(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -3932,6 +3967,7 @@ mod tests {
             })
             .collect();
         App::new(
+            test_conn(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -4161,6 +4197,7 @@ mod tests {
         let image_state = ThreadProtocol::new(tx, None);
         let picker = Picker::halfblocks();
         App::new(
+            test_conn(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -4269,7 +4306,7 @@ mod tests {
 
     // ── UC-09 tag command tests ───────────────────────────────────────────────
 
-    fn make_tag_db() -> (std::path::PathBuf, String) {
+    fn make_tag_db() -> (std::path::PathBuf, rusqlite::Connection) {
         use std::fs;
         use std::sync::atomic::{AtomicUsize, Ordering};
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -4290,15 +4327,14 @@ mod tests {
              INSERT INTO media VALUES ('m2','2024/b.jpg','2024-01-01','jpg',NULL,'','');",
         )
         .unwrap();
-        (dir, db_path.to_str().unwrap().to_string())
+        (dir, conn)
     }
 
     #[test]
     fn assign_tag_creates_new_tag_and_attaches() {
-        let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        let (_dir, mut conn) = make_tag_db();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "holiday", Some("event")).unwrap();
 
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
         let tag_id: i64 = conn
             .query_row("SELECT id FROM tags WHERE name='holiday'", [], |r| r.get(0))
             .unwrap();
@@ -4314,11 +4350,10 @@ mod tests {
 
     #[test]
     fn assign_tag_reuses_existing_same_type() {
-        let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
-        crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", Some("event")).unwrap();
+        let (_dir, mut conn) = make_tag_db();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        crate::db::assign_tag(&mut conn, &["m2".to_string()], "holiday", Some("event")).unwrap();
 
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
         let tag_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM tags WHERE name='holiday'", [], |r| {
                 r.get(0)
@@ -4334,10 +4369,10 @@ mod tests {
 
     #[test]
     fn assign_tag_errors_on_type_mismatch() {
-        let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        let (_dir, mut conn) = make_tag_db();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "holiday", Some("event")).unwrap();
         let result =
-            crate::db::assign_tag(&db_path, &["m2".to_string()], "holiday", Some("person"));
+            crate::db::assign_tag(&mut conn, &["m2".to_string()], "holiday", Some("person"));
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(
@@ -4348,11 +4383,10 @@ mod tests {
 
     #[test]
     fn assign_tag_duplicate_on_same_file_is_noop() {
-        let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        let (_dir, mut conn) = make_tag_db();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "holiday", Some("event")).unwrap();
 
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0))
             .unwrap();
@@ -4361,10 +4395,9 @@ mod tests {
 
     #[test]
     fn assign_tag_defaults_to_event_type() {
-        let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "trip", None).unwrap();
+        let (_dir, mut conn) = make_tag_db();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "trip", None).unwrap();
 
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
         let ty: String = conn
             .query_row("SELECT type FROM tags WHERE name='trip'", [], |r| r.get(0))
             .unwrap();
@@ -4373,11 +4406,11 @@ mod tests {
 
     #[test]
     fn assign_tag_omit_type_reuses_existing_any_type() {
-        let (_dir, db_path) = make_tag_db();
+        let (_dir, mut conn) = make_tag_db();
         // Create tag with type "person"
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "alice", Some("person")).unwrap();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "alice", Some("person")).unwrap();
         // Assign same tag without specifying type — must not error
-        let result = crate::db::assign_tag(&db_path, &["m2".to_string()], "alice", None);
+        let result = crate::db::assign_tag(&mut conn, &["m2".to_string()], "alice", None);
         assert!(
             result.is_ok(),
             "omitting @type should reuse existing tag, got: {:?}",
@@ -4386,7 +4419,6 @@ mod tests {
         let effective = result.unwrap();
         assert_eq!(effective, "person");
 
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
         let link_count: i64 = conn
             .query_row("SELECT COUNT(*) FROM media_tags", [], |r| r.get(0))
             .unwrap();
@@ -4413,6 +4445,7 @@ mod tests {
             missing_on_disk: false,
         }];
         let mut app = App::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -4451,6 +4484,7 @@ mod tests {
             missing_on_disk: false,
         }];
         let mut app = App::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -4489,6 +4523,7 @@ mod tests {
             missing_on_disk: false,
         }];
         let mut app = App::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -4525,6 +4560,7 @@ mod tests {
             missing_on_disk: false,
         }];
         let mut app = App::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -4568,12 +4604,11 @@ mod tests {
 
     #[test]
     fn remove_tags_all() {
-        let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "summer", Some("event")).unwrap();
-        let removed = crate::db::remove_tags(&db_path, &["m1".to_string()], &[]).unwrap();
+        let (_dir, mut conn) = make_tag_db();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "summer", Some("event")).unwrap();
+        let removed = crate::db::remove_tags(&conn, &["m1".to_string()], &[]).unwrap();
         assert_eq!(removed, 2);
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM media_tags WHERE media_id='m1'",
@@ -4586,11 +4621,10 @@ mod tests {
 
     #[test]
     fn remove_tags_specific() {
-        let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "summer", Some("event")).unwrap();
-        crate::db::remove_tags(&db_path, &["m1".to_string()], &["holiday".to_string()]).unwrap();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let (_dir, mut conn) = make_tag_db();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "summer", Some("event")).unwrap();
+        crate::db::remove_tags(&conn, &["m1".to_string()], &["holiday".to_string()]).unwrap();
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM media_tags WHERE media_id='m1'",
@@ -4603,11 +4637,10 @@ mod tests {
 
     #[test]
     fn remove_tags_unknown_name_is_noop() {
-        let (_dir, db_path) = make_tag_db();
-        crate::db::assign_tag(&db_path, &["m1".to_string()], "holiday", Some("event")).unwrap();
-        crate::db::remove_tags(&db_path, &["m1".to_string()], &["nonexistent".to_string()])
+        let (_dir, mut conn) = make_tag_db();
+        crate::db::assign_tag(&mut conn, &["m1".to_string()], "holiday", Some("event")).unwrap();
+        crate::db::remove_tags(&conn, &["m1".to_string()], &["nonexistent".to_string()])
             .unwrap();
-        let conn = rusqlite::Connection::open(&db_path).unwrap();
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM media_tags WHERE media_id='m1'",
@@ -4641,6 +4674,7 @@ mod tests {
             missing_on_disk: false,
         }];
         let mut app = App::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -4677,6 +4711,7 @@ mod tests {
             missing_on_disk: false,
         }];
         let mut app = App::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -4717,6 +4752,7 @@ mod tests {
             missing_on_disk: false,
         }];
         let mut app = App::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
             "test.db".into(),
             String::new(),
             String::new(),
@@ -4762,6 +4798,7 @@ mod tests {
             })
             .collect();
         App::new(
+            rusqlite::Connection::open_in_memory().unwrap(),
             "test.db".into(),
             root,
             views_root.to_string(),

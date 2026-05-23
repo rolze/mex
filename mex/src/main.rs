@@ -15,6 +15,7 @@ use ratatui_image::{
     picker::{Picker, ProtocolType},
     thread::{ResizeRequest, ResizeResponse, ThreadProtocol},
 };
+use rusqlite::Connection;
 use std::{
     io,
     path::Path,
@@ -210,9 +211,10 @@ fn main() -> Result<()> {
     let target_root = cfg.target_root;
     let views_root = cfg.views_root;
     let mpv_path = cfg.mpv_path;
-    db::init_db(&db_path).context("Failed to initialise DB")?;
-    let files = db::load_files(&db_path).context("Failed to load files from DB")?;
-    let import_source_dirs = db::load_recent_import_source_dirs(&db_path).unwrap_or_default();
+    let conn = Connection::open(&db_path).context("Failed to open DB")?;
+    db::init_db(&conn).context("Failed to initialise DB")?;
+    let files = db::load_files(&conn).context("Failed to load files from DB")?;
+    let import_source_dirs = db::load_recent_import_source_dirs(&conn).unwrap_or_default();
 
     // Query terminal for graphics protocol/font-size (before entering alt screen).
     let mut picker = Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks());
@@ -251,6 +253,7 @@ fn main() -> Result<()> {
     let image_state = ThreadProtocol::new(tx_worker, None);
 
     let mut app = app::App::new(
+        conn,
         db_path,
         target_root,
         views_root,
