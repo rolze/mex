@@ -1,8 +1,6 @@
 use crate::db::{set_missing_on_disk, MediaFile};
 use crate::import::{ImportEntry, ImportMsg, ImportStatus};
-use crate::player::{
-    MpvController, MpvEvent, MpvStatus, RemoteController, MPV_SOCKET, VIDEO_EXTENSIONS,
-};
+use crate::player::{MpvController, MpvEvent, MpvStatus, RemoteController, VIDEO_EXTENSIONS};
 use crate::version::VersionInfo;
 use image::DynamicImage;
 use ratatui_image::{picker::Picker, protocol::StatefulProtocol, thread::ThreadProtocol};
@@ -299,6 +297,7 @@ impl App {
         }
         let all_tags: Vec<String> = tag_set.into_iter().collect();
         let all_tag_types: Vec<String> = type_set.into_iter().collect();
+        let mpv_socket = crate::player::default_socket_path();
         Self {
             conn,
             db_path,
@@ -348,12 +347,12 @@ impl App {
             import_source_dirs,
             import_path_hint: None,
             import_path_changed_at: None,
-            mpv: MpvController::new(MPV_SOCKET, mpv_path.clone()),
+            mpv: MpvController::new(mpv_socket.clone(), mpv_path.clone()),
             mpv_path,
             mpv_status: MpvStatus::Disconnected,
             mpv_event_rx: {
                 let (tx, rx) = mpsc::channel();
-                crate::player::start_event_listener(MPV_SOCKET.into(), tx);
+                crate::player::start_event_listener(mpv_socket, tx);
                 rx
             },
             mpv_ended: false,

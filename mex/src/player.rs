@@ -10,10 +10,16 @@ use std::time::Duration;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-pub const MPV_SOCKET: &str = "/tmp/mex-mpv.sock";
-
 /// Name of the Windows named pipe used in WSL mode (becomes `\\.\pipe\mex-mpv`).
 const MPV_PIPE_NAME: &str = "mex-mpv";
+
+/// Generate the per-process IPC socket path.
+///
+/// Embedding the PID prevents collisions between concurrent mex instances
+/// (same or different users) and avoids stale-socket issues after a crash.
+pub fn default_socket_path() -> PathBuf {
+    PathBuf::from(format!("/tmp/mex-mpv-{}.sock", std::process::id()))
+}
 
 // ── WSL / Windows helpers ─────────────────────────────────────────────────────
 
@@ -384,5 +390,26 @@ impl RemoteController for MpvController {
 
     fn is_connected(&self) -> bool {
         UnixStream::connect(&self.socket_path).is_ok()
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_socket_path_contains_pid() {
+        let path = default_socket_path();
+        let pid = std::process::id();
+        let expected = format!("/tmp/mex-mpv-{pid}.sock");
+        assert_eq!(path, PathBuf::from(&expected));
+    }
+
+    #[test]
+    fn default_socket_path_is_stable_within_process() {
+        // Two calls in the same process must return the same path.
+        assert_eq!(default_socket_path(), default_socket_path());
     }
 }

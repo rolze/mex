@@ -57,4 +57,6 @@ reconnects automatically when mpv is restarted.
   the next/previous video **and auto-starts playback**. If the user had manually paused (`s`),
   the new video loads paused as before.
 - Next/Prev skip non-video files and wrap around the filtered list.
+- The IPC socket path is derived from the process PID (`/tmp/mex-mpv-<pid>.sock`), preventing
+  collisions between concurrent mex instances and eliminating stale-socket issues after a crash.
 - Windows / WSL2 is supported via a socat + npiperelay bridge; see [INSTALL.md](../INSTALL.md) for setup instructions.
