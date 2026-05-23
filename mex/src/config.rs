@@ -3,7 +3,20 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 /// Per-installation mex configuration.
-/// Stored in `~/.config/mex/config.toml` (key = value, one per line).
+///
+/// Stored in `~/.config/mex/config.toml`.  Despite the `.toml` extension, the
+/// file uses a **simple `key = value` format** (one entry per line) — it is
+/// *not* parsed as TOML.  Parsing rules:
+///
+/// - The first `=` on a line separates the key from the value; subsequent `=`
+///   characters are part of the value and are preserved as-is.  Paths such as
+///   `/foo/bar=baz` are therefore safe to store.
+/// - Leading/trailing whitespace is stripped from both key and value.
+/// - Blank lines and lines that contain no `=` are silently skipped.
+/// - There is no comment syntax; any `#`-prefixed line that lacks `=` is
+///   skipped, but a line like `# key = val` would be parsed with key `"# key"`,
+///   which matches nothing and is dropped.
+///
 /// Never written to `.mex.db` — the media DB is shared across devices.
 #[derive(Default)]
 pub struct Config {
@@ -31,6 +44,10 @@ fn config_path() -> PathBuf {
 
 /// Read the local config file. Returns `Config::default()` if the file does
 /// not exist yet (first-run scenario).
+///
+/// Parsing is line-based: each line is split on the *first* `=` to yield a
+/// key/value pair.  Lines without `=` (including blank lines) are skipped.
+/// See [`Config`] for the full format specification.
 pub fn load_config() -> Config {
     let path = config_path();
     let text = match std::fs::read_to_string(&path) {
@@ -214,5 +231,83 @@ pub fn prompt_mpv_path(suggestion: &str) -> Option<String> {
         }
     } else {
         Some(trimmed)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn load_from_str(text: &str) -> Config {
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(text.as_bytes()).unwrap();
+        f.flush().unwrap();
+
+        let raw = std::fs::read_to_string(f.path()).unwrap();
+        let mut cfg = Config::default();
+        for line in raw.lines() {
+            if let Some((key, val)) = line.split_once('=') {
+                let key = key.trim();
+                let val = val.trim();
+                match key {
+                    "target_root" => cfg.target_root = val.to_string(),
+                    "views_root" => cfg.views_root = val.to_string(),
+                    "db_path" => cfg.db_path = val.to_string(),
+                    "mpv_path" => cfg.mpv_path = val.to_string(),
+                    _ => {}
+                }
+            }
+        }
+        cfg
+    }
+
+    #[test]
+    fn equals_sign_in_value_is_preserved() {
+        let cfg = load_from_str("mpv_path = /usr/bin/mpv=beta\n");
+        assert_eq!(cfg.mpv_path, "/usr/bin/mpv=beta");
+    }
+
+    #[test]
+    fn multiple_equals_signs_in_value() {
+        let cfg = load_from_str("db_path = /home/user/a=b=c.db\n");
+        assert_eq!(cfg.db_path, "/home/user/a=b=c.db");
+    }
+
+    #[test]
+    fn blank_lines_are_skipped() {
+        let cfg = load_from_str("\n\ntarget_root = /mnt/photos\n\n");
+        assert_eq!(cfg.target_root, "/mnt/photos");
+    }
+
+    #[test]
+    fn unknown_keys_are_ignored() {
+        let cfg = load_from_str("target_root = /mnt/photos\nunknown_key = whatever\n");
+        assert_eq!(cfg.target_root, "/mnt/photos");
+        assert!(cfg.db_path.is_empty());
+    }
+
+    #[test]
+    fn whitespace_around_key_and_value_is_trimmed() {
+        let cfg = load_from_str("  target_root  =  /mnt/photos  \n");
+        assert_eq!(cfg.target_root, "/mnt/photos");
+    }
+
+    #[test]
+    fn lines_without_equals_are_skipped() {
+        let cfg = load_from_str("not-a-valid-line\ntarget_root = /mnt/photos\n");
+        assert_eq!(cfg.target_root, "/mnt/photos");
+    }
+
+    #[test]
+    fn all_keys_loaded_correctly() {
+        let cfg = load_from_str(
+            "target_root = /mnt/media\nviews_root = /home/user/views\ndb_path = /home/user/.mex.db\nmpv_path = mpv\n",
+        );
+        assert_eq!(cfg.target_root, "/mnt/media");
+        assert_eq!(cfg.views_root, "/home/user/views");
+        assert_eq!(cfg.db_path, "/home/user/.mex.db");
+        assert_eq!(cfg.mpv_path, "mpv");
     }
 }

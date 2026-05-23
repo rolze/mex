@@ -10,6 +10,11 @@ locate or create the database file.
 
 **Config keys (`~/.config/mex/config.toml`):**
 
+The file uses a simple `key = value` per-line format — it is **not** parsed as full TOML
+despite the `.toml` extension.  Values containing `=` are safe (only the first `=` is the
+separator).  Blank lines and lines without `=` are silently skipped; there is no comment
+syntax.
+
 | Key | Required | Description |
 |---|---|---|
 | `target_root` | Yes | Absolute path to the local media root (prefixed to all `target_path` values from the DB) |
