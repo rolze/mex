@@ -1,4 +1,4 @@
-# Installing sem and mex
+# Installing Sem & Mex
 
 ## Quick install (Linux x86_64)
 
@@ -7,8 +7,8 @@ curl -fsSL https://raw.githubusercontent.com/rolze/mex/main/install.sh | bash
 ```
 
 The script:
-- Downloads the latest `sem` and `mex` binaries from the [GitHub releases page](https://github.com/rolze/mex/releases/latest)
-- Auto-detects `libvips` and picks the faster `sem-vips` variant if available
+- Downloads the latest Sem & Mex binaries from the [GitHub releases page](https://github.com/rolze/mex/releases/latest)
+- Auto-detects `libvips` and picks `sem-linux-x86_64-vips` when available
 - Installs to `/usr/local/bin` (system-wide) or `~/.local/bin` (user-only) — whichever is writable
 - Checks that required runtime libraries are present and prints the exact `apt install` command if any are missing
 
@@ -53,7 +53,7 @@ Two pre-built variants are provided:
 | Binary | Thumbnail backend | Extra runtime dep |
 |--------|-------------------|-------------------|
 | `sem-linux-x86_64` | pure Rust (`image` crate) | — |
-| `sem-linux-x86_64-vips` | libvips (faster for large libraries) | `libvips42` |
+| `sem-linux-x86_64-vips` | libvips (faster for large libraries) | `libvips42` / `libvips42t64` |
 
 ### Pre-built binary (Linux x86_64)
 
@@ -68,7 +68,7 @@ For `sem-linux-x86_64-vips` (additionally):
 ```bash
 # Ubuntu 22.04 / Debian 12
 sudo apt install libvips42
-# Ubuntu 24.04+
+# Ubuntu 24.04 / 26.04+
 sudo apt install libvips42t64
 ```
 

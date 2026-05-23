@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# install.sh — install sem and mex from the latest GitHub release
+# install.sh — install Sem & Mex from the latest GitHub release
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/rolze/mex/main/install.sh | bash
 #
 # What it does:
 #   1. Verifies Linux x86_64 and that curl is available
-#   2. Detects whether libvips is present and picks the right sem variant
+#   2. Picks the right sem variant (prefers vips where supported)
 #   3. Fetches the latest release tag from the GitHub API
-#   4. Downloads sem and mex to a temp dir, makes them executable
+#   4. Downloads Sem & Mex to a temp dir, makes them executable
 #   5. Installs to /usr/local/bin (system-wide) or ~/.local/bin (user)
 #   6. Checks runtime deps (sem libraries, mpv for video) and warns if any are missing
 
@@ -44,12 +44,52 @@ if ! command -v curl &>/dev/null; then
     die "curl is required but not found. Install it and retry."
 fi
 
+# ── platform / dependency helpers ─────────────────────────────────────────────
+
+OS_ID=""
+OS_VERSION_ID=""
+if [[ -r /etc/os-release ]]; then
+    OS_ID=$(awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2); exit}' /etc/os-release)
+    OS_VERSION_ID=$(awk -F= '/^VERSION_ID=/{gsub(/"/, "", $2); print $2; exit}' /etc/os-release)
+fi
+
+_recommended_vips_pkg() {
+    # Ubuntu 24.04+ switched many libs to t64 package names.
+    if [[ "${OS_ID}" == "ubuntu" ]]; then
+        local major="${OS_VERSION_ID%%.*}"
+        if [[ "${major}" =~ ^[0-9]+$ ]] && (( major >= 24 )); then
+            echo "libvips42t64"
+            return
+        fi
+    fi
+    echo "libvips42"
+}
+
 # ── detect libvips ────────────────────────────────────────────────────────────
+
+# ldconfig lives in /sbin or /usr/sbin which may not be on PATH in a
+# non-interactive curl|bash session — resolve it explicitly.
+_LDCONFIG=$(command -v ldconfig 2>/dev/null \
+    || { for d in /sbin /usr/sbin /usr/local/sbin; do [[ -x "$d/ldconfig" ]] && echo "$d/ldconfig" && break; done; })
+
+_has_lib() {
+    local soname="$1" pkg="${2:-}"
+    # Primary: scan the shared-library cache
+    if [[ -n "$_LDCONFIG" ]] && "$_LDCONFIG" -p 2>/dev/null | grep -q "${soname}"; then
+        return 0
+    fi
+    # Fallback: dpkg-query (Debian / Ubuntu)
+    if [[ -n "$pkg" ]] && \
+       dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null | grep -q 'install ok installed'; then
+        return 0
+    fi
+    return 1
+}
 
 SEM_VARIANT="sem-linux-x86_64"
 SEM_LABEL="sem (image crate backend)"
 
-if ldconfig -p 2>/dev/null | grep -q 'libvips'; then
+if _has_lib 'libvips' 'libvips42' || _has_lib 'libvips' 'libvips42t64'; then
     SEM_VARIANT="sem-linux-x86_64-vips"
     SEM_LABEL="sem (vips backend — preferred)"
 fi
@@ -120,25 +160,6 @@ fi
 
 MISSING_DEPS=()
 
-# ldconfig lives in /sbin or /usr/sbin which may not be on PATH in a
-# non-interactive curl|bash session — resolve it explicitly.
-_LDCONFIG=$(command -v ldconfig 2>/dev/null \
-    || { for d in /sbin /usr/sbin /usr/local/sbin; do [[ -x "$d/ldconfig" ]] && echo "$d/ldconfig" && break; done; })
-
-_has_lib() {
-    local soname="$1" pkg="${2:-}"
-    # Primary: scan the shared-library cache
-    if [[ -n "$_LDCONFIG" ]] && "$_LDCONFIG" -p 2>/dev/null | grep -q "${soname}"; then
-        return 0
-    fi
-    # Fallback: dpkg-query (Debian / Ubuntu)
-    if [[ -n "$pkg" ]] && \
-       dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null | grep -q 'install ok installed'; then
-        return 0
-    fi
-    return 1
-}
-
 if ! _has_lib 'libgtk-4' 'libgtk-4-1'; then
     MISSING_DEPS+=("libgtk-4-1")
 fi
@@ -147,12 +168,7 @@ if ! _has_lib 'libadwaita-1' 'libadwaita-1-0'; then
 fi
 if [[ "$SEM_VARIANT" == *"-vips" ]]; then
     if ! _has_lib 'libvips' 'libvips42' && ! _has_lib 'libvips' 'libvips42t64'; then
-        # Suggest the right package name for the running Ubuntu/Debian version
-        if grep -q "24\." /etc/os-release 2>/dev/null; then
-            MISSING_DEPS+=("libvips42t64")
-        else
-            MISSING_DEPS+=("libvips42")
-        fi
+        MISSING_DEPS+=("$(_recommended_vips_pkg)")
     fi
 fi
 

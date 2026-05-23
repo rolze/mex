@@ -61,8 +61,9 @@ The main browser opens using the confirmed database, media root, and views root.
    - **Settings**: all four config values (`target_root`, `views_root`, `db_path`,
      `mpv_path`), plus the active image protocol (e.g. kitty / sixel / halfblocks).
    - **Database**: file size and total file count from `db_path`.
-   - **Dependencies**: `sem`, `mpv`, `socat` — each shows ✓ with resolved path when
-     found on PATH, or ✗ with an installation hint when missing.
+   - **Dependencies**: `sem` and `mpv` are always shown with ✓ (resolved path) or ✗
+     (install hint). `socat` is shown only in Windows/WSL bridge mode (`mpv_path`
+     points to `*.exe`), where it is required for the bridge.
 3. Pressing **Esc** closes the version screen and returns to the media list.
 4. All other keys are ignored while the version screen is active.
 

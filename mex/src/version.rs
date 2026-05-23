@@ -54,11 +54,7 @@ pub fn collect(
 
     let db_file_size = stat_file_size(db_path);
 
-    let dep_statuses = vec![
-        probe_dep("sem", &["sem"]),
-        probe_dep("mpv", &["mpv"]),
-        probe_dep("socat", &["socat"]),
-    ];
+    let dep_statuses = collect_dep_statuses(mpv_path);
 
     VersionInfo {
         mex_version,
@@ -157,6 +153,18 @@ fn human_bytes(n: u64) -> String {
 }
 
 /// Check if any of `names` resolves to an executable on PATH.
+fn collect_dep_statuses(mpv_path: &str) -> Vec<DepStatus> {
+    let mut deps = vec![probe_dep("sem", &["sem"]), probe_dep("mpv", &["mpv"])];
+    if requires_socat_for_mpv_bridge(mpv_path) {
+        deps.push(probe_dep("socat", &["socat"]));
+    }
+    deps
+}
+
+fn requires_socat_for_mpv_bridge(mpv_path: &str) -> bool {
+    mpv_path.trim().to_ascii_lowercase().ends_with(".exe")
+}
+
 fn probe_dep(label: &str, names: &[&str]) -> DepStatus {
     for name in names {
         if let Some(path) = which(name) {
@@ -191,9 +199,7 @@ fn install_hint(name: &str) -> String {
     match name {
         "sem" => "not found — install from: https://github.com/rolze/mex".to_string(),
         "mpv" => "not found — install with: sudo apt install mpv".to_string(),
-        "socat" => {
-            "not found — required for mpv IPC; install with: sudo apt install socat".to_string()
-        }
+        "socat" => "not found — only needed for Windows/WSL2 mpv bridge; install with: sudo apt install socat".to_string(),
         _ => format!("not found — install {name}"),
     }
 }
@@ -204,5 +210,32 @@ fn abbreviate_home(path: &str, home: &str) -> String {
         format!("~{}", &path[home.len()..])
     } else {
         path.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{install_hint, requires_socat_for_mpv_bridge};
+
+    #[test]
+    fn requires_socat_for_windows_mpv_path() {
+        assert!(requires_socat_for_mpv_bridge(
+            "/mnt/c/Program Files/MPV Player/mpv.exe"
+        ));
+        assert!(requires_socat_for_mpv_bridge(
+            r"C:\Program Files\MPV Player\mpv.EXE"
+        ));
+    }
+
+    #[test]
+    fn does_not_require_socat_for_native_linux_mpv_path() {
+        assert!(!requires_socat_for_mpv_bridge("mpv"));
+        assert!(!requires_socat_for_mpv_bridge("/usr/bin/mpv"));
+    }
+
+    #[test]
+    fn socat_hint_is_scoped_to_windows_bridge_mode() {
+        let hint = install_hint("socat");
+        assert!(hint.contains("Windows/WSL2"));
     }
 }
