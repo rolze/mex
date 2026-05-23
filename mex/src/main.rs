@@ -335,31 +335,31 @@ fn run_loop(
                     continue;
                 }
                 // Handle remove-slug progress lock screen first.
-                match &app.remove_slug_state {
+                match &app.remove_slug.state {
                     app::RemoveSlugState::Running { .. } => {
                         continue; // swallow all keys while repair is running
                     }
                     app::RemoveSlugState::Done(_) => {
-                        app.remove_slug_state = app::RemoveSlugState::Idle;
+                        app.remove_slug.state = app::RemoveSlugState::Idle;
                         // fall through so the keypress also registers normally
                     }
                     app::RemoveSlugState::Idle => {}
                 }
 
                 // Handle fix-os-time progress lock screen.
-                match &app.fix_os_time_state {
+                match &app.fix_os_time.state {
                     app::FixOsTimeState::Running { .. } => {
                         continue; // swallow all keys while repair is running
                     }
                     app::FixOsTimeState::Done(_) => {
-                        app.fix_os_time_state = app::FixOsTimeState::Idle;
+                        app.fix_os_time.state = app::FixOsTimeState::Idle;
                         // fall through so the keypress also registers normally
                     }
                     app::FixOsTimeState::Idle => {}
                 }
 
                 // Handle empty-trash preview / deleting screens.
-                match &app.empty_trash_state {
+                match &app.empty_trash.state {
                     app::EmptyTrashState::Preview { ref files, .. } => {
                         let total = files.len();
                         match key.code {
@@ -394,14 +394,14 @@ fn run_loop(
                         continue; // swallow all keys while deletion is running
                     }
                     app::EmptyTrashState::Done(_) => {
-                        app.empty_trash_state = app::EmptyTrashState::Idle;
+                        app.empty_trash.state = app::EmptyTrashState::Idle;
                         // fall through
                     }
                     app::EmptyTrashState::Idle => {}
                 }
 
                 // Handle import-preview / import-done screens first.
-                match &app.import_state {
+                match &app.import.state {
                     app::ImportState::Preview { ref entries, .. } => {
                         let has_pending = entries
                             .iter()
@@ -442,13 +442,13 @@ fn run_loop(
                         continue; // swallow other keys while busy
                     }
                     app::ImportState::Done(_) => {
-                        app.import_state = app::ImportState::Idle;
+                        app.import.state = app::ImportState::Idle;
                         // fall through so the keypress also registers normally
                     }
                     app::ImportState::Idle => {}
                 }
                 // Any keypress clears a displayed status message.
-                app.status_message = None;
+                app.cmd.status_message = None;
 
                 // Caption-edit mode: swallow all keys and route to caption handlers.
                 if app.caption_edit.is_some() {
@@ -472,14 +472,14 @@ fn run_loop(
 
                     // Esc: exit filter mode → cancel command → clear selection → close preview → clear filter
                     (_, KeyCode::Esc) => {
-                        if app.filter_mode {
+                        if app.filter.mode {
                             app.exit_filter_mode();
-                        } else if app.command.is_some() {
+                        } else if app.cmd.input.is_some() {
                             app.cancel_command();
                         } else if !app.selection.is_empty() {
                             app.clear_selection();
-                        } else if app.preview_open {
-                            app.preview_open = false;
+                        } else if app.image.preview_open {
+                            app.image.preview_open = false;
                         } else {
                             app.clear_filter();
                         }
@@ -492,22 +492,22 @@ fn run_loop(
                     (KeyModifiers::SHIFT, KeyCode::Home) => app.jump_slug_day_prev(),
                     (KeyModifiers::SHIFT, KeyCode::End) => app.jump_slug_day_next(),
                     (_, KeyCode::Down) => {
-                        if app.tag_type_typing {
+                        if app.filter.tag_type_typing {
                             app.cycle_type_suggestion_down();
-                        } else if app.tag_typing {
+                        } else if app.filter.tag_typing {
                             app.cycle_suggestion_down();
-                        } else if app.command.is_some() {
+                        } else if app.cmd.input.is_some() {
                             app.cycle_command_suggestion_down();
                         } else {
                             app.move_down();
                         }
                     }
                     (_, KeyCode::Up) => {
-                        if app.tag_type_typing {
+                        if app.filter.tag_type_typing {
                             app.cycle_type_suggestion_up();
-                        } else if app.tag_typing {
+                        } else if app.filter.tag_typing {
                             app.cycle_suggestion_up();
-                        } else if app.command.is_some() {
+                        } else if app.cmd.input.is_some() {
                             app.cycle_command_suggestion_up();
                         } else {
                             app.move_up();
@@ -528,26 +528,26 @@ fn run_loop(
 
                     // Preview toggle / tag confirm / command execute
                     (_, KeyCode::Enter) => {
-                        if app.tag_type_typing {
+                        if app.filter.tag_type_typing {
                             app.confirm_type_filter();
-                        } else if app.tag_typing {
+                        } else if app.filter.tag_typing {
                             app.confirm_tag();
-                        } else if app.command.is_some() {
+                        } else if app.cmd.input.is_some() {
                             app.execute_command();
                         } else {
                             app.toggle_preview();
                         }
                     }
-                    (_, KeyCode::Char(' ')) if app.command.is_none() => app.toggle_selection(),
+                    (_, KeyCode::Char(' ')) if app.cmd.input.is_none() => app.toggle_selection(),
 
                     // Trash / Keep
-                    (_, KeyCode::Delete) if app.command.is_none() => app.trash_selected(),
-                    (_, KeyCode::Insert) if app.command.is_none() => app.keep_selected(),
+                    (_, KeyCode::Delete) if app.cmd.input.is_none() => app.trash_selected(),
+                    (_, KeyCode::Insert) if app.cmd.input.is_none() => app.keep_selected(),
 
                     // F2: enter inline caption editor (normal mode only, list non-empty).
                     (_, KeyCode::F(2))
-                        if app.command.is_none()
-                            && !app.filter_mode
+                        if app.cmd.input.is_none()
+                            && !app.filter.mode
                             && !app.filtered.is_empty() =>
                     {
                         app.enter_caption_edit()
@@ -555,15 +555,15 @@ fn run_loop(
 
                     // Backspace: pop from command buffer or filter (filter only in filter mode)
                     (_, KeyCode::Backspace) => {
-                        if app.command.is_some() {
+                        if app.cmd.input.is_some() {
                             app.pop_command_char();
-                        } else if app.filter_mode {
+                        } else if app.filter.mode {
                             // If nothing left to delete, Backspace exits filter mode
-                            if app.filter_text.is_empty()
-                                && app.tag_filters.is_empty()
-                                && !app.tag_typing
-                                && app.tag_type_filters.is_empty()
-                                && !app.tag_type_typing
+                            if app.filter.text.is_empty()
+                                && app.filter.tag_filters.is_empty()
+                                && !app.filter.tag_typing
+                                && app.filter.tag_type_filters.is_empty()
+                                && !app.filter.tag_type_typing
                             {
                                 app.exit_filter_mode();
                             } else {
@@ -573,14 +573,14 @@ fn run_loop(
                     }
 
                     // Tab: complete current tag/command suggestion (only in filter or command mode)
-                    (_, KeyCode::Tab) if app.filter_mode || app.command.is_some() => {
+                    (_, KeyCode::Tab) if app.filter.mode || app.cmd.input.is_some() => {
                         app.tab_complete()
                     }
 
                     // ':' enters command mode (unless already in command mode, where it
                     // is a literal character — needed for paths like mtp:host=…)
                     (_, KeyCode::Char(':')) => {
-                        if app.command.is_some() {
+                        if app.cmd.input.is_some() {
                             app.push_command_char(':');
                         } else {
                             app.enter_command_mode();
@@ -589,7 +589,7 @@ fn run_loop(
 
                     // '/' enters filter mode (or is a literal char in command mode).
                     (_, KeyCode::Char('/')) => {
-                        if app.command.is_some() {
+                        if app.cmd.input.is_some() {
                             app.push_command_char('/');
                         } else {
                             app.enter_filter_mode();
@@ -610,16 +610,16 @@ fn run_loop(
                     // p: type-aware open — image → sem (UC-15), video → mpv (UC-13)
                     // s: toggle mpv pause/resume — requires mpv to be running
                     // j/k: next/prev video in mpv — require mpv to be running
-                    (_, KeyCode::Char('p')) if app.command.is_none() && !app.filter_mode => {
+                    (_, KeyCode::Char('p')) if app.cmd.input.is_none() && !app.filter.mode => {
                         app.view_selected()
                     }
-                    (_, KeyCode::Char('s')) if app.command.is_none() && !app.filter_mode => {
+                    (_, KeyCode::Char('s')) if app.cmd.input.is_none() && !app.filter.mode => {
                         app.mpv_play_pause()
                     }
-                    (_, KeyCode::Char('j')) if app.command.is_none() && !app.filter_mode => {
+                    (_, KeyCode::Char('j')) if app.cmd.input.is_none() && !app.filter.mode => {
                         app.view_next_video()
                     }
-                    (_, KeyCode::Char('k')) if app.command.is_none() && !app.filter_mode => {
+                    (_, KeyCode::Char('k')) if app.cmd.input.is_none() && !app.filter.mode => {
                         app.view_prev_video()
                     }
 
@@ -629,9 +629,9 @@ fn run_loop(
                     // - # / @ from normal mode → auto-enter filter mode then feed char
                     // - anything else in normal mode → ignored (freed for future bindings)
                     (_, KeyCode::Char(c)) => {
-                        if app.command.is_some() {
+                        if app.cmd.input.is_some() {
                             app.push_command_char(c);
-                        } else if app.filter_mode {
+                        } else if app.filter.mode {
                             app.push_filter_char(c);
                         } else if c == '#' || c == '@' {
                             app.enter_filter_mode();

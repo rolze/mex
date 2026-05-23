@@ -17,7 +17,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
     // Import screens take over the full area (except filter bar).
-    match &app.import_state {
+    match &app.import.state {
         ImportState::Scanning {
             scanned,
             current_file,
@@ -66,7 +66,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         done,
         total,
         current,
-    } = &app.remove_slug_state
+    } = &app.remove_slug.state
     {
         let done = *done;
         let total = *total;
@@ -80,7 +80,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         done,
         total,
         current,
-    } = &app.fix_os_time_state
+    } = &app.fix_os_time.state
     {
         let done = *done;
         let total = *total;
@@ -90,7 +90,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Empty-trash preview / deleting overlay takes over the full screen.
-    match &app.empty_trash_state {
+    match &app.empty_trash.state {
         EmptyTrashState::Preview { .. } => {
             draw_empty_trash_preview(frame, app, area);
             return;
@@ -134,7 +134,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let status_area = bottom_chunks[1];
 
     // Main: left list + right preview (conditionally)
-    let main_chunks = if app.preview_open {
+    let main_chunks = if app.image.preview_open {
         Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
@@ -151,7 +151,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     draw_list(frame, app, list_area);
 
-    if app.preview_open {
+    if app.image.preview_open {
         let preview_area = main_chunks[1];
         draw_preview(frame, app, preview_area);
     }
@@ -431,8 +431,8 @@ fn draw_list(frame: &mut Frame, app: &App, area: Rect) {
             }
 
             // Collect filter text match ranges for bg highlight (skip on cursor row).
-            let filter_matches: Vec<(usize, usize)> = if !is_cursor && !app.filter_text.is_empty() {
-                let needle = app.filter_text.to_lowercase();
+            let filter_matches: Vec<(usize, usize)> = if !is_cursor && !app.filter.text.is_empty() {
+                let needle = app.filter.text.to_lowercase();
                 let haystack = filename_padded.to_lowercase();
                 if needle.contains('*') {
                     // Wildcard: highlight the matched segments from the first valid match.
@@ -618,7 +618,7 @@ fn truncate_end(s: &str, max_chars: usize) -> String {
 fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" Preview [{}] ", app.image_protocol_name));
+        .title(format!(" Preview [{}] ", app.image.protocol_name));
 
     // Split: metadata at top (3 lines) + image below
     let inner = block.inner(area);
@@ -715,11 +715,11 @@ fn draw_preview(frame: &mut Frame, app: &mut App, area: Rect) {
     let image_area = chunks[1];
     if image_area.width > 2 && image_area.height > 2 {
         let img_widget = StatefulImage::<ThreadProtocol>::default();
-        frame.render_stateful_widget(img_widget, image_area, &mut app.image_state);
+        frame.render_stateful_widget(img_widget, image_area, &mut app.image.protocol);
 
         // Spinner overlay while encoding is in flight.
-        if app.is_loading {
-            let spin_char = SPINNER[app.spinner_frame % SPINNER.len()];
+        if app.image.is_loading {
+            let spin_char = SPINNER[app.image.spinner_frame % SPINNER.len()];
             let label = format!(" {} loading… ", spin_char);
             let label_width = label.chars().count() as u16;
             // Centre the spinner in the image area.
@@ -756,13 +756,13 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let title = if app.command.is_some() {
+    let title = if app.cmd.input.is_some() {
         " Command "
     } else {
         " Filter "
     };
 
-    let line = if let Some(ref cmd) = app.command {
+    let line = if let Some(ref cmd) = app.cmd.input {
         let mut spans: Vec<Span> = vec![Span::styled(
             format!(":{cmd}"),
             Style::default()
@@ -842,7 +842,7 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
 
         // Path-availability hint for `:import <path>` (shown after cursor).
         if cmd.starts_with("import ") {
-            match &app.import_path_hint {
+            match &app.cmd.import_path_hint {
                 Some(crate::app::ImportPathHint::Valid) => {
                     spans.push(Span::styled("  ✓", Style::default().fg(Color::Green)));
                 }
@@ -892,17 +892,17 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         // ── text ──────────────────────────────────────────────────────────────
         // Show the / prefix whenever filter_mode is active (even with empty text)
         // so the user has a clear visual cue that filter editing is active.
-        if app.filter_mode || !app.filter_text.is_empty() {
-            spans.push(Span::styled(format!("/{}", app.filter_text), white));
-            if !app.filter_text.is_empty() {
+        if app.filter.mode || !app.filter.text.is_empty() {
+            spans.push(Span::styled(format!("/{}", app.filter.text), white));
+            if !app.filter.text.is_empty() {
                 need_and = true;
             }
         }
 
         // ── @type group ───────────────────────────────────────────────────────
         // Count: confirmed + maybe one being typed
-        let typing_type = app.tag_type_typing;
-        let type_count = app.tag_type_filters.len() + if typing_type { 1 } else { 0 };
+        let typing_type = app.filter.tag_type_typing;
+        let type_count = app.filter.tag_type_filters.len() + if typing_type { 1 } else { 0 };
 
         if type_count > 0 {
             if need_and {
@@ -913,7 +913,7 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                 spans.push(Span::styled("(", dim));
             }
 
-            for (i, ty) in app.tag_type_filters.iter().enumerate() {
+            for (i, ty) in app.filter.tag_type_filters.iter().enumerate() {
                 if i > 0 {
                     spans.push(Span::styled(" OR ", dim));
                 }
@@ -921,13 +921,13 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             }
 
             if typing_type {
-                if !app.tag_type_filters.is_empty() {
+                if !app.filter.tag_type_filters.is_empty() {
                     spans.push(Span::styled(" OR ", dim));
                 }
-                spans.push(Span::styled(format!("@{}", app.tag_type_input), mag));
+                spans.push(Span::styled(format!("@{}", app.filter.tag_type_input), mag));
                 // dim autocomplete suffix
                 if let Some(suggestion) = app.current_type_suggestion() {
-                    let input_chars = app.tag_type_input.chars().count();
+                    let input_chars = app.filter.tag_type_input.chars().count();
                     let sug_chars = suggestion.chars().count();
                     if sug_chars > input_chars {
                         let suffix: String = suggestion.chars().skip(input_chars).collect();
@@ -943,8 +943,8 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         // ── #tag group ────────────────────────────────────────────────────────
-        let typing_tag = app.tag_typing;
-        let tag_count = app.tag_filters.len() + if typing_tag { 1 } else { 0 };
+        let typing_tag = app.filter.tag_typing;
+        let tag_count = app.filter.tag_filters.len() + if typing_tag { 1 } else { 0 };
 
         if tag_count > 0 {
             if need_and {
@@ -955,7 +955,7 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                 spans.push(Span::styled("(", dim));
             }
 
-            for (i, tag) in app.tag_filters.iter().enumerate() {
+            for (i, tag) in app.filter.tag_filters.iter().enumerate() {
                 if i > 0 {
                     spans.push(Span::styled(" OR ", dim));
                 }
@@ -963,13 +963,13 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             }
 
             if typing_tag {
-                if !app.tag_filters.is_empty() {
+                if !app.filter.tag_filters.is_empty() {
                     spans.push(Span::styled(" OR ", dim));
                 }
-                spans.push(Span::styled(format!("#{}", app.tag_input), cyan));
+                spans.push(Span::styled(format!("#{}", app.filter.tag_input), cyan));
                 // dim autocomplete suffix
                 if let Some(suggestion) = app.current_suggestion() {
-                    let input_chars = app.tag_input.chars().count();
+                    let input_chars = app.filter.tag_input.chars().count();
                     let sug_chars = suggestion.chars().count();
                     if sug_chars > input_chars {
                         let suffix: String = suggestion.chars().skip(input_chars).collect();
@@ -983,13 +983,13 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
             }
         }
 
-        if app.filter_mode {
+        if app.filter.mode {
             spans.push(Span::raw("_"));
         }
         Line::from(spans)
     };
 
-    let border_style = if app.filter_mode || app.command.is_some() {
+    let border_style = if app.filter.mode || app.cmd.input.is_some() {
         Style::default().fg(Color::Yellow)
     } else {
         Style::default()
@@ -1010,7 +1010,7 @@ fn draw_status_box(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(block, area);
 
     // Transient status message takes priority over live mpv state.
-    if let Some(ref msg) = app.status_message {
+    if let Some(ref msg) = app.cmd.status_message {
         let available = inner.width as usize;
         let truncated = truncate_end(msg, available);
         frame.render_widget(
@@ -1021,7 +1021,7 @@ fn draw_status_box(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     // Live mpv playback state.
-    let (icon, text, color): (&str, &str, Color) = match &app.mpv_status {
+    let (icon, text, color): (&str, &str, Color) = match &app.mpv.status {
         MpvStatus::Disconnected => ("", "—", Color::DarkGray),
         MpvStatus::Idle => ("⏹", "idle", Color::DarkGray),
         MpvStatus::Playing {
@@ -1059,7 +1059,7 @@ fn draw_import_scanning(
     scanned: usize,
     current_file: &str,
 ) {
-    let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
+    let spinner = SPINNER[app.image.spinner_frame % SPINNER.len()];
     let file_line = if current_file.is_empty() {
         String::new()
     } else {
@@ -1078,7 +1078,7 @@ fn draw_import_scanning(
 
 /// Full-screen dry-run preview: stats header + scrollable table of planned copies.
 fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
-    let (entries, scroll) = match &app.import_state {
+    let (entries, scroll) = match &app.import.state {
         ImportState::Preview { entries, scroll } => (entries, *scroll),
         _ => return,
     };
@@ -1163,7 +1163,7 @@ fn draw_import_preview(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Table of pending + unknown entries
     let list_height = chunks[1].height.saturating_sub(2) as usize;
-    app.import_list_height = list_height;
+    app.import.list_height = list_height;
     let visible_count = entries
         .iter()
         .filter(|e| e.status != ImportStatus::Skipped)
@@ -1275,7 +1275,7 @@ fn draw_import_copying(
     skipped_dup: usize,
     errors: usize,
 ) {
-    let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
+    let spinner = SPINNER[app.image.spinner_frame % SPINNER.len()];
     let pct = (done * 100).checked_div(total).unwrap_or(0);
 
     // ASCII progress bar
@@ -1330,7 +1330,7 @@ fn draw_remove_slug_progress(
     current: &str,
     title: &str,
 ) {
-    let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
+    let spinner = SPINNER[app.image.spinner_frame % SPINNER.len()];
     let pct = (done * 100).checked_div(total).unwrap_or(0);
 
     let bar_width = (area.width as usize).saturating_sub(8).min(50);
@@ -1357,7 +1357,7 @@ fn draw_remove_slug_progress(
 
 /// Full-screen preview of trashed files to be permanently deleted by `:empty-trash`.
 fn draw_empty_trash_preview(frame: &mut Frame, app: &mut App, area: Rect) {
-    let (files, scroll) = match &app.empty_trash_state {
+    let (files, scroll) = match &app.empty_trash.state {
         EmptyTrashState::Preview { files, scroll } => (files.clone(), *scroll),
         _ => return,
     };
@@ -1394,7 +1394,7 @@ fn draw_empty_trash_preview(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // File list
     let list_height = chunks[1].height.saturating_sub(2) as usize;
-    app.import_list_height = list_height;
+    app.import.list_height = list_height;
 
     let width = chunks[1].width.saturating_sub(4) as usize;
     let items: Vec<ListItem> = files
@@ -1442,7 +1442,7 @@ fn draw_empty_trash_preview(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Full-screen overlay shown while `:empty-trash` is deleting files.
 fn draw_empty_trash_deleting(frame: &mut Frame, app: &App, area: Rect, done: usize, total: usize) {
-    let spinner = SPINNER[app.spinner_frame % SPINNER.len()];
+    let spinner = SPINNER[app.image.spinner_frame % SPINNER.len()];
     let pct = (done * 100).checked_div(total).unwrap_or(0);
 
     let bar_width = (area.width as usize).saturating_sub(8).min(50);

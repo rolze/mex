@@ -32,6 +32,9 @@ file list on the left, image preview on the right.
 mex/src/
 ├── main.rs      Process bootstrap: terminal setup, channels, threads, event loop
 ├── app.rs       Application state, key handling, navigation, command execution
+│               App holds cohesive sub-structs: FilterState, CommandState,
+│               ImageState, MpvState, and four background-worker structs
+│               (ImportWorker, RemoveSlugWorker, FixOsTimeWorker, EmptyTrashWorker).
 ├── ui.rs        Pure rendering: layout, list, preview pane, overlays
 ├── db.rs        SQLite queries — accepts a borrowed Connection, never opens one
 ├── import.rs    Media ingestion pipeline (date/slug derivation, dedup, counters)
