@@ -78,6 +78,25 @@ Operates on the selected file(s) (or cursor file). Groups them under a new or ex
 slug. The slug is always read from and written to the filename; no DB slug column is
 touched.
 
+#### Slug input behaviour
+
+The slug argument is **normalized character-by-character while typing**, matching the
+caption editor (UC-14):
+
+- `Space` → `-`; `ä/Ä` → `ae`; `ö/Ö` → `oe`; `ü/Ü` → `ue`; `ß` → `ss`
+- Only `a-z`, `0-9`, and `-` are accepted. Other characters are rejected with
+  an "Invalid character for slug" warning.
+- Leading and consecutive hyphens are silently skipped.
+- Maximum **42 characters**. A counter `[N/42]` is shown in the command bar
+  after the cursor: `:slugify my-event_ [8/42]`
+- When no argument has been typed yet, a dim `<slug>` placeholder is shown.
+
+At execution:
+- Trailing hyphens are trimmed.
+- A slug shorter than **3 characters** is rejected
+  (`slugify: slug must be at least 3 characters`), matching the REGEXP.md
+  ambiguity rule for `DD` vs `<slug>`.
+
 #### Guards
 
 Both checks run before any rename is executed:

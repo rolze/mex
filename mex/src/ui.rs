@@ -849,10 +849,23 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
                 if arg.trim().is_empty() {
                     spans.push(Span::styled("[name …]", dim));
                 }
+            } else if let Some(arg) = cmd.strip_prefix("slugify ") {
+                if arg.trim().is_empty() {
+                    spans.push(Span::styled("<slug>", dim));
+                }
             }
         }
 
         spans.push(Span::raw("_"));
+
+        // Show [N/42] counter for slugify arg.
+        if let Some(slug_part) = cmd.strip_prefix("slugify ") {
+            let n = slug_part.chars().count();
+            spans.push(Span::styled(
+                format!(" [{n}/42]"),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
 
         // Path-availability hint for `:import <path>` (shown after cursor).
         if cmd.starts_with("import ") {

@@ -168,7 +168,48 @@ pub struct CaptionEdit {
     pub pre_selected: bool,
 }
 
-const CAPTION_MAX: usize = 42;
+/// Maximum character count for any kebab-case filename component (caption or slug arg).
+const FILENAME_COMPONENT_MAX: usize = 42;
+
+/// Result of normalizing one character for a kebab-case filename component.
+pub enum KebabNorm {
+    /// Append this string to the current text.
+    Append(String),
+    /// Skip silently (e.g. leading or consecutive hyphen).
+    Skip,
+    /// Invalid character — caller should warn the user.
+    Invalid,
+}
+
+/// Normalize one character for a kebab-case filename component (caption or slug).
+///
+/// Rules:
+/// - space → `-`; ä/Ä → `ae`; ö/Ö → `oe`; ü/Ü → `ue`; ß → `ss`
+/// - `a-z`, `0-9`, `-` are accepted (lowercased)
+/// - Leading or consecutive hyphens are silently [`KebabNorm::Skip`]ped
+/// - Anything else returns [`KebabNorm::Invalid`]
+pub fn kebab_normalize_char(text_so_far: &str, c: char) -> KebabNorm {
+    let s: String = match c {
+        ' ' => "-".to_string(),
+        'ä' | 'Ä' => "ae".to_string(),
+        'ö' | 'Ö' => "oe".to_string(),
+        'ü' | 'Ü' => "ue".to_string(),
+        'ß' => "ss".to_string(),
+        _ => {
+            let lower = c.to_ascii_lowercase();
+            if lower.is_ascii_alphanumeric() || lower == '-' {
+                lower.to_string()
+            } else {
+                return KebabNorm::Invalid;
+            }
+        }
+    };
+    // Suppress leading or consecutive hyphens.
+    if s == "-" && (text_so_far.is_empty() || text_so_far.ends_with('-')) {
+        return KebabNorm::Skip;
+    }
+    KebabNorm::Append(s)
+}
 
 const CACHE_MAX: usize = 30;
 const IMAGE_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
@@ -803,6 +844,43 @@ impl App {
     }
 
     pub fn push_command_char(&mut self, c: char) {
+        // When typing the slug arg for `:slugify`, apply kebab normalization in-place.
+        let in_slugify_arg = self
+            .cmd
+            .input
+            .as_deref()
+            .map(|cmd| cmd.starts_with("slugify "))
+            .unwrap_or(false);
+
+        if in_slugify_arg {
+            let slug_so_far = self
+                .cmd
+                .input
+                .as_deref()
+                .and_then(|cmd| cmd.strip_prefix("slugify "))
+                .unwrap_or("")
+                .to_string();
+
+            match kebab_normalize_char(&slug_so_far, c) {
+                KebabNorm::Append(s) => {
+                    let remaining =
+                        FILENAME_COMPONENT_MAX.saturating_sub(slug_so_far.chars().count());
+                    if remaining > 0 {
+                        let to_add: String = s.chars().take(remaining).collect();
+                        if let Some(ref mut cmd) = self.cmd.input {
+                            cmd.push_str(&to_add);
+                        }
+                    }
+                }
+                KebabNorm::Skip => {} // silently skip leading/consecutive hyphen
+                KebabNorm::Invalid => {
+                    self.cmd.status_message = Some("Invalid character for slug".into());
+                }
+            }
+            self.cmd.suggestion_idx = 0;
+            return;
+        }
+
         if let Some(ref mut cmd) = self.cmd.input {
             cmd.push(c);
             self.cmd.suggestion_idx = 0;
@@ -865,37 +943,23 @@ impl App {
             return;
         };
 
-        // On-the-fly transliteration.
-        let translated: Option<&str> = match c {
-            ' ' => Some("-"),
-            'ä' | 'Ä' => Some("ae"),
-            'ö' | 'Ö' => Some("oe"),
-            'ü' | 'Ü' => Some("ue"),
-            'ß' => Some("ss"),
-            _ => None,
-        };
-
-        if let Some(s) = translated {
-            for ch in s.chars() {
-                if ed.text.chars().count() < CAPTION_MAX {
-                    ed.text.push(ch);
+        match kebab_normalize_char(&ed.text, c) {
+            KebabNorm::Append(s) => {
+                for ch in s.chars() {
+                    if ed.text.chars().count() < FILENAME_COMPONENT_MAX {
+                        ed.text.push(ch);
+                    }
                 }
+                ed.pre_selected = false;
             }
-            ed.pre_selected = false;
-            return;
+            KebabNorm::Skip => {
+                // Silently skip (leading/consecutive hyphen).
+                ed.pre_selected = false;
+            }
+            KebabNorm::Invalid => {
+                self.cmd.status_message = Some("Invalid character for filename".into());
+            }
         }
-
-        // Validate: only a-z, 0-9, '-'.
-        let lower = c.to_ascii_lowercase();
-        if !lower.is_ascii_alphanumeric() && lower != '-' {
-            self.cmd.status_message = Some("Invalid character for filename".into());
-            return;
-        }
-
-        if ed.text.chars().count() < CAPTION_MAX {
-            ed.text.push(lower);
-        }
-        ed.pre_selected = false;
     }
 
     /// Remove the last character from the caption editor.
@@ -1226,9 +1290,14 @@ impl App {
         }
 
         if let Some(slug_arg) = trimmed.strip_prefix("slugify") {
-            let slug = slug_arg.trim();
+            let slug = slug_arg.trim().trim_matches('-');
             if slug.is_empty() {
                 self.cmd.status_message = Some("slugify: slug argument required".into());
+                return;
+            }
+            if slug.chars().count() < 3 {
+                self.cmd.status_message =
+                    Some("slugify: slug must be at least 3 characters".into());
                 return;
             }
             self.slugify_selected(slug);
@@ -5282,5 +5351,59 @@ mod tests {
         app.clear_filter();
         assert!(!app.filter.mode);
         assert!(app.filter.text.is_empty());
+    }
+
+    // ── kebab_normalize_char tests ────────────────────────────────────────────
+
+    #[test]
+    fn kebab_normalise_lowercase_alphanumeric() {
+        assert!(matches!(kebab_normalize_char("foo", 'B'), KebabNorm::Append(s) if s == "b"));
+        assert!(matches!(kebab_normalize_char("foo", '3'), KebabNorm::Append(s) if s == "3"));
+        assert!(matches!(kebab_normalize_char("foo", 'z'), KebabNorm::Append(s) if s == "z"));
+    }
+
+    #[test]
+    fn kebab_normalise_transliteration() {
+        assert!(matches!(kebab_normalize_char("", 'ä'), KebabNorm::Append(s) if s == "ae"));
+        assert!(matches!(kebab_normalize_char("", 'Ä'), KebabNorm::Append(s) if s == "ae"));
+        assert!(matches!(kebab_normalize_char("", 'ö'), KebabNorm::Append(s) if s == "oe"));
+        assert!(matches!(kebab_normalize_char("", 'Ö'), KebabNorm::Append(s) if s == "oe"));
+        assert!(matches!(kebab_normalize_char("", 'ü'), KebabNorm::Append(s) if s == "ue"));
+        assert!(matches!(kebab_normalize_char("", 'Ü'), KebabNorm::Append(s) if s == "ue"));
+        assert!(matches!(kebab_normalize_char("", 'ß'), KebabNorm::Append(s) if s == "ss"));
+    }
+
+    #[test]
+    fn kebab_normalise_space_to_hyphen() {
+        assert!(matches!(kebab_normalize_char("foo", ' '), KebabNorm::Append(s) if s == "-"));
+    }
+
+    #[test]
+    fn kebab_normalise_leading_hyphen_skipped() {
+        // A hyphen at the start should be silently skipped.
+        assert!(matches!(kebab_normalize_char("", '-'), KebabNorm::Skip));
+        assert!(matches!(kebab_normalize_char("", ' '), KebabNorm::Skip)); // space→'-' at start
+    }
+
+    #[test]
+    fn kebab_normalise_double_hyphen_skipped() {
+        assert!(matches!(kebab_normalize_char("foo-", '-'), KebabNorm::Skip));
+        assert!(matches!(kebab_normalize_char("foo-", ' '), KebabNorm::Skip));
+    }
+
+    #[test]
+    fn kebab_normalise_invalid_char_error() {
+        assert!(matches!(
+            kebab_normalize_char("foo", '%'),
+            KebabNorm::Invalid
+        ));
+        assert!(matches!(
+            kebab_normalize_char("foo", '!'),
+            KebabNorm::Invalid
+        ));
+        assert!(matches!(
+            kebab_normalize_char("foo", '.'),
+            KebabNorm::Invalid
+        ));
     }
 }
