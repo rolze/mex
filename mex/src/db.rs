@@ -846,6 +846,23 @@ pub fn fix_caption(
         build_with_collision(new_caption, caps.name("day_coll").map(|m| m.as_str()));
 
     let mut final_path = base_new_path;
+
+    // Initial counter for the new path — determined before collision check.
+    // Slug-type: preserve the existing slug counter unchanged.
+    // Day-type + removing caption: result is a day-counter file.
+    // Day-type + adding/changing caption: plain caption = NULL counter.
+    let mut new_counter: Option<u32> = if caps.name("slug").is_some() {
+        caps.name("slug_cnt").and_then(|m| m.as_str().parse().ok())
+    } else if new_caption.is_empty() {
+        caps.name("day_cnt")
+            .map(|m| m.as_str())
+            .unwrap_or("0001")
+            .parse()
+            .ok()
+    } else {
+        None
+    };
+
     if final_path != target_path {
         let base_on_disk = Path::new(target_root).join(&final_path).exists();
         let base_in_db = !base_on_disk
@@ -918,21 +935,26 @@ pub fn fix_caption(
                 };
                 format!("{year}/{year}-{month}-{slug}-{counter:04}{cap_part}.{ext}")
             };
+            // Collision always stores the resolved counter.
+            new_counter = Some(counter);
         }
     }
 
     // Rename on disk
     rename_file_rel(Path::new(target_root), &target_path, &final_path)?;
 
-    // Update DB
+    // Update DB — counter must be kept accurate so that db_max queries by
+    // other commands (e.g. deslugify_batch) see the correct value.
+    // Plain caption files store NULL; all counter-bearing formats store the
+    // numeric value.
     let stored_caption = if new_caption.is_empty() {
         None
     } else {
         Some(new_caption)
     };
     conn.execute(
-        "UPDATE media SET target_path = ?1, caption_slug = ?2 WHERE id = ?3",
-        rusqlite::params![final_path, stored_caption, file_id],
+        "UPDATE media SET target_path = ?1, caption_slug = ?2, counter = ?3 WHERE id = ?4",
+        rusqlite::params![final_path, stored_caption, new_counter, file_id],
     )?;
 
     Ok(())
@@ -2567,6 +2589,84 @@ mod tests {
         assert_eq!(tp, "2025/2025-11-christmas-0003.jpg");
         assert!(!yr.join("2025-11-christmas-0001-old.jpg").exists());
         assert!(yr.join("2025-11-christmas-0003.jpg").exists());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fix_caption_clears_counter_for_plain_caption() {
+        // A day-counter file (counter=1) converted to a plain caption must
+        // have counter set to NULL in the DB so that deslugify's db_max query
+        // does not see a stale "1" and skip 0001.
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("mex_fc_clr_{}", std::process::id()));
+        let yr = dir.join("2026");
+        fs::create_dir_all(&yr).unwrap();
+        fs::write(yr.join("2026-01-04-0001.jpg"), b"data").unwrap();
+
+        let conn = make_fix_caption_db(&dir);
+        conn.execute(
+            "INSERT INTO media VALUES ('f1','2026/2026-01-04-0001.jpg',NULL,1,'moved')",
+            [],
+        )
+        .unwrap();
+
+        fix_caption(
+            &conn,
+            dir.to_str().unwrap(),
+            "f1",
+            "com-google-android-youtube",
+        )
+        .unwrap();
+
+        let (tp, ctr): (String, Option<u32>) = conn
+            .query_row(
+                "SELECT target_path, counter FROM media WHERE id='f1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tp, "2026/2026-01-04-com-google-android-youtube.jpg");
+        assert_eq!(ctr, None, "plain caption must have counter = NULL");
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn fix_caption_stores_collision_counter() {
+        // When the plain caption path is already taken, fix_caption falls back
+        // to a collision suffix (e.g. -2).  The stored counter must equal that
+        // collision number, not the old day counter.
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("mex_fc_coll2_{}", std::process::id()));
+        let yr = dir.join("2026");
+        fs::create_dir_all(&yr).unwrap();
+        fs::write(yr.join("2026-01-04-0001.jpg"), b"data").unwrap();
+        // Occupy the plain caption path on disk.
+        fs::write(yr.join("2026-01-04-snapshot.jpg"), b"other").unwrap();
+
+        let conn = make_fix_caption_db(&dir);
+        conn.execute(
+            "INSERT INTO media VALUES ('f1','2026/2026-01-04-0001.jpg',NULL,1,'moved')",
+            [],
+        )
+        .unwrap();
+
+        fix_caption(&conn, dir.to_str().unwrap(), "f1", "snapshot").unwrap();
+
+        let (tp, ctr): (String, Option<u32>) = conn
+            .query_row(
+                "SELECT target_path, counter FROM media WHERE id='f1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tp, "2026/2026-01-04-snapshot-2.jpg");
+        assert_eq!(
+            ctr,
+            Some(2),
+            "collision caption must store the collision counter"
+        );
 
         fs::remove_dir_all(&dir).ok();
     }

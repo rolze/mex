@@ -26,10 +26,11 @@ According to the strict filename convention defined in `../REGEXP.md`, each file
      * A `_` cursor indicates the current typing position.
      * The filter bar shows: `F2: editing caption  —  ESC cancel  ·  ENTER confirm`.
    * User cancels with `<ESC>` or confirms with `<ENTER>`.
-3. **Execution**: mex renames the physical file and updates the `target_path` and `caption_slug` in the DB.
+3. **Execution**: mex renames the physical file and updates `target_path`, `caption_slug`, and `counter` in the DB.
    * **Regex-based surgery**: The existing `target_path` is parsed using the regex from `REGEXP.md` to safely extract all structural components (year, month, day/slug, counter, existing caption, and extension).
    * The new caption is substituted into the parsed structure, and the filename is rebuilt cleanly according to its matched pattern format.
    * If the input was cleared, the caption segment and its preceding hyphen are omitted from the rebuilt filename.
+   * `counter` is set to match the new path format: `NULL` for a plain day-caption file (`yyyy-mm-dd-caption.ext`), the collision N for a `caption-N` file, or the numeric counter for a day-counter or slug-counter file.
    * If the calculated filename already exists on disk or in the DB (by another live file), the maximum occupied counter is pre-computed (one `MAX(counter)` DB query + one filesystem scan), and the path is generated directly at `max + 1`, adhering strictly to the formats defined in `REGEXP.md`.
 
 ### Notes
