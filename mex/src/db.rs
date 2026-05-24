@@ -1953,37 +1953,76 @@ pub fn fix_os_time(conn: &Connection, target_root: &str, file_id: &str) -> Resul
     Ok(true)
 }
 
-/// Mark media files as trashed (`status = 'trashed'`).
+/// Mark media files as trashed (`status = 'trashed'`) and assign the built-in
+/// `trash@mex` tag so they appear when the user filters with `#trash`.
 ///
 /// Returns the number of rows updated.
-pub fn trash_files(conn: &Connection, media_ids: &[String]) -> Result<usize> {
+pub fn trash_files(conn: &mut Connection, media_ids: &[String]) -> Result<usize> {
     if media_ids.is_empty() {
         return Ok(0);
     }
     let ph: String = std::iter::repeat_n("?", media_ids.len())
         .collect::<Vec<_>>()
         .join(",");
-    let updated = conn.execute(
+    let tx = conn.transaction()?;
+    let updated = tx.execute(
         &format!("UPDATE media SET status = 'trashed' WHERE id IN ({ph})"),
         rusqlite::params_from_iter(media_ids),
     )?;
+    // Ensure the 'trash@mex' tag exists (reuse existing id if already present).
+    let tag_id: i64 = match tx
+        .query_row(
+            "SELECT id FROM tags WHERE name = 'trash' COLLATE NOCASE AND type = 'mex' COLLATE NOCASE",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?
+    {
+        Some(id) => id,
+        None => {
+            tx.execute(
+                "INSERT INTO tags (name, type) VALUES ('trash', 'mex')",
+                [],
+            )?;
+            tx.last_insert_rowid()
+        }
+    };
+    {
+        let mut stmt = tx.prepare_cached(
+            "INSERT OR IGNORE INTO media_tags (media_id, tag_id) VALUES (?1, ?2)",
+        )?;
+        for media_id in media_ids {
+            stmt.execute(rusqlite::params![media_id, tag_id])?;
+        }
+    }
+    tx.commit()?;
     Ok(updated)
 }
 
-/// Restore trashed media files to normal (`status = 'moved'`).
+/// Restore trashed media files to normal (`status = 'moved'`) and remove the
+/// `trash@mex` tag that was applied when the file was trashed.
 ///
 /// Returns the number of rows updated.
-pub fn keep_files(conn: &Connection, media_ids: &[String]) -> Result<usize> {
+pub fn keep_files(conn: &mut Connection, media_ids: &[String]) -> Result<usize> {
     if media_ids.is_empty() {
         return Ok(0);
     }
     let ph: String = std::iter::repeat_n("?", media_ids.len())
         .collect::<Vec<_>>()
         .join(",");
-    let updated = conn.execute(
+    let tx = conn.transaction()?;
+    let updated = tx.execute(
         &format!("UPDATE media SET status = 'moved' WHERE id IN ({ph})"),
         rusqlite::params_from_iter(media_ids),
     )?;
+    tx.execute(
+        &format!(
+            "DELETE FROM media_tags WHERE media_id IN ({ph}) \
+             AND tag_id = (SELECT id FROM tags WHERE name = 'trash' AND type = 'mex')"
+        ),
+        rusqlite::params_from_iter(media_ids),
+    )?;
+    tx.commit()?;
     Ok(updated)
 }
 
@@ -2969,5 +3008,111 @@ mod tests {
         assert!(yr_dir.join("2024-11-party-0002.jpg").exists());
 
         fs::remove_dir_all(dir).ok();
+    }
+
+    fn make_trash_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (
+                id TEXT PRIMARY KEY, target_path TEXT, derived_date TEXT, ext TEXT,
+                os_date TEXT, derived_slug TEXT, caption_slug TEXT, source_path TEXT,
+                status TEXT, missing_on_disk INTEGER DEFAULT 0
+             );
+             CREATE TABLE tags (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, type TEXT DEFAULT 'event');
+             CREATE TABLE media_tags (media_id TEXT, tag_id INTEGER, PRIMARY KEY (media_id, tag_id));
+             INSERT INTO media VALUES ('m1','2024/a.jpg','2024-01-01','jpg','','','','','moved',0);
+             INSERT INTO media VALUES ('m2','2024/b.jpg','2024-01-02','jpg','','','','','moved',0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn trash_files_assigns_trash_mex_tag() {
+        let mut conn = make_trash_db();
+        let ids = vec!["m1".to_string()];
+        trash_files(&mut conn, &ids).unwrap();
+
+        let status: String = conn
+            .query_row("SELECT status FROM media WHERE id='m1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(status, "trashed");
+
+        let tag_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media_tags mt \
+                 JOIN tags t ON t.id = mt.tag_id \
+                 WHERE mt.media_id='m1' AND t.name='trash' AND t.type='mex'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tag_count, 1, "trash@mex tag must be assigned on trash");
+    }
+
+    #[test]
+    fn trash_files_tag_is_idempotent() {
+        let mut conn = make_trash_db();
+        let ids = vec!["m1".to_string()];
+        trash_files(&mut conn, &ids).unwrap();
+        // Trashing again (e.g. after status is already 'trashed') must not create duplicate tags.
+        trash_files(&mut conn, &ids).unwrap();
+
+        let tag_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media_tags mt \
+                 JOIN tags t ON t.id = mt.tag_id \
+                 WHERE mt.media_id='m1' AND t.name='trash' AND t.type='mex'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tag_count, 1, "trash@mex tag must appear exactly once");
+
+        let tag_row_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tags WHERE name='trash' AND type='mex'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tag_row_count, 1, "only one trash@mex tag row must exist");
+    }
+
+    #[test]
+    fn keep_files_removes_trash_mex_tag() {
+        let mut conn = make_trash_db();
+        let ids = vec!["m1".to_string()];
+        trash_files(&mut conn, &ids).unwrap();
+
+        // Sanity: tag was assigned.
+        let tag_count_before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media_tags mt \
+                 JOIN tags t ON t.id = mt.tag_id \
+                 WHERE mt.media_id='m1' AND t.name='trash' AND t.type='mex'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tag_count_before, 1);
+
+        keep_files(&mut conn, &ids).unwrap();
+
+        let status: String = conn
+            .query_row("SELECT status FROM media WHERE id='m1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(status, "moved");
+
+        let tag_count_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM media_tags mt \
+                 JOIN tags t ON t.id = mt.tag_id \
+                 WHERE mt.media_id='m1' AND t.name='trash' AND t.type='mex'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tag_count_after, 0, "trash@mex tag must be removed on keep");
     }
 }

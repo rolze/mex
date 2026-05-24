@@ -15,16 +15,17 @@
 
 ### Trash
 
-1. User marks a file as deleted with `<Delete>`, selection or current position.
+1. User marks the **cursor file** as trashed with `<Delete>`. The current selection is ignored.
 2. File gets updated in DB with `status='trashed'`, not touched in filesystem.
-3. File is still visible in TUI list, dimmed with a 🗑 prefix icon, cannot be selected.
-4. Guardrail: max 100 files per trash operation — if selection exceeds this, a status message is shown and no files are trashed.
+3. The tag `trash@mex` is automatically assigned to the file.
+4. The cursor file is removed from the selection (if it was selected).
+5. File is still visible in TUI list, dimmed with a 🗑 prefix icon, cannot be selected.
 
 ### Keep
 
 1. User positions cursor on a trashed file and presses `<Insert>`.
 2. Since trashed files cannot be selected, Keep always operates on the cursor file only.
-3. File gets `status='moved'` in DB; not touched in filesystem.
+3. File gets `status='moved'` in DB; the `trash@mex` tag is removed; not touched in filesystem.
 4. File appears normal in the TUI list and can be selected again.
 
 ### Empty Trash
@@ -39,8 +40,11 @@
 
 When the trash is non-empty, `[🗑 N trashed]` is shown in the filter bar so the user knows trash is not empty.
 
+### Filtering trashed files
+
+Because every trashed file carries the `trash@mex` tag, the user can filter the list to show only trashed files by typing `#trash` in the filter bar.
+
 **Notes:**
-* Guardrail: max 100 files per trash operation.
 * Max 100 files per `:empty-trash` invocation.
 * `status='deleted'` rows are retained in DB forever as a dedup guard — see [[UC-08.md]].
 * Import dedup set includes `trashed` and `deleted` rows so those files are never reimported.

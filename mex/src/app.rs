@@ -2267,80 +2267,46 @@ impl App {
 
     // ── Trash / Keep ─────────────────────────────────────────────────────────
 
-    /// Maximum files that can be trashed in a single operation (guardrail).
-    const MAX_TRASH_BATCH: usize = 100;
-
-    /// Mark the cursor file (or selection) as trashed. Clears the selection.
-    /// Refuses if the selection exceeds `MAX_TRASH_BATCH` to prevent accidents.
+    /// Mark the cursor file as trashed. Ignores the current selection.
+    /// Removes the cursor file from the selection if it was selected;
+    /// all other selected files remain selected after the reload.
     pub fn trash_selected(&mut self) {
-        let ids: Vec<String> = if self.selection.is_empty() {
-            self.filtered
-                .get(self.selected)
-                .filter(|f| f.status != "trashed")
-                .map(|f| vec![f.id.clone()])
-                .unwrap_or_default()
-        } else {
-            let mut sel: Vec<usize> = self.selection.iter().copied().collect();
-            sel.sort_unstable();
-            sel.iter()
-                .filter_map(|&i| self.filtered.get(i))
-                .filter(|f| f.status != "trashed")
-                .map(|f| f.id.clone())
-                .collect()
+        let id = match self.filtered.get(self.selected) {
+            Some(f) if f.status != "trashed" => f.id.clone(),
+            _ => return,
         };
 
-        if ids.is_empty() {
-            return;
-        }
-
-        if ids.len() > Self::MAX_TRASH_BATCH {
-            self.cmd.status_message = Some(format!(
-                "trash: too many files selected ({} > {} max) — deselect some first",
-                ids.len(),
-                Self::MAX_TRASH_BATCH,
-            ));
-            return;
-        }
-
-        match crate::db::trash_files(&self.conn, &ids) {
+        match crate::db::trash_files(&mut self.conn, &[id.clone()]) {
             Err(e) => {
                 self.cmd.status_message = Some(format!("trash: {e}"));
             }
-            Ok(n) => {
-                self.selection.clear();
-                // Fast path: update status in memory without reloading all files.
-                // Status changes do not affect filter membership, so no re-filter needed.
-                if self.apply_status_in_memory(&ids, "trashed") == 0 {
-                    // IDs not found in memory (shouldn't happen) — fall back to full reload.
-                    if let Err(e) = self.reload_preserve_cursor() {
-                        self.cmd.status_message = Some(format!("trash: reload failed: {e}"));
-                        return;
-                    }
+            Ok(_) => {
+                if let Err(e) = self.reload_preserve_cursor_and_selection(Some(&id)) {
+                    self.cmd.status_message = Some(format!("trash: reload failed: {e}"));
+                    return;
                 }
-                self.cmd.status_message = Some(format!("trashed {n} file(s)"));
+                self.cmd.status_message = Some("trashed 1 file".into());
             }
         }
     }
 
     /// Restore the cursor file from trash to normal (`status = 'moved'`).
     /// Since trashed files cannot be selected, this always operates on the cursor only.
+    /// The existing selection is preserved across the reload.
     pub fn keep_selected(&mut self) {
         let id = match self.filtered.get(self.selected) {
             Some(f) if f.status == "trashed" => f.id.clone(),
             _ => return,
         };
 
-        match crate::db::keep_files(&self.conn, &[id.clone()]) {
+        match crate::db::keep_files(&mut self.conn, &[id]) {
             Err(e) => {
                 self.cmd.status_message = Some(format!("keep: {e}"));
             }
             Ok(_) => {
-                // Fast path: update status in memory without reloading all files.
-                if self.apply_status_in_memory(&[id], "moved") == 0 {
-                    if let Err(e) = self.reload_preserve_cursor() {
-                        self.cmd.status_message = Some(format!("keep: reload failed: {e}"));
-                        return;
-                    }
+                if let Err(e) = self.reload_preserve_cursor_and_selection(None) {
+                    self.cmd.status_message = Some(format!("keep: reload failed: {e}"));
+                    return;
                 }
                 self.cmd.status_message = Some("restored file from trash".into());
             }
@@ -2535,35 +2501,6 @@ impl App {
         }
     }
 
-    /// Update `status` for a set of file IDs directly in the in-memory lists,
-    /// avoiding a full DB reload for simple status changes (trash / keep).
-    ///
-    /// Updates both `all_files` and `filtered`, and adjusts `trashed_count`.
-    /// Returns the number of files actually found and updated.
-    fn apply_status_in_memory(&mut self, ids: &[String], new_status: &str) -> usize {
-        let id_set: std::collections::HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
-        let mut found = 0;
-        for f in &mut self.all_files {
-            if id_set.contains(f.id.as_str()) {
-                let was_trashed = f.status == "trashed";
-                let now_trashed = new_status == "trashed";
-                f.status = new_status.to_string();
-                match (was_trashed, now_trashed) {
-                    (false, true) => self.trashed_count += 1,
-                    (true, false) => self.trashed_count = self.trashed_count.saturating_sub(1),
-                    _ => {}
-                }
-                found += 1;
-            }
-        }
-        for f in &mut self.filtered {
-            if id_set.contains(f.id.as_str()) {
-                f.status = new_status.to_string();
-            }
-        }
-        found
-    }
-
     /// Reload `all_files` from the DB and re-apply the current filter.
     pub fn reload(&mut self) -> anyhow::Result<()> {
         self.all_files = crate::db::load_files(&self.conn)?;
@@ -2607,6 +2544,36 @@ impl App {
             }
             self.ensure_visible();
         }
+        Ok(())
+    }
+
+    /// Reload, restore the cursor by file ID, and rebuild the selection from the
+    /// pre-reload set of selected file IDs.
+    ///
+    /// `exclude_id`: if `Some`, that file ID is dropped from the restored selection
+    /// (used when the cursor file was trashed and can no longer be selected).
+    fn reload_preserve_cursor_and_selection(
+        &mut self,
+        exclude_id: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let selected_ids: std::collections::HashSet<String> = self
+            .selection
+            .iter()
+            .filter_map(|&i| self.filtered.get(i))
+            .filter(|f| Some(f.id.as_str()) != exclude_id)
+            .map(|f| f.id.clone())
+            .collect();
+
+        self.reload_preserve_cursor()?;
+
+        self.selection = self
+            .filtered
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| selected_ids.contains(&f.id))
+            .map(|(i, _)| i)
+            .collect();
+
         Ok(())
     }
 
