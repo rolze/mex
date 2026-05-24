@@ -1096,9 +1096,13 @@ pub fn deslugify_batch(
             .map(|i| format!("?{}", i + 2))
             .collect::<Vec<_>>()
             .join(", ");
+        // Exclude caption files (caption_slug IS NOT NULL) from the day
+        // counter: their counter column does not represent a position in the
+        // sequential day counter and must not inflate db_max.
         let db_query = format!(
             "SELECT COALESCE(MAX(counter), 0) FROM media \
              WHERE target_path LIKE ?1 AND status IN ('moved','trashed','deleted') \
+             AND caption_slug IS NULL \
              AND id NOT IN ({placeholders})"
         );
         let db_max: u32 = {
@@ -2763,6 +2767,78 @@ mod tests {
             replace_slug_in_path("2024/2024-11-30-0001.jpg", "summer"),
             None
         );
+    }
+
+    // ── deslugify_batch counter tests ────────────────────────────────────────
+
+    fn make_deslugify_db(dir: &std::path::Path) -> rusqlite::Connection {
+        use rusqlite::Connection;
+        let conn = Connection::open(dir.join("mex.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (
+                id TEXT PRIMARY KEY,
+                target_path TEXT,
+                derived_date TEXT,
+                derived_slug TEXT,
+                caption_slug TEXT,
+                ext TEXT,
+                os_date TEXT,
+                source_path TEXT,
+                status TEXT,
+                counter INTEGER
+             );
+             CREATE TABLE media_tags (media_id TEXT, tag_id INTEGER);
+             CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT, type TEXT);",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// A caption-only file with a stale counter=1 in the DB must not cause
+    /// deslugify_batch to start new counter assignments at 0002.
+    #[test]
+    fn deslugify_batch_ignores_caption_file_counter() {
+        use std::fs;
+        let dir = tempfile::tempdir().unwrap();
+        let yr = dir.path().join("2026");
+        fs::create_dir_all(&yr).unwrap();
+
+        // Slug file to be deslugified.
+        fs::write(yr.join("2026-01-youtube-0001.jpg"), b"img").unwrap();
+
+        // Caption file that existed before fix_caption was corrected —
+        // it has counter=1 (stale) but must NOT count toward the day sequence.
+        fs::write(yr.join("2026-01-04-com-google-android-youtube.jpg"), b"cap").unwrap();
+
+        let conn = make_deslugify_db(dir.path());
+        conn.execute_batch(
+            "INSERT INTO media VALUES ('s1','2026/2026-01-youtube-0001.jpg','2026-01-04','youtube',NULL,'jpg','2026-01-04 10:00:00','img.jpg','moved',1);
+             -- stale counter=1 on a caption file (bug we are guarding against):
+             INSERT INTO media VALUES ('c1','2026/2026-01-04-com-google-android-youtube.jpg','2026-01-04',NULL,'com-google-android-youtube','jpg','2026-01-04 09:00:00','yt.jpg','moved',1);",
+        ).unwrap();
+
+        let stats = deslugify_batch(
+            &conn,
+            dir.path().to_str().unwrap(),
+            &["s1".into()],
+            |_, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(stats.fixed, 1);
+        assert_eq!(stats.errors.len(), 0);
+
+        let tp: String = conn
+            .query_row("SELECT target_path FROM media WHERE id='s1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        // Caption file has stale counter=1 but must be ignored → new file
+        // starts at 0001, not 0002.
+        assert_eq!(tp, "2026/2026-01-04-0001.jpg", "counter must start at 0001");
+        assert!(yr.join("2026-01-04-0001.jpg").exists());
+
+        fs::remove_dir_all(dir).ok();
     }
 
     // ── slugify_batch guard tests ─────────────────────────────────────────────

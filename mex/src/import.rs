@@ -2002,11 +2002,19 @@ pub fn assign_counters(
         };
 
         if !counters.contains_key(&date_prefix) {
-            // Get max from DB
+            // Get max from DB.
+            // For day-based prefixes exclude caption files: their counter does
+            // not represent a position in the day sequence and must not inflate
+            // db_max (e.g. stale counter=1 on a caption-only file).
             let pattern = format!("{year}/{date_prefix}-%");
+            let caption_filter = if slug.is_none() {
+                " AND caption_slug IS NULL"
+            } else {
+                ""
+            };
             let db_max: u32 = conn
                 .query_row(
-                    "SELECT COALESCE(MAX(counter), 0) FROM media WHERE target_path LIKE ?1 AND status IN ('moved','trashed','deleted')",
+                    &format!("SELECT COALESCE(MAX(counter), 0) FROM media WHERE target_path LIKE ?1 AND status IN ('moved','trashed','deleted'){caption_filter}"),
                     rusqlite::params![pattern],
                     |row| row.get::<_, u32>(0),
                 )
