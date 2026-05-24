@@ -345,6 +345,9 @@ fn open_worker_connection(db_path: &str) -> Result<rusqlite::Connection, String>
         rusqlite::Connection::open(db_path).map_err(|e| format!("failed to open DB — {e}"))?;
     conn.busy_timeout(SQLITE_BUSY_TIMEOUT)
         .map_err(|e| format!("failed to configure DB busy-timeout — {e}"))?;
+    // Match the main connection's WAL mode so worker writes don't downgrade the journal.
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")
+        .map_err(|e| format!("failed to configure DB pragmas — {e}"))?;
     Ok(conn)
 }
 
@@ -2305,9 +2308,14 @@ impl App {
             }
             Ok(n) => {
                 self.selection.clear();
-                if let Err(e) = self.reload_preserve_cursor() {
-                    self.cmd.status_message = Some(format!("trash: reload failed: {e}"));
-                    return;
+                // Fast path: update status in memory without reloading all files.
+                // Status changes do not affect filter membership, so no re-filter needed.
+                if self.apply_status_in_memory(&ids, "trashed") == 0 {
+                    // IDs not found in memory (shouldn't happen) — fall back to full reload.
+                    if let Err(e) = self.reload_preserve_cursor() {
+                        self.cmd.status_message = Some(format!("trash: reload failed: {e}"));
+                        return;
+                    }
                 }
                 self.cmd.status_message = Some(format!("trashed {n} file(s)"));
             }
@@ -2322,14 +2330,17 @@ impl App {
             _ => return,
         };
 
-        match crate::db::keep_files(&self.conn, &[id]) {
+        match crate::db::keep_files(&self.conn, &[id.clone()]) {
             Err(e) => {
                 self.cmd.status_message = Some(format!("keep: {e}"));
             }
             Ok(_) => {
-                if let Err(e) = self.reload_preserve_cursor() {
-                    self.cmd.status_message = Some(format!("keep: reload failed: {e}"));
-                    return;
+                // Fast path: update status in memory without reloading all files.
+                if self.apply_status_in_memory(&[id], "moved") == 0 {
+                    if let Err(e) = self.reload_preserve_cursor() {
+                        self.cmd.status_message = Some(format!("keep: reload failed: {e}"));
+                        return;
+                    }
                 }
                 self.cmd.status_message = Some("restored file from trash".into());
             }
@@ -2522,6 +2533,35 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Update `status` for a set of file IDs directly in the in-memory lists,
+    /// avoiding a full DB reload for simple status changes (trash / keep).
+    ///
+    /// Updates both `all_files` and `filtered`, and adjusts `trashed_count`.
+    /// Returns the number of files actually found and updated.
+    fn apply_status_in_memory(&mut self, ids: &[String], new_status: &str) -> usize {
+        let id_set: std::collections::HashSet<&str> = ids.iter().map(|s| s.as_str()).collect();
+        let mut found = 0;
+        for f in &mut self.all_files {
+            if id_set.contains(f.id.as_str()) {
+                let was_trashed = f.status == "trashed";
+                let now_trashed = new_status == "trashed";
+                f.status = new_status.to_string();
+                match (was_trashed, now_trashed) {
+                    (false, true) => self.trashed_count += 1,
+                    (true, false) => self.trashed_count = self.trashed_count.saturating_sub(1),
+                    _ => {}
+                }
+                found += 1;
+            }
+        }
+        for f in &mut self.filtered {
+            if id_set.contains(f.id.as_str()) {
+                f.status = new_status.to_string();
+            }
+        }
+        found
     }
 
     /// Reload `all_files` from the DB and re-apply the current filter.

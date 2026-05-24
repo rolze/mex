@@ -293,7 +293,7 @@ pub fn load_files(conn: &Connection) -> Result<Vec<MediaFile>> {
                WHERE m.target_path IS NOT NULL
                  AND m.status != 'deleted'
                GROUP BY m.id
-               ORDER BY m.target_path";
+               ORDER BY NULL";
 
     let mut stmt = conn.prepare(sql)?;
 
@@ -338,10 +338,9 @@ pub fn load_files(conn: &Connection) -> Result<Vec<MediaFile>> {
     for r in rows {
         files.push(r?);
     }
-    files.sort_by(|a, b| {
-        let ka = path_sort_key(&a.target_path);
-        let kb = path_sort_key(&b.target_path);
-        ka.0.cmp(kb.0).then(ka.1.cmp(&kb.1))
+    files.sort_by_cached_key(|f| {
+        let k = path_sort_key(&f.target_path);
+        (k.0.to_string(), k.1)
     });
     Ok(files)
 }
@@ -360,6 +359,12 @@ pub fn folder_of(path: &str) -> &str {
 /// Safe to call every startup — all statements use `CREATE TABLE IF NOT EXISTS`
 /// and `ensure_schema_v1` is a no-op when already at the current version.
 pub fn init_db(conn: &Connection) -> Result<()> {
+    // WAL mode: concurrent reads while writing; single fsync per commit instead
+    // of two (journal create + sync + apply + sync).  NORMAL synchronous is safe
+    // for WAL (durable to OS crash; only loses data on power loss mid-write, which
+    // is acceptable for a local media index that can be re-imported).
+    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS media (
             id           TEXT PRIMARY KEY,
@@ -1192,6 +1197,7 @@ pub fn deslugify_batch(
         errors: Vec::new(),
     };
 
+    conn.execute_batch("BEGIN")?;
     for (i, (rec, asgn)) in records.iter().zip(assignments.iter()).enumerate() {
         on_progress(i, &rec.id);
 
@@ -1264,6 +1270,7 @@ pub fn deslugify_batch(
 
         stats.fixed += 1;
     }
+    conn.execute_batch("COMMIT")?;
 
     Ok(stats)
 }
@@ -1479,6 +1486,7 @@ pub fn slugify_batch(
             skipped: 0,
             errors: Vec::new(),
         };
+        conn.execute_batch("BEGIN")?;
         for (i, rec) in batch.iter().enumerate() {
             on_progress(i, &rec.id);
             let new_path = replace_slug_in_path(&rec.target_path, new_slug);
@@ -1518,6 +1526,7 @@ pub fn slugify_batch(
             }
             stats.fixed += 1;
         }
+        conn.execute_batch("COMMIT")?;
         return Ok(stats);
     }
 
@@ -1779,6 +1788,7 @@ pub fn slugify_batch(
         errors: Vec::new(),
     };
 
+    conn.execute_batch("BEGIN")?;
     // Recount remaining files of old slugs.
     for (id, new_path) in &recount_assignments {
         // Find original path.
@@ -1857,6 +1867,7 @@ pub fn slugify_batch(
             stats.fixed += 1;
         }
     }
+    conn.execute_batch("COMMIT")?;
 
     Ok(stats)
 }
