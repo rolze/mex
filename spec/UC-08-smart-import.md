@@ -94,7 +94,7 @@ the cursor:
 - Dedup set loaded at execute time: `HashMap<(file_size, partial_hash), target_path>` from all `status='moved'` rows with non-NULL `partial_hash`.
 - `INSERT OR REPLACE INTO media` — all existing columns plus `partial_hash`; no other schema changes.
 - Import tag: `import-YY-MM-DD` with type `mex` (2-digit year, e.g. `import-25-01-15`); a second import on the same day gets `import-25-01-15_2`, a third `_3`, etc.
-- Background DB workers (`:import`, `:remove-slug`, `:fix-os-time`) open dedicated SQLite connections with a 5 s `busy_timeout` to reduce transient lock failures while the UI keeps its own connection open.
+- Background DB workers (`:import`, `:deslugify`, `:fix-os-time`) open dedicated SQLite connections with a 5 s `busy_timeout` to reduce transient lock failures while the UI keeps its own connection open.
 
 ---
 
@@ -111,56 +111,9 @@ Idempotent — safe to interrupt and re-run; already-migrated rows are skipped.
 
 ---
 
-### Repair command: `:remove-slug`
+### Slug management commands
 
-```
-:remove-slug
-```
-
-Operates on the selected file(s) (or cursor file). Useful to fix files that were
-imported with a spurious slug (e.g. `camera`) before it was added to the junk-word
-list.  Can also be run a second time to fix counters that were wrong after a prior
-repair — subsequent invocations are idempotent.
-
-**Per-file behaviour:**
-
-Counters are **pre-assigned for the entire batch before any file is renamed**. This means
-selecting all files from a given day restarts the counter at 0001 rather than building on
-top of each other's existing (potentially wrong) values.
-
-1. Load all file records for the batch from the DB.
-2. For each unique `yyyy-mm-dd` day prefix in the batch, calculate the base counter:
-   - Query `MAX(counter)` for paths matching `yyyy/yyyy-mm-dd-%` in the DB
-     (`status IN ('moved','trashed','deleted')`), **excluding all files in the batch**.
-   - Scan the year directory on disk for filenames starting with `yyyy-mm-dd-`,
-     **skipping the basenames of all batch files**.
-   - `base_counter = max(db_max, fs_max) + 1`.
-3. Assign a new path to each file (sorted by `os_date` then `source_basename` then current
-   path within each day for **chronological** counter assignment):
-   - **With `caption_slug`** (no collision): `yyyy/yyyy-mm-dd-{caption_slug}.{ext}`
-     (counter omitted — mirrors import behaviour for no-slug + caption files).
-   - **With `caption_slug`** (collision — plain path already assigned in this batch,
-     or exists in DB/disk as a non-batch file):
-     `yyyy/yyyy-mm-dd-{caption_slug}-{N}.{ext}` where N ≥ 2
-   - **No `caption_slug`**: `yyyy/yyyy-mm-dd-{new_counter:04}.{ext}`
-4. For each file: if the new path equals the current path **and** `derived_slug` is
-   already empty → skip (no-op; idempotent).
-5. If `derived_slug` is non-empty: save it as a tag with type `"slug"` (backup,
-   visible in the tag list).
-6. Rename the file on disk (only when the file exists and the path actually changes).
-   Returns an error if the destination path already exists (collision guard).
-7. Clear `derived_slug = NULL` and update `target_path` + `counter` in the DB.
-
-**Status messages:**
-
-| Outcome | Message |
-|---------|---------|
-| All repaired | `remove-slug: repaired N file(s)` |
-| Some already clean | `remove-slug: repaired N file(s), M already clean` |
-| All already clean | `remove-slug: M file(s) already clean` |
-| Error(s) | `remove-slug: N error(s) — <first error>` |
-
-The command runs in a background thread. A full-screen yellow progress overlay (`Repairing slugs…`) with a spinner and ASCII progress bar is shown while the repair is in progress; all key input is blocked until the thread finishes.
+`:deslugify` and `:slugify <slug>` — see [[UC-16-slugify.md]].
 
 ---
 

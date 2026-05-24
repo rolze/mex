@@ -13,6 +13,7 @@ use std::{
 /// Used for command-name autocompletion (analogous to tag autocompletion).
 const KNOWN_COMMANDS: &[&str] = &[
     "create-view",
+    "deslugify",
     "empty-trash",
     "fix-date",
     "fix-ext",
@@ -20,7 +21,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "import",
     "q",
     "quit",
-    "remove-slug",
+    "slugify",
     "tag",
     "untag",
     "version",
@@ -64,9 +65,9 @@ pub enum ImportState {
     Done(String),
 }
 
-// ── Remove-slug state ─────────────────────────────────────────────────────────
+// ── Deslugify state ───────────────────────────────────────────────────────────
 
-pub enum RemoveSlugState {
+pub enum DeslugifyState {
     Idle,
     /// Background repair in progress.
     Running {
@@ -78,7 +79,30 @@ pub enum RemoveSlugState {
     Done(String),
 }
 
-pub enum RemoveSlugMsg {
+pub enum DeslugifyMsg {
+    Progress {
+        done: usize,
+        total: usize,
+        current: String,
+    },
+    Done(String),
+}
+
+// ── Slugify state ─────────────────────────────────────────────────────────────
+
+pub enum SlugifyState {
+    Idle,
+    /// Background grouping in progress.
+    Running {
+        done: usize,
+        total: usize,
+        current: String,
+    },
+    /// Finished; message shown until the next keypress.
+    Done(String),
+}
+
+pub enum SlugifyMsg {
     Progress {
         done: usize,
         total: usize,
@@ -249,10 +273,16 @@ pub struct ImportWorker {
     pub list_height: usize,
 }
 
-/// Background-worker state for `:remove-slug`.
-pub struct RemoveSlugWorker {
-    pub state: RemoveSlugState,
-    pub rx: Option<std::sync::mpsc::Receiver<RemoveSlugMsg>>,
+/// Background-worker state for `:deslugify`.
+pub struct DeslugifyWorker {
+    pub state: DeslugifyState,
+    pub rx: Option<std::sync::mpsc::Receiver<DeslugifyMsg>>,
+}
+
+/// Background-worker state for `:slugify`.
+pub struct SlugifyWorker {
+    pub state: SlugifyState,
+    pub rx: Option<std::sync::mpsc::Receiver<SlugifyMsg>>,
 }
 
 /// Background-worker state for `:fix-os-time`.
@@ -298,8 +328,10 @@ pub struct App {
     pub mpv: MpvState,
     /// Import background worker.
     pub import: ImportWorker,
-    /// Remove-slug background worker.
-    pub remove_slug: RemoveSlugWorker,
+    /// Deslugify background worker.
+    pub deslugify: DeslugifyWorker,
+    /// Slugify background worker.
+    pub slugify: SlugifyWorker,
     /// Fix-os-time background worker.
     pub fix_os_time: FixOsTimeWorker,
     /// Empty-trash background worker.
@@ -413,8 +445,12 @@ impl App {
                 rx: None,
                 list_height: 20,
             },
-            remove_slug: RemoveSlugWorker {
-                state: RemoveSlugState::Idle,
+            deslugify: DeslugifyWorker {
+                state: DeslugifyState::Idle,
+                rx: None,
+            },
+            slugify: SlugifyWorker {
+                state: SlugifyState::Idle,
                 rx: None,
             },
             fix_os_time: FixOsTimeWorker {
@@ -1184,8 +1220,18 @@ impl App {
             return;
         }
 
-        if trimmed == "remove-slug" {
-            self.remove_slug_selected();
+        if trimmed == "deslugify" {
+            self.deslugify_selected();
+            return;
+        }
+
+        if let Some(slug_arg) = trimmed.strip_prefix("slugify") {
+            let slug = slug_arg.trim();
+            if slug.is_empty() {
+                self.cmd.status_message = Some("slugify: slug argument required".into());
+                return;
+            }
+            self.slugify_selected(slug);
             return;
         }
 
@@ -1693,13 +1739,13 @@ impl App {
 
     // ── remove-slug ──────────────────────────────────────────────────────────
 
-    /// Apply `:remove-slug` to the selection set (or cursor file if nothing is
+    /// Apply `:deslugify` to the selection set (or cursor file if nothing is
     /// explicitly selected).
     ///
     /// Spawns a background thread that processes one file at a time, sending
-    /// `RemoveSlugMsg::Progress` after each file and `RemoveSlugMsg::Done` when
+    /// `DeslugifyMsg::Progress` after each file and `DeslugifyMsg::Done` when
     /// finished.  The UI shows a full-screen progress overlay while running.
-    pub fn remove_slug_selected(&mut self) {
+    pub fn deslugify_selected(&mut self) {
         let targets: Vec<String> = if self.selection.is_empty() {
             self.filtered
                 .get(self.selected)
@@ -1714,12 +1760,12 @@ impl App {
         };
 
         if targets.is_empty() {
-            self.cmd.status_message = Some("remove-slug: no file selected".into());
+            self.cmd.status_message = Some("deslugify: no file selected".into());
             return;
         }
 
         let total = targets.len();
-        self.remove_slug.state = RemoveSlugState::Running {
+        self.deslugify.state = DeslugifyState::Running {
             done: 0,
             total,
             current: String::new(),
@@ -1727,20 +1773,20 @@ impl App {
 
         let db_path = self.db_path.clone();
         let target_root = self.target_root.clone();
-        let (tx, rx) = mpsc::channel::<RemoveSlugMsg>();
-        self.remove_slug.rx = Some(rx);
+        let (tx, rx) = mpsc::channel::<DeslugifyMsg>();
+        self.deslugify.rx = Some(rx);
 
         std::thread::spawn(move || {
             let conn = match open_worker_connection(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(RemoveSlugMsg::Done(format!("remove-slug: {e}")));
+                    let _ = tx.send(DeslugifyMsg::Done(format!("deslugify: {e}")));
                     return;
                 }
             };
             let result =
-                crate::db::remove_slug_batch(&conn, &target_root, &targets, |done, current| {
-                    let _ = tx.send(RemoveSlugMsg::Progress {
+                crate::db::deslugify_batch(&conn, &target_root, &targets, |done, current| {
+                    let _ = tx.send(DeslugifyMsg::Progress {
                         done,
                         total,
                         current: current.to_string(),
@@ -1748,65 +1794,199 @@ impl App {
                 });
 
             let summary = match result {
-                Err(e) => format!("remove-slug: fatal error — {e}"),
+                Err(e) => format!("deslugify: fatal error — {e}"),
                 Ok(stats) => {
                     let fixed = stats.fixed;
                     let skipped = stats.skipped;
                     let errors = stats.errors.len();
                     for (id, msg) in &stats.errors {
-                        eprintln!("remove-slug error for {id}: {msg}");
+                        eprintln!("deslugify error for {id}: {msg}");
                     }
                     let first_error = stats.errors.into_iter().map(|(_, m)| m).next();
                     if errors > 0 {
                         let msg = first_error.unwrap_or_default();
-                        format!("remove-slug: {errors} error(s) — {msg}")
+                        format!("deslugify: {errors} error(s) — {msg}")
                     } else if fixed == 0 {
-                        format!("remove-slug: {skipped} file(s) already clean")
+                        format!("deslugify: {skipped} file(s) already clean")
                     } else if skipped > 0 {
-                        format!("remove-slug: repaired {fixed} file(s), {skipped} already clean")
+                        format!("deslugify: repaired {fixed} file(s), {skipped} already clean")
                     } else {
-                        format!("remove-slug: repaired {fixed} file(s)")
+                        format!("deslugify: repaired {fixed} file(s)")
                     }
                 }
             };
-            let _ = tx.send(RemoveSlugMsg::Done(summary));
+            let _ = tx.send(DeslugifyMsg::Done(summary));
         });
     }
 
-    /// Dispatch a message received from the background remove-slug thread.
-    pub fn on_remove_slug_msg(&mut self, msg: RemoveSlugMsg) {
+    /// Dispatch a message received from the background deslugify thread.
+    pub fn on_deslugify_msg(&mut self, msg: DeslugifyMsg) {
         match msg {
-            RemoveSlugMsg::Progress {
+            DeslugifyMsg::Progress {
                 done,
                 total,
                 current,
             } => {
-                self.remove_slug.state = RemoveSlugState::Running {
+                self.deslugify.state = DeslugifyState::Running {
                     done,
                     total,
                     current,
                 };
             }
-            RemoveSlugMsg::Done(summary) => {
-                self.remove_slug.rx = None;
+            DeslugifyMsg::Done(summary) => {
+                self.deslugify.rx = None;
                 let _ = self.reload();
-                self.remove_slug.state = RemoveSlugState::Done(summary.clone());
+                self.deslugify.state = DeslugifyState::Done(summary.clone());
                 self.cmd.status_message = Some(summary);
             }
         }
     }
 
-    /// Poll the remove-slug background thread for new messages (non-blocking).
+    /// Poll the deslugify background thread for new messages (non-blocking).
     /// Returns `true` if a message was processed.
-    pub fn poll_remove_slug(&mut self) -> bool {
-        let msg = match &self.remove_slug.rx {
+    pub fn poll_deslugify(&mut self) -> bool {
+        let msg = match &self.deslugify.rx {
             Some(rx) => match rx.try_recv() {
                 Ok(m) => m,
                 Err(_) => return false,
             },
             None => return false,
         };
-        self.on_remove_slug_msg(msg);
+        self.on_deslugify_msg(msg);
+        true
+    }
+
+    // ── slugify ───────────────────────────────────────────────────────────────
+
+    /// Apply `:slugify <slug>` to the selection set (or cursor file).
+    pub fn slugify_selected(&mut self, new_slug: &str) {
+        let targets: Vec<String> = if self.selection.is_empty() {
+            self.filtered
+                .get(self.selected)
+                .map(|f| vec![f.id.clone()])
+                .unwrap_or_default()
+        } else {
+            let mut sel: Vec<usize> = self.selection.iter().copied().collect();
+            sel.sort_unstable();
+            sel.iter()
+                .filter_map(|&i| self.filtered.get(i).map(|f| f.id.clone()))
+                .collect()
+        };
+
+        if targets.is_empty() {
+            self.cmd.status_message = Some("slugify: no file selected".into());
+            return;
+        }
+
+        let total = targets.len();
+        self.slugify.state = SlugifyState::Running {
+            done: 0,
+            total,
+            current: String::new(),
+        };
+
+        let db_path = self.db_path.clone();
+        let target_root = self.target_root.clone();
+        let new_slug = new_slug.to_string();
+        let (tx, rx) = mpsc::channel::<SlugifyMsg>();
+        self.slugify.rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let conn = match open_worker_connection(&db_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(SlugifyMsg::Done(format!("slugify: {e}")));
+                    return;
+                }
+            };
+            let result = crate::db::slugify_batch(
+                &conn,
+                &target_root,
+                &targets,
+                &new_slug,
+                |done, current| {
+                    let _ = tx.send(SlugifyMsg::Progress {
+                        done,
+                        total,
+                        current: current.to_string(),
+                    });
+                },
+            );
+
+            let summary = match result {
+                Err(e) => format!("{e}"),
+                Ok(stats) => {
+                    let fixed = stats.fixed;
+                    let skipped = stats.skipped;
+                    let errors = stats.errors.len();
+                    for (id, msg) in &stats.errors {
+                        eprintln!("slugify error for {id}: {msg}");
+                    }
+                    let first_error = stats.errors.into_iter().map(|(_, m)| m).next();
+                    if errors > 0 {
+                        let msg = first_error.unwrap_or_default();
+                        format!("slugify: {errors} error(s) — {msg}")
+                    } else if fixed == 0 {
+                        format!("slugify: {skipped} file(s) already in slug '{new_slug}'")
+                    } else if skipped > 0 {
+                        match stats.mode {
+                            crate::db::SlugifyBatchMode::Rename => format!(
+                                "slugify: renamed slug to '{new_slug}' for {fixed} file(s), {skipped} already clean"
+                            ),
+                            crate::db::SlugifyBatchMode::Assign => format!(
+                                "slugify: grouped {fixed} file(s) under '{new_slug}', {skipped} already clean"
+                            ),
+                        }
+                    } else {
+                        match stats.mode {
+                            crate::db::SlugifyBatchMode::Rename => {
+                                format!("slugify: renamed slug to '{new_slug}' for {fixed} file(s)")
+                            }
+                            crate::db::SlugifyBatchMode::Assign => {
+                                format!("slugify: grouped {fixed} file(s) under '{new_slug}'")
+                            }
+                        }
+                    }
+                }
+            };
+            let _ = tx.send(SlugifyMsg::Done(summary));
+        });
+    }
+
+    /// Dispatch a message received from the background slugify thread.
+    pub fn on_slugify_msg(&mut self, msg: SlugifyMsg) {
+        match msg {
+            SlugifyMsg::Progress {
+                done,
+                total,
+                current,
+            } => {
+                self.slugify.state = SlugifyState::Running {
+                    done,
+                    total,
+                    current,
+                };
+            }
+            SlugifyMsg::Done(summary) => {
+                self.slugify.rx = None;
+                let _ = self.reload();
+                self.slugify.state = SlugifyState::Done(summary.clone());
+                self.cmd.status_message = Some(summary);
+            }
+        }
+    }
+
+    /// Poll the slugify background thread for new messages (non-blocking).
+    /// Returns `true` if a message was processed.
+    pub fn poll_slugify(&mut self) -> bool {
+        let msg = match &self.slugify.rx {
+            Some(rx) => match rx.try_recv() {
+                Ok(m) => m,
+                Err(_) => return false,
+            },
+            None => return false,
+        };
+        self.on_slugify_msg(msg);
         true
     }
 

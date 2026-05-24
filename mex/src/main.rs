@@ -335,8 +335,11 @@ fn run_loop(
         // Poll import background thread (scan progress, copy progress, done).
         app.poll_import();
 
-        // Poll remove-slug background thread.
-        app.poll_remove_slug();
+        // Poll deslugify background thread.
+        app.poll_deslugify();
+
+        // Poll slugify background thread.
+        app.poll_slugify();
 
         // Poll fix-os-time background thread.
         app.poll_fix_os_time();
@@ -354,16 +357,28 @@ fn run_loop(
                 if key.kind == KeyEventKind::Release {
                     continue;
                 }
-                // Handle remove-slug progress lock screen first.
-                match &app.remove_slug.state {
-                    app::RemoveSlugState::Running { .. } => {
+                // Handle deslugify progress lock screen first.
+                match &app.deslugify.state {
+                    app::DeslugifyState::Running { .. } => {
                         continue; // swallow all keys while repair is running
                     }
-                    app::RemoveSlugState::Done(_) => {
-                        app.remove_slug.state = app::RemoveSlugState::Idle;
+                    app::DeslugifyState::Done(_) => {
+                        app.deslugify.state = app::DeslugifyState::Idle;
                         // fall through so the keypress also registers normally
                     }
-                    app::RemoveSlugState::Idle => {}
+                    app::DeslugifyState::Idle => {}
+                }
+
+                // Handle slugify progress lock screen.
+                match &app.slugify.state {
+                    app::SlugifyState::Running { .. } => {
+                        continue; // swallow all keys while running
+                    }
+                    app::SlugifyState::Done(_) => {
+                        app.slugify.state = app::SlugifyState::Idle;
+                        // fall through so the keypress also registers normally
+                    }
+                    app::SlugifyState::Idle => {}
                 }
 
                 // Handle fix-os-time progress lock screen.

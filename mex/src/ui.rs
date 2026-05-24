@@ -1,4 +1,4 @@
-use crate::app::{App, EmptyTrashState, FixOsTimeState, ImportState, RemoveSlugState};
+use crate::app::{App, DeslugifyState, EmptyTrashState, FixOsTimeState, ImportState, SlugifyState};
 use crate::db::folder_of;
 use crate::import::ImportStatus;
 use crate::player::MpvStatus;
@@ -61,17 +61,31 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         _ => {}
     }
 
-    // Remove-slug progress overlay takes over the full screen while running.
-    if let RemoveSlugState::Running {
+    // Deslugify progress overlay takes over the full screen while running.
+    if let DeslugifyState::Running {
         done,
         total,
         current,
-    } = &app.remove_slug.state
+    } = &app.deslugify.state
     {
         let done = *done;
         let total = *total;
         let current = current.clone();
-        draw_remove_slug_progress(frame, app, area, done, total, &current, "Repairing slugs…");
+        draw_slug_progress(frame, app, area, done, total, &current, "Repairing slugs…");
+        return;
+    }
+
+    // Slugify progress overlay takes over the full screen while running.
+    if let SlugifyState::Running {
+        done,
+        total,
+        current,
+    } = &app.slugify.state
+    {
+        let done = *done;
+        let total = *total;
+        let current = current.clone();
+        draw_slug_progress(frame, app, area, done, total, &current, "Slugifying files…");
         return;
     }
 
@@ -85,7 +99,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let done = *done;
         let total = *total;
         let current = current.clone();
-        draw_remove_slug_progress(frame, app, area, done, total, &current, "Fixing OS times…");
+        draw_slug_progress(frame, app, area, done, total, &current, "Fixing OS times…");
         return;
     }
 
@@ -1320,8 +1334,8 @@ fn draw_import_copying(
     frame.render_widget(para, area);
 }
 
-/// Full-screen overlay shown while `:remove-slug` is running in the background.
-fn draw_remove_slug_progress(
+/// Full-screen progress overlay used by deslugify and slugify while running in the background.
+fn draw_slug_progress(
     frame: &mut Frame,
     app: &App,
     area: Rect,
