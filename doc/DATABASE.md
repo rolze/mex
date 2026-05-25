@@ -1,6 +1,8 @@
 # mex Database Design
 
-This document is the authoritative reference for the `mex.db` SQLite schema — what it contains, why each element exists, and what was deliberately left out.
+This document is the **authoritative reference for the `mex.db` SQLite schema**, owned and
+maintained by the `database-expert` agent. It documents what the schema contains, why
+each element exists, and what was deliberately left out.
 
 ## Live database snapshot
 
