@@ -110,7 +110,95 @@ CREATE INDEX idx_media_tags_tag     ON media_tags(tag_id);
 
 -- Covers import history query: SELECT MAX(timestamp) ... WHERE event_type = 'imported'
 CREATE INDEX idx_events_media       ON events(media_id, event_type);
+
+-- ── immutability guard ────────────────────────────────────────────────────────
+-- Protects columns that are written once at import and must never change.
+-- id changes would silently orphan media_tags and events rows (no ON UPDATE CASCADE).
+-- The raw source-file properties (exif_date, xmp_date, os_date, ext, partial_hash,
+-- source_path) are historical facts — mutating them destroys the audit trail.
+-- IS NOT handles NULLs correctly: NULL IS NOT NULL → false (no false alarm).
+CREATE TRIGGER media_immutable
+BEFORE UPDATE ON media FOR EACH ROW
+WHEN OLD.id           IS NOT NEW.id
+  OR OLD.source_path  IS NOT NEW.source_path
+  OR OLD.partial_hash IS NOT NEW.partial_hash
+  OR OLD.exif_date    IS NOT NEW.exif_date
+  OR OLD.xmp_date     IS NOT NEW.xmp_date
+  OR OLD.os_date      IS NOT NEW.os_date
+  OR OLD.ext          IS NOT NEW.ext
+BEGIN
+  SELECT RAISE(ABORT, 'media: immutable column update rejected');
+END;
 ```
+
+---
+
+## Bypassing the immutability trigger
+
+SQLite has no user/role system, so there are no `GRANT`/`REVOKE` semantics.
+"Special permission" is **schema modification privilege** — the ability to `DROP TRIGGER`.
+
+### Production: deliberate one-off correction
+
+Wrap the bypass in a transaction so the trigger is always restored, even on error:
+
+```sql
+BEGIN;
+DROP TRIGGER media_immutable;
+
+-- your corrective UPDATE here
+UPDATE media SET source_path = '/new/correct/path' WHERE id = '…';
+
+CREATE TRIGGER media_immutable
+BEFORE UPDATE ON media FOR EACH ROW
+WHEN OLD.id           IS NOT NEW.id
+  OR OLD.source_path  IS NOT NEW.source_path
+  OR OLD.partial_hash IS NOT NEW.partial_hash
+  OR OLD.exif_date    IS NOT NEW.exif_date
+  OR OLD.xmp_date     IS NOT NEW.xmp_date
+  OR OLD.os_date      IS NOT NEW.os_date
+  OR OLD.ext          IS NOT NEW.ext
+BEGIN
+  SELECT RAISE(ABORT, 'media: immutable column update rejected');
+END;
+
+COMMIT;
+```
+
+If anything in the block fails, the `ROLLBACK` leaves the trigger intact.
+
+### Debug session: programmatic stale-data cleanup (Rust)
+
+For a maintenance tool or test fixture, disable the trigger for the connection lifetime,
+do the work, then re-enable — all inside a single transaction:
+
+```rust
+fn with_mutable_media<F>(conn: &rusqlite::Connection, f: F) -> anyhow::Result<()>
+where
+    F: FnOnce(&rusqlite::Connection) -> anyhow::Result<()>,
+{
+    conn.execute_batch("BEGIN; DROP TRIGGER IF EXISTS media_immutable;")?;
+    let result = f(conn);
+    // Always recreate — even on error — before committing or rolling back.
+    conn.execute_batch(MEDIA_IMMUTABLE_TRIGGER_SQL)?;
+    match result {
+        Ok(_) => conn.execute_batch("COMMIT")?,
+        Err(_) => conn.execute_batch("ROLLBACK")?,
+    }
+    result
+}
+```
+
+Where `MEDIA_IMMUTABLE_TRIGGER_SQL` is a `const` holding the `CREATE TRIGGER` DDL —
+kept in one place so the trigger definition can never drift between creation and bypass.
+
+### What this guards against
+
+The trigger is not a security boundary (anyone with file-system access can open the DB
+directly). Its purpose is **accidental mutation** — a stray `UPDATE media SET …` in
+application code that hits the wrong columns. The `RAISE(ABORT)` surfaces the bug
+immediately rather than silently corrupting historical provenance data.
+
 
 ---
 
