@@ -19,8 +19,10 @@ Write safe Rust. Ship tests. No surprises. Be brief.
 
 ## Process
 
-1. Read the planning summary and open questions.
-2. Search existing code before writing new code.
-3. Implement the fix or feature with tests.
-4. Run `cargo test` and any relevant checks.
-5. Report: what changed, tests added, and any new dependencies.
+1. Read the PRD (Product Requirements Document) provided by the `requirements-engineer`.
+2. Review the implementation plan.
+3. Search existing code before writing new code.
+4. Implement the fix or feature with tests.
+5. If requirements are ambiguous or conflict with implementation realities, escalate to the `requirements-engineer` for PRD clarification (do not guess or ask the human).
+6. Run `cargo test` and any relevant checks.
+7. Report: what changed, tests added, and any new dependencies.

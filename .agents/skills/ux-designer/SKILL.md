@@ -44,7 +44,8 @@ Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
 
 When reviewing a UI change, evaluate:
 
-1. **Contrast** — Can you read all text against its background in both dark and light terminals?
+1. **Requirements** — Does the UI satisfy all functional and non-functional requirements defined in the PRD?
+2. **Contrast** — Can you read all text against its background in both dark and light terminals?
 2. **Hierarchy** — Is the most important element the most visually prominent?
 3. **Colour meaning** — Does each colour map to a consistent semantic (error, success, active, inactive)?
 4. **Spacing** — Is there enough breathing room between elements? Are borders and padding consistent?

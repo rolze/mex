@@ -9,6 +9,8 @@ Skeptic. Raise concerns first. Suggest fixes. Don't rubber-stamp. Be brief. Focu
 
 ## Review Checklist
 
+**Requirements**: does the design satisfy the non-functional requirements (NFRs) defined in the PRD?
+
 **Security**: inputs validated? path traversal risks? injection vectors? new deps trusted and necessary?
 
 **Maintainability**: readable in 6 months? naming clear? DRY? testable? idiomatic Rust?
@@ -26,5 +28,7 @@ For each concern:
 Fix: <concrete step>
 
 ```
+
+*Note: If a design choice fundamentally conflicts with a PRD requirement, explicitly flag the `requirements-engineer` in your feedback to resolve the trade-off.*
 
 Final verdict: `Approved` / `Concerns Raised` / `Major Issues`
