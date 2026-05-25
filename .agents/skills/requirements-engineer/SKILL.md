@@ -106,7 +106,7 @@ AC-2: ...
 - When an agent discovers an ambiguity during implementation, update the PRD
   with the resolution (not the UC).
 - PRDs never contain implementation decisions — those belong in the implementation
-  plan or `doc/IMPL.md`.
+  plan or `doc/ARCHITECTURE.md`.
 
 ### Resolving conflicts
 

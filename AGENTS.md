@@ -31,7 +31,7 @@ All four checks must pass before committing.
 | Document | Path | Content |
 |----------|------|---------|
 | README | `README.md` | What Sem & Mex does, features, config |
-| Architecture | `doc/IMPL.md` | Module map, patterns, Rust non-negotiables |
+| Architecture | `doc/ARCHITECTURE.md` | Core structural guardrails, layered model, Rust non-negotiables |
 | Dev setup | `doc/DEV.md` | Build, release pipeline, prerequisites |
 | Database | `doc/DATABASE.md` | Schema, column rationale, performance |
 | Filename spec | `doc/REGEXP.md` | Strict filename convention and regex |
@@ -40,10 +40,10 @@ All four checks must pass before committing.
 | Use cases | `spec/UC-XX.md` | Human-written, implementation-flavoured (see `spec/README.md`) |
 | PRDs | `prd/PRD-XX-*.md` | Technology-agnostic requirements (see `prd/README.md`) |
 
-**Read `doc/IMPL.md` before writing any code.** It contains load-bearing design rules.
+**Read `doc/ARCHITECTURE.md` before writing any code.** It contains load-bearing design rules.
 
 **Read the relevant `prd/PRD-XX-*.md` before planning any feature.** PRDs define
-what the product must do; `doc/IMPL.md` defines how the current codebase does it.
+what the product must do; `doc/ARCHITECTURE.md` defines the structural guardrails for how to build it. Prototype-specific implementation details are kept in local `ADL.md` files within the implementation folders.
 
 ---
 
@@ -76,7 +76,7 @@ The `requirements-engineer` is active across all phases — see Agent Roles belo
 1. Produce an implementation plan with:
    - Files to create / modify / delete.
    - Database schema changes (if any).
-   - Architectural decisions validated against `doc/IMPL.md` patterns.
+   - Architectural decisions validated against `doc/ARCHITECTURE.md` patterns and local `ADL.md` rules.
 2. `requirements-engineer` validates: does the plan cover **every** acceptance
    criterion in the relevant PRDs? Flag missed requirements.
 3. Flag anything ambiguous or contradictory — do not guess.
@@ -170,7 +170,8 @@ Implements features and fixes. Writes clean, idiomatic, testable Rust code.
 ### rust-architect
 
 Reviews code for async correctness, runtime efficiency, caching design, and
-adherence to `doc/IMPL.md` patterns. Skeptical by default — does not rubber-stamp.
+adherence to `doc/ARCHITECTURE.md` patterns. Owns the architecture guidance.
+Skeptical by default — does not rubber-stamp.
 
 **Invoked in**: Phase 4 (Review).
 **Skill**: `.agents/skills/rust-architect/SKILL.md`
@@ -252,7 +253,7 @@ This applies to prose that refers to the two tools together as a product pair. I
 - Errors propagate with `?`. Library functions return `Result`.
 - `&T` for reads, `&mut T` only where the type's API forces it.
 - Cross-thread coordination uses mpsc, not `Arc<Mutex<_>>`.
-- See `doc/IMPL.md` § "Rust non-negotiables" for the full list.
+- See `doc/ARCHITECTURE.md` § "Rust Non-Negotiables" for the full list.
 
 ### Commit messages
 
@@ -293,10 +294,11 @@ Then distils PRD-17-rename with acceptance criteria:
 - AC-2: Given a name that conflicts with an existing file, when rename is executed, then the operation fails with a clear error — no data loss.
 - AC-3: Given a file with tags, when renamed, then all tag associations are preserved.
 
-**Phase 2 — Plan**: Plan covers file renaming, data store update, and UI refresh.
-`requirements-engineer` validates: AC-1 through AC-3 are addressed. Flags: "AC-2
-doesn't specify whether collision detection checks the data store, the filesystem,
-or both" — updates PRD-17 to clarify "both".
+**Phase 2 — Plan**: Rename touches `app.rs` (command handling), `db.rs` (path_stem update),
+and filesystem (atomic rename + mtime preservation). Validate against `doc/ARCHITECTURE.md`:
+caller-owned resources (pass `&mut Connection`), single-threaded UI (rename is synchronous —
+fast enough for one file). Plan: add `:rename` command parser in `app.rs`,
+`rename_file()` in `db.rs`, filesystem rename in `app.rs` command handler.
 
 **Phase 3 — Implement**: `rust-developer` writes the code. During implementation,
 asks: "should rename preserve the file's modification timestamp?" →

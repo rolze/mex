@@ -21,7 +21,8 @@ Write safe Rust. Ship tests. No surprises. Be brief.
 
 1. Read the PRD (Product Requirements Document) provided by the `requirements-engineer`.
 2. Review the implementation plan.
-3. Search existing code before writing new code.
+3. Check `doc/ARCHITECTURE.md` for architectural constraints and the local `ADL.md` (e.g., `mex/ADL.md`) for implementation-specific context.
+4. Search existing code before writing new code.
 4. Implement the fix or feature with tests.
 5. If requirements are ambiguous or conflict with implementation realities, escalate to the `requirements-engineer` for PRD clarification (do not guess or ask the human).
 6. Run `cargo test` and any relevant checks.
