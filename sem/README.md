@@ -29,7 +29,7 @@ In mex:
 - `p` with ≥ 2 images selected → grid view in sem.
 - Videos still go to mpv.
 
-See [spec/UC-15-sem-viewer.md](../spec/UC-15-sem-viewer.md).
+See [mex/spec/UC-15-sem-viewer.md](../mex/spec/UC-15-sem-viewer.md).
 
 ## Build
 
