@@ -37,9 +37,13 @@ All four checks must pass before committing.
 | Filename spec | `doc/REGEXP.md` | Strict filename convention and regex |
 | Testing | `doc/TESTING.md` | Automated tests, TUI smoke test, chaos testing |
 | Install | `INSTALL.md` | End-user install instructions |
-| Use cases | `spec/UC-XX.md` | Source of truth per feature (see `spec/README.md`) |
+| Use cases | `spec/UC-XX.md` | Human-written, implementation-flavoured (see `spec/README.md`) |
+| PRDs | `prd/PRD-XX-*.md` | Technology-agnostic requirements (see `prd/README.md`) |
 
 **Read `doc/IMPL.md` before writing any code.** It contains load-bearing design rules.
+
+**Read the relevant `prd/PRD-XX-*.md` before planning any feature.** PRDs define
+what the product must do; `doc/IMPL.md` defines how the current codebase does it.
 
 ---
 
@@ -53,15 +57,19 @@ Human is engaged only to resolve contradictions, unclear requirements, or for fi
  auto     auto     auto          auto       auto     human
 ```
 
+The `requirements-engineer` is active across all phases — see Agent Roles below.
+
 ### Phase 1 — Spec
 
 1. Read the relevant `spec/UC-XX.md` documents.
-2. If the feature is covered by an existing UC, note what must change.
-3. If a new UC is needed, draft it following the format in `spec/`.
-4. Identify affected modules from `doc/IMPL.md` module map.
-5. If the feature touches the database, read `doc/DATABASE.md`.
+2. `requirements-engineer` converts or updates `prd/PRD-XX-*.md` from the UC docs.
+   PRDs must be technology-agnostic — no Rust, Ratatui, SQLite, or GTK4 references.
+   Each PRD has testable acceptance criteria in Given/When/Then format.
+3. If a new feature has no UC, draft a UC in `spec/` first, then derive the PRD.
+4. Identify gaps: acceptance criteria without matching requirements, or requirements
+   without acceptance criteria. Flag as open questions.
 
-**Output**: List of affected UC docs, modules, and open questions.
+**Output**: Updated PRDs with acceptance criteria. List of open questions.
 
 ### Phase 2 — Plan
 
@@ -69,8 +77,11 @@ Human is engaged only to resolve contradictions, unclear requirements, or for fi
    - Files to create / modify / delete.
    - Database schema changes (if any).
    - Architectural decisions validated against `doc/IMPL.md` patterns.
-2. Flag anything ambiguous or contradictory — do not guess.
-3. If conflicting requirements are found, stop and request human clarification.
+2. `requirements-engineer` validates: does the plan cover **every** acceptance
+   criterion in the relevant PRDs? Flag missed requirements.
+3. Flag anything ambiguous or contradictory — do not guess.
+4. If conflicting requirements are found, `requirements-engineer` resolves by
+   consulting the PRD → UC → human (in that order).
 
 **Output**: Implementation plan artifact. Proceed to Phase 3 unless blocked.
 
@@ -80,18 +91,22 @@ Human is engaged only to resolve contradictions, unclear requirements, or for fi
 2. Update the relevant `spec/UC-XX.md` in the same commit — see UC sync rules below.
 3. Keep commits small, focused, and atomic.
 4. Commit message format: `<area>: <what changed>` — e.g. `import: deduplicate by partial hash`, `ui: add tag autocomplete to command bar`.
+5. When ambiguities arise, escalate to `requirements-engineer` — not the human.
+   The requirements-engineer resolves by updating the PRD.
 
 **Output**: Working code with updated UC docs.
 
 ### Phase 4 — Review
 
-1. `rust-architect` reviews: async correctness, caching, allocation, `Send` boundaries.
-2. `database-expert` reviews schema changes (if any): indexes, triggers, migrations.
-3. `ux-designer` reviews UI changes (if any): colour, layout, interaction quality.
-4. Each reviewer outputs a verdict: `Approved` / `Concerns Raised` / `Major Issues`.
-5. `Major Issues` blocks Phase 5. `Concerns Raised` must be addressed or explicitly deferred.
+1. `requirements-engineer` verifies: does the implementation satisfy **all** PRD
+   acceptance criteria? Reports coverage: `AC-N: covered / not covered / partially covered`.
+2. `rust-architect` reviews: async correctness, caching, allocation, `Send` boundaries.
+3. `database-expert` reviews schema changes (if any): indexes, triggers, migrations.
+4. `ux-designer` reviews UI changes (if any): colour, layout, interaction quality.
+5. Each reviewer outputs a verdict: `Approved` / `Concerns Raised` / `Major Issues`.
+6. `Major Issues` blocks Phase 5. `Concerns Raised` must be addressed or explicitly deferred.
 
-**Output**: Review verdicts. Rework if needed, then proceed.
+**Output**: Review verdicts with requirements coverage. Rework if needed, then proceed.
 
 ### Phase 5 — Test
 
@@ -99,9 +114,11 @@ Human is engaged only to resolve contradictions, unclear requirements, or for fi
 2. Run TUI smoke test via tmux — see `doc/TESTING.md`.
 3. `mex-chaos-tester` stress-tests edge cases.
 4. `rust-quality-checker` runs the full quality pipeline.
-5. All tests must pass. Fix failures and re-run.
+5. `requirements-engineer` confirms: do test cases map to PRD acceptance criteria?
+   Flags untested requirements.
+6. All tests must pass. Fix failures and re-run.
 
-**Output**: All-green test results.
+**Output**: All-green test results with requirements traceability.
 
 ### Phase 6 — Ship
 
@@ -114,7 +131,7 @@ Human is engaged only to resolve contradictions, unclear requirements, or for fi
 
 ## Agent Roles
 
-Six specialized agents collaborate through the AIDLC. Each has a detailed
+Seven specialized agents collaborate through the AIDLC. Each has a detailed
 skill definition in `.agents/skills/`.
 
 ### Orchestrator
@@ -130,6 +147,18 @@ resolves inter-agent disagreements, and decides when to engage the human.
 - Engage the human only for: contradictions, unclear requirements, final review.
 
 No separate skill file — the orchestrator is the agent reading this document.
+
+### requirements-engineer
+
+Converts human-written use cases (`spec/UC-XX.md`) into technology-agnostic
+PRD documents (`prd/PRD-XX-*.md`). Owns the PRDs. Defines acceptance criteria
+and success metrics. Resolves ambiguities and conflicts between agents.
+The requirements-engineer ensures implementations satisfy product intent
+regardless of the technology stack used.
+
+**Invoked in**: Phase 1 (primary), Phase 2 (validate plan), Phase 3 (on-call),
+Phase 4 (verify acceptance criteria), Phase 5 (confirm test coverage).
+**Skill**: `.agents/skills/requirements-engineer/SKILL.md`
 
 ### rust-developer
 
@@ -184,7 +213,7 @@ security audit, dependency analysis.
 
 ### UC document sync
 
-Every UC document (`spec/UC-XX.md`) is the source of truth for its feature.
+Every UC document (`spec/UC-XX.md`) is the human's voice for its feature.
 
 **Rule: every implementation change must be reflected in the corresponding UC document in the same commit.**
 
@@ -192,6 +221,18 @@ Every UC document (`spec/UC-XX.md`) is the source of truth for its feature.
 - UC docs must be brief and concise — describe *what is implemented*, not aspirations.
 - Remove outdated details immediately; do not leave stale text.
 - If a change spans multiple UCs, update all affected docs.
+
+### PRD document ownership
+
+Every PRD document (`prd/PRD-XX-*.md`) is owned by the `requirements-engineer`.
+
+**Rule: only the requirements-engineer creates or modifies PRDs.**
+
+- PRDs are technology-agnostic. No Rust, Ratatui, SQLite, or GTK4 references.
+- Every PRD has acceptance criteria in Given/When/Then format.
+- When a UC changes, the requirements-engineer reviews the corresponding PRD.
+- When agents disagree about requirements, the PRD is the arbiter.
+- If the PRD doesn't answer the question, escalate to the human.
 
 ### Product name: "Sem & Mex"
 
@@ -245,26 +286,30 @@ TUI smoke testing uses tmux — see `doc/TESTING.md` § "TUI smoke test".
 
 > Feature request: "Add `:rename` command to rename the selected file."
 
-**Phase 1 — Spec**: Read UC-02 (browse), UC-04 (selecting), UC-14 (caption).
-The rename feature is closest to UC-14 (caption editing) but broader.
-Decide: extend UC-14 or create UC-17. Draft UC-17.
+**Phase 1 — Spec**: `requirements-engineer` reads UC-02 (browse), UC-04 (selecting),
+UC-14 (caption). The rename feature is closest to UC-14 but broader. Drafts UC-17.
+Then distils PRD-17-rename with acceptance criteria:
+- AC-1: Given a selected file, when the user executes rename with a valid name, then the file is renamed and the list updates instantly.
+- AC-2: Given a name that conflicts with an existing file, when rename is executed, then the operation fails with a clear error — no data loss.
+- AC-3: Given a file with tags, when renamed, then all tag associations are preserved.
 
-**Phase 2 — Plan**: Rename touches `app.rs` (command handling), `db.rs` (path_stem update),
-and filesystem (atomic rename + mtime preservation). Validate against IMPL.md:
-caller-owned resources (pass `&mut Connection`), single-threaded UI (rename is synchronous —
-fast enough for one file). Plan: add `:rename` command parser in `app.rs`,
-`rename_file()` in `db.rs`, filesystem rename in `app.rs` command handler.
+**Phase 2 — Plan**: Plan covers file renaming, data store update, and UI refresh.
+`requirements-engineer` validates: AC-1 through AC-3 are addressed. Flags: "AC-2
+doesn't specify whether collision detection checks the data store, the filesystem,
+or both" — updates PRD-17 to clarify "both".
 
-**Phase 3 — Implement**: `rust-developer` writes the code, adds tests for
-`rename_file()` with in-memory SQLite, updates UC-17 with the implemented behaviour.
+**Phase 3 — Implement**: `rust-developer` writes the code. During implementation,
+asks: "should rename preserve the file's modification timestamp?" →
+`requirements-engineer` checks PRD-17, finds no requirement, adds NFR-1:
+"Rename must preserve the file's original modification timestamp."
 
-**Phase 4 — Review**: `rust-architect` checks the rename is atomic (rename then
-update DB in a transaction — not the reverse). `ux-designer` checks the status
-message colour and wording after rename.
+**Phase 4 — Review**: `requirements-engineer` verifies AC-1 ✅, AC-2 ✅, AC-3 ✅,
+NFR-1 ✅. `rust-architect` checks the rename is atomic. `ux-designer` checks the
+status message colour and wording after rename.
 
-**Phase 5 — Test**: `cargo test` passes. Tmux smoke test: navigate to a file,
-type `:rename new-name`, verify the file list updates. `mex-chaos-tester` tries:
-rename to existing name, rename with special characters, rename during active filter,
-rename a file that was just deleted.
+**Phase 5 — Test**: `cargo test` passes. `requirements-engineer` confirms test cases
+map to AC-1, AC-2, AC-3, NFR-1. `mex-chaos-tester` tries: rename to existing name,
+rename with special characters, rename during active filter, rename a file that was
+just deleted.
 
 **Phase 6 — Ship**: Present diff to human. Human approves. Commit to main.
