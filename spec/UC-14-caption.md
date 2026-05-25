@@ -5,7 +5,7 @@
 
 ### Important reminder
 
-According to the strict filename convention defined in `../REGEXP.md`, each file can have an optional descriptive caption embedded in the filename before the extension. The inline editor manipulates this specific component.
+According to the strict filename convention defined in `../doc/REGEXP.md`, each file can have an optional descriptive caption embedded in the filename before the extension. The inline editor manipulates this specific component.
 
 ### Flow
 

@@ -27,7 +27,7 @@ See [sem/README.md](sem/README.md) for build instructions and details.
 
 ## Filename Convention
 
-The library enforces a strict filename and directory structure to ensure long-term maintainability and easy browsing. See [REGEXP.md](REGEXP.md) for the formal specification, component definitions, and validation rules.
+The library enforces a strict filename and directory structure to ensure long-term maintainability and easy browsing. See [REGEXP.md](doc/REGEXP.md) for the formal specification, component definitions, and validation rules.
 
 ## Configuration
 
