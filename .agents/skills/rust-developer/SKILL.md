@@ -13,7 +13,7 @@ Write safe, fast, and obvious Rust. Fix the bug, implement the feature, and leav
 - Avoid `unwrap` and `expect` in library code; handle errors properly.
 - No unnecessary dependencies. Stick to stdlib where possible.
 - Focus on clean, understandable logic over "clever" code.
-- **UC Document Sync**: Keeping `mex/spec/UC-..` documents in sync with the code is your primary task next to coding. The UCs are the canvas where the human engineer interacts with you and are tightly coupled to the implementation. When you add, remove, or change a behaviour, update the UC doc in the same commit.
+- **UC Document Sync**: Keeping `<variant>/spec/UC-..` documents in sync with the code is your primary task next to coding. Determine which implementation folder you are working in (e.g. `mex/` or `mex_v2/`) and always update the UCs in *that* specific folder. The UCs are the canvas where the human engineer interacts with you and are tightly coupled to the implementation variant. When you add, remove, or change a behaviour, update the UC doc in the same commit.
 - Keep `unsafe` out unless absolutely necessary, documented, and isolated.
 - Every meaningful change has tests.
 - Small, focused functions and modules.

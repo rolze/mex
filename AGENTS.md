@@ -37,7 +37,7 @@ All four checks must pass before committing.
 | Filename spec | `doc/REGEXP.md` | Strict filename convention and regex |
 | Testing | `doc/TESTING.md` | Automated tests, TUI smoke test, chaos testing |
 | Install | `INSTALL.md` | End-user install instructions |
-| Use cases | `mex/spec/UC-XX.md` | Human-written, implementation-flavoured (see `mex/spec/README.md`) |
+| Use cases | `<variant>/spec/UC-XX.md` | Human-written, implementation-flavoured (see `<variant>/spec/README.md`) |
 | PRDs | `prd/PRD-XX-*.md` | Technology-agnostic requirements (see `prd/README.md`) |
 
 **Read `doc/ARCHITECTURE.md` before writing any code.** It contains load-bearing design rules.
@@ -61,11 +61,11 @@ The `requirements-engineer` is active across all phases — see Agent Roles belo
 
 ### Phase 1 — Spec
 
-1. Read the relevant `mex/spec/UC-XX.md` documents.
+1. Read the relevant `<variant>/spec/UC-XX.md` documents.
 2. `requirements-engineer` converts or updates `prd/PRD-XX-*.md` from the UC docs.
    PRDs must be technology-agnostic — no Rust, Ratatui, SQLite, or GTK4 references.
    Each PRD has testable acceptance criteria in Given/When/Then format.
-3. If a new feature has no UC, draft a UC in `mex/spec/` first, then derive the PRD.
+3. If a new feature has no UC, draft a UC in `<variant>/spec/` first, then derive the PRD.
 4. Identify gaps: acceptance criteria without matching requirements, or requirements
    without acceptance criteria. Flag as open questions.
 
@@ -88,7 +88,7 @@ The `requirements-engineer` is active across all phases — see Agent Roles belo
 ### Phase 3 — Implement
 
 1. Write code following the `rust-developer` skill.
-2. Update the relevant `mex/spec/UC-XX.md` in the same commit — see UC sync rules below.
+2. Update the relevant `<variant>/spec/UC-XX.md` in the same commit — see UC sync rules below.
 3. Keep commits small, focused, and atomic.
 4. Commit message format: `<area>: <what changed>` — e.g. `import: deduplicate by partial hash`, `ui: add tag autocomplete to command bar`.
 5. When ambiguities arise, escalate to `requirements-engineer` — not the human.
@@ -150,7 +150,7 @@ No separate skill file — the orchestrator is the agent reading this document.
 
 ### requirements-engineer
 
-Converts human-written use cases (`mex/spec/UC-XX.md`) into technology-agnostic
+Converts human-written use cases (`<variant>/spec/UC-XX.md`) into technology-agnostic
 PRD documents (`prd/PRD-XX-*.md`). Owns the PRDs. Defines acceptance criteria
 and success metrics. Resolves ambiguities and conflicts between agents.
 The requirements-engineer ensures implementations satisfy product intent
@@ -215,7 +215,7 @@ security audit, dependency analysis.
 
 ### UC document sync
 
-Every UC document (`mex/spec/UC-XX.md`) is the human's voice for its feature.
+Every UC document (`<variant>/spec/UC-XX.md`) is the human's voice for its feature.
 
 **Rule: every implementation change must be reflected in the corresponding UC document in the same commit.**
 

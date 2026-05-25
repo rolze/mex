@@ -1,6 +1,6 @@
 # Sem & Mex — Product Requirements Documents
 
-Technology-agnostic requirements derived from the use cases in `mex/spec/`.
+Technology-agnostic requirements derived from the use cases in `<variant>/spec/`.
 
 These documents describe **what** the product must do, not **how**.
 They are owned by the `requirements-engineer` agent and serve as the
@@ -19,10 +19,10 @@ contract between human intent and agent implementation.
 
 _No PRDs yet. The requirements engineer will populate this index as PRDs are created._
 
-## Relationship to mex/spec/
+## Relationship to <variant>/spec/
 
 ```
-mex/spec/UC-XX.md          →  Human-written use cases (implementation-flavoured)
+<variant>/spec/UC-XX.md          →  Human-written use cases (implementation-flavoured)
     ↓ requirements-engineer distills
 prd/PRD-XX-name.md     →  Technology-agnostic requirements (agent-owned)
     ↓ drives
