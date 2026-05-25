@@ -57,15 +57,15 @@ CREATE TABLE media (
     -- Acts as the single source of truth for:
     --   • OS mtime stamped on the target file immediately after copy
     --   • mtime repair (:fix-os-time) — no re-derivation needed
-    --   • deslugify — uses derived_at[0..10] for YYYY-MM-DD components
+    --   • deslugify — uses mex_date[0..10] for YYYY-MM-DD components
     -- NOT NULL: slug-based filenames encode only YYYY-MM; the full date+time is only here.
-    derived_at       TEXT    NOT NULL,
+    mex_date       TEXT    NOT NULL,
 
     -- Raw source-file date inputs, captured once at import.
-    -- NULL = absent in source file. These are inputs to derived_at, never mutated after import.
-    orig_exif_date   TEXT,
-    orig_xmp_date    TEXT,           -- NULL = no XMP sidecar (replaces has_xmp_sidecar)
-    orig_os_date     TEXT,           -- source file OS mtime, captured at scan
+    -- NULL = absent in source file. These are inputs to mex_date, never mutated after import.
+    exif_date   TEXT,
+    xmp_date    TEXT,           -- NULL = no XMP sidecar (replaces has_xmp_sidecar)
+    os_date     TEXT,           -- source file OS mtime, captured at scan
 
     status           TEXT    NOT NULL DEFAULT 'imported'
                              CHECK(status IN ('imported','duplicate','trashed','deleted')),
@@ -154,7 +154,7 @@ so storing it is a zero-cost write of already-available data.
 In the current DB, the 4,527 `duplicate` rows have `partial_hash = NULL` only because
 the old import code discarded the computed hash instead of writing it.
 
-### `derived_at` (replaces `derived_date`, NOT NULL)
+### `mex_date` (replaces `derived_date`, NOT NULL)
 
 The final authoritative datetime for the file, stored as `"YYYY-MM-DD HH:MM:SS"`.
 
@@ -166,26 +166,26 @@ local destination) using the best-fit priority chain:
 3. EXIF `DateTimeOriginal` (second precision from camera)
 4. `YYYY-MM-DD 12:00:00` (noon UTC fallback — avoids ±12 h timezone flip)
 
-**Source of truth after import**: `derived_at` is stamped onto the target file's OS
+**Source of truth after import**: `mex_date` is stamped onto the target file's OS
 mtime immediately after copy, and is re-applied by `:fix-os-time` without re-deriving.
 No other column needs to be consulted for mtime operations.
 
 **Replaces two responsibilities** held separately in the old schema:
-- `derived_date` (day-only date, `YYYY-MM-DD`) — `derived_at[0..10]` gives the same value
-- `os_date` (post-fix full datetime written by `:fix-os-time`) — now unified into `derived_at`
+- `derived_date` (day-only date, `YYYY-MM-DD`) — `mex_date[0..10]` gives the same value
+- `os_date` (post-fix full datetime written by `:fix-os-time`) — now unified into `mex_date`
 
-`deslugify_batch()` uses `derived_at[0..10]` for `YYYY-MM-DD` components — no change
+`deslugify_batch()` uses `mex_date[0..10]` for `YYYY-MM-DD` components — no change
 in its slicing logic.
 
 NOT NULL: slug-based filenames encode only `YYYY-MM`. `deslugify_batch()` needs the full
 `DD` component (and now `HH:MM:SS`), which is only available here after EXIF is read.
 
-### `orig_exif_date`, `orig_xmp_date`, `orig_os_date`
+### `exif_date`, `xmp_date`, `os_date`
 
-Raw source-file date properties, captured once at import and never mutated. The `orig_`
-prefix makes their role explicit: immutable inputs to the `derived_at` computation.
+Raw source-file date properties, captured once at import and never mutated.
+These are immutable inputs to the `mex_date` computation.
 
-`orig_xmp_date IS NOT NULL` serves as the XMP sidecar indicator — the old `has_xmp_sidecar`
+`xmp_date IS NOT NULL` serves as the XMP sidecar indicator — the old `has_xmp_sidecar`
 boolean was redundant.
 
 ### `tags_packed` / `tag_types_packed`
@@ -254,14 +254,14 @@ ORDER BY MAX(e.timestamp) DESC
 | Column | Reason |
 |--------|--------|
 | `content_hash` | Write-only in DB — never SELECTed. Deduplication uses `(file_size, partial_hash)` exclusively. Dropping it also removes the full-file SHA-256 computation from `stream_copy_and_hash`, saving CPU per import. |
-| `derived_date` | Renamed to `derived_at` and promoted to full `YYYY-MM-DD HH:MM:SS` precision. |
-| `os_date` | Post-fix full datetime written by `:fix-os-time`. Unified into `derived_at` — no separate column needed. |
+| `derived_date` | Renamed to `mex_date` and promoted to full `YYYY-MM-DD HH:MM:SS` precision. |
+| `os_date` (old) | Was a post-fix full datetime written by `:fix-os-time`, separate from scan mtime. Unified into `mex_date`. The new `os_date` column is the raw scan mtime (formerly `orig_os_date`). |
 | `derived_slug` | Legacy (22 K stale rows). Derivable at runtime from `path_stem` via `PATH_RE`. Never read from DB in current code. |
 | `caption_slug` | Derivable at runtime from `path_stem` via `PATH_RE`. Only ever written, never selectively queried. |
 | `date_source` | Write-only in DB. Its value is read from the in-memory `ImportEntry` struct for the import preview UI — never SELECTed back from the database. |
 | `slug_source` | Same as `date_source`: written at import, never read back from DB. |
 | `counter` | A cached `MAX(counter)` result. With `idx_media_path_stem`, counter detection uses a `LIKE` prefix scan + parse the trailing digit in Rust. ~50–200 matching rows per day-prefix, negligible. |
-| `has_xmp_sidecar` | `orig_xmp_date IS NOT NULL` is the exact equivalent. Storing a separate boolean is redundant. |
+| `has_xmp_sidecar` | `xmp_date IS NOT NULL` is the exact equivalent. Storing a separate boolean is redundant. |
 | `scanned_at` | Moved to `events(event_type='scanned')`. Was write-only (agent tooling). |
 | `moved_at` | Moved to `events(event_type='imported')`. Was actively queried in import history. |
 
@@ -294,9 +294,9 @@ GROUP BY m.id
 
 **After:**
 ```sql
-SELECT id, path_stem, ext, derived_at,
+SELECT id, path_stem, ext, mex_date,
        tags_packed, tag_types_packed,
-       orig_os_date, source_path, status, missing_on_disk
+       os_date, source_path, status, missing_on_disk
 FROM media
 WHERE path_stem IS NOT NULL AND status != 'deleted'
 ORDER BY path_stem
