@@ -84,6 +84,9 @@ impl Config {
     }
 
     pub fn config_file_path() -> PathBuf {
+        if let Ok(env_path) = std::env::var("MEX_CONFIG") {
+            return PathBuf::from(env_path);
+        }
         let home = std::env::var("HOME").expect("HOME environment variable not set");
         Path::new(&home).join(".config").join("mex").join("config.toml")
     }
