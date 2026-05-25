@@ -179,7 +179,8 @@ Skeptical by default — does not rubber-stamp.
 ### database-expert
 
 Reviews and designs SQLite schema, queries, indexes, and migrations.
-Challenges every table and index to earn its keep.
+Challenges every table and index to earn its keep. Owns and authoritatively
+maintains the `doc/DATABASE.md` schema guidance.
 
 **Invoked in**: Phase 2 (Plan, if schema changes), Phase 4 (Review).
 **Skill**: `.agents/skills/database-expert/SKILL.md`
