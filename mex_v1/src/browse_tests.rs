@@ -476,9 +476,9 @@ mod tests {
     // ── Grouping ───────────────────────────────────────────────────────
 
     #[test]
-    fn left_arrow_collapses_group_and_right_arrow_expands() {
+    fn semantic_zoom_out_and_in() {
         let mut app = test_app(&seed_items());
-        let initial_rows = app.visible_rows.len();
+        assert_eq!(app.global_zoom, crate::app::ZoomLevel::Flat);
         
         // Find an item with a group_key
         let mut target_idx = 0;
@@ -493,13 +493,20 @@ mod tests {
         
         app.cursor_pos = target_idx;
         
-        // Collapse
+        // Collapse (Zoom out to Slug globally)
         app.handle_key(key(KeyCode::Left));
-        let collapsed_rows = app.visible_rows.len();
-        assert!(collapsed_rows < initial_rows || initial_rows == collapsed_rows);
+        assert_eq!(app.global_zoom, crate::app::ZoomLevel::Slug);
+        let slug_rows = app.visible_rows.len();
         
-        // Right should expand
+        // Zoom out to Month globally
+        app.handle_key(key(KeyCode::Left));
+        assert_eq!(app.global_zoom, crate::app::ZoomLevel::Month);
+        let month_rows = app.visible_rows.len();
+        assert!(month_rows <= slug_rows);
+        
+        // Zoom in (Right) on Month
         app.handle_key(key(KeyCode::Right));
-        assert_eq!(app.visible_rows.len(), initial_rows);
+        // It expands contextually, meaning expanded_overrides now contains the month
+        assert!(!app.expanded_overrides.is_empty());
     }
 }

@@ -63,6 +63,32 @@ impl MediaItem {
         })
     }
 
+
+    pub fn year_str(&self) -> Option<&str> {
+        let stem = self.path_stem.as_ref()?;
+        stem.split('-').next()
+    }
+
+    pub fn month_str(&self) -> Option<&str> {
+        let stem = self.path_stem.as_ref()?;
+        if stem.len() >= 7 {
+            Some(&stem[0..7])
+        } else {
+            None
+        }
+    }
+
+    pub fn slug_str(&self) -> Option<&str> {
+        let stem = self.path_stem.as_ref()?;
+        let parts: Vec<&str> = stem.split('-').collect();
+        if parts.len() >= 3 {
+            let len = parts[0].len() + 1 + parts[1].len() + 1 + parts[2].len();
+            Some(&stem[0..len])
+        } else {
+            None
+        }
+    }
+
     pub fn group_key(&self) -> Option<String> {
         // According to REGEXP.md (implied by UC-04):
         // Files with a slug: yyyy-MM-<slug>-... -> group by yyyy-MM-<slug>

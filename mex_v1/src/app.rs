@@ -19,11 +19,21 @@ pub enum View {
     Trash,
 }
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ZoomLevel {
+    Flat = 0,
+    Slug = 1,
+    Month = 2,
+    Year = 3,
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ListRow {
     Item(usize),
     GroupSummary {
+        level: ZoomLevel,
         key: String,
         start_idx: usize,
         end_idx: usize,
@@ -36,7 +46,9 @@ pub struct App {
     pub items: Vec<MediaItem>,
     pub filtered_items: Vec<usize>, // Indices into items
     pub visible_rows: Vec<ListRow>,
-    pub collapsed_groups: std::collections::HashSet<String>,
+    pub global_zoom: ZoomLevel,
+    pub expanded_overrides: std::collections::HashSet<String>,
+    pub collapsed_overrides: std::collections::HashSet<String>,
     pub selected: std::collections::HashSet<usize>,
     pub cursor_pos: usize,
     pub mode: Mode,
@@ -71,7 +83,9 @@ impl App {
             items,
             filtered_items,
             visible_rows: Vec::new(),
-            collapsed_groups: std::collections::HashSet::new(),
+            global_zoom: ZoomLevel::Flat,
+            expanded_overrides: std::collections::HashSet::new(),
+            collapsed_overrides: std::collections::HashSet::new(),
             selected: std::collections::HashSet::new(),
             cursor_pos: 0,
             mode: Mode::Normal,
@@ -98,27 +112,33 @@ impl App {
         Ok(app)
     }
 
+
+    pub fn is_collapsed(&self, level: ZoomLevel, key: &str) -> bool {
+        let default_collapsed = (level as u8) <= (self.global_zoom as u8);
+        if default_collapsed {
+            !self.expanded_overrides.contains(key)
+        } else {
+            self.collapsed_overrides.contains(key)
+        }
+    }
+
     pub fn build_visible_rows(&mut self) {
         self.visible_rows.clear();
         let mut i = 0;
         while i < self.filtered_items.len() {
             let idx = self.filtered_items[i];
             let item = &self.items[idx];
-            if let Some(key) = item.group_key() {
-                if self.collapsed_groups.contains(&key) {
+
+            if let Some(year) = item.year_str() {
+                if self.is_collapsed(ZoomLevel::Year, year) {
                     let start_i = i;
                     let mut j = i + 1;
-                    while j < self.filtered_items.len() {
-                        let next_idx = self.filtered_items[j];
-                        let next_item = &self.items[next_idx];
-                        if next_item.group_key() == Some(key.clone()) {
-                            j += 1;
-                        } else {
-                            break;
-                        }
+                    while j < self.filtered_items.len() && self.items[self.filtered_items[j]].year_str() == Some(year) {
+                        j += 1;
                     }
                     self.visible_rows.push(ListRow::GroupSummary {
-                        key,
+                        level: ZoomLevel::Year,
+                        key: year.to_string(),
                         start_idx: start_i,
                         end_idx: j,
                     });
@@ -126,6 +146,43 @@ impl App {
                     continue;
                 }
             }
+
+            if let Some(month) = item.month_str() {
+                if self.is_collapsed(ZoomLevel::Month, month) {
+                    let start_i = i;
+                    let mut j = i + 1;
+                    while j < self.filtered_items.len() && self.items[self.filtered_items[j]].month_str() == Some(month) {
+                        j += 1;
+                    }
+                    self.visible_rows.push(ListRow::GroupSummary {
+                        level: ZoomLevel::Month,
+                        key: month.to_string(),
+                        start_idx: start_i,
+                        end_idx: j,
+                    });
+                    i = j;
+                    continue;
+                }
+            }
+
+            if let Some(slug) = item.slug_str() {
+                if self.is_collapsed(ZoomLevel::Slug, slug) {
+                    let start_i = i;
+                    let mut j = i + 1;
+                    while j < self.filtered_items.len() && self.items[self.filtered_items[j]].slug_str() == Some(slug) {
+                        j += 1;
+                    }
+                    self.visible_rows.push(ListRow::GroupSummary {
+                        level: ZoomLevel::Slug,
+                        key: slug.to_string(),
+                        start_idx: start_i,
+                        end_idx: j,
+                    });
+                    i = j;
+                    continue;
+                }
+            }
+
             self.visible_rows.push(ListRow::Item(idx));
             i += 1;
         }
@@ -249,31 +306,10 @@ impl App {
                 }
             }
             KeyCode::Left => {
-                if let Some(ListRow::Item(idx)) = self.visible_rows.get(self.cursor_pos) {
-                    if let Some(key) = self.items[*idx].group_key() {
-                        self.collapsed_groups.insert(key.clone());
-                        self.build_visible_rows();
-                        if let Some(pos) = self.visible_rows.iter().position(|r| match r {
-                            ListRow::GroupSummary { key: k, .. } => k == &key,
-                            _ => false,
-                        }) {
-                            self.cursor_pos = pos;
-                        }
-                    }
-                }
+                self.zoom_out();
             }
             KeyCode::Right => {
-                if let Some(ListRow::GroupSummary { key, .. }) = self.visible_rows.get(self.cursor_pos) {
-                    let key_clone = key.clone();
-                    self.collapsed_groups.remove(&key_clone);
-                    self.build_visible_rows();
-                    if let Some(pos) = self.visible_rows.iter().position(|r| match r {
-                        ListRow::Item(idx) => self.items[*idx].group_key() == Some(key_clone.clone()),
-                        _ => false,
-                    }) {
-                        self.cursor_pos = pos;
-                    }
-                }
+                self.zoom_in();
             }
             KeyCode::Home => {
                 if is_shift {
@@ -891,6 +927,186 @@ impl App {
                     "UPDATE media SET missing_on_disk = ?1 WHERE id = ?2",
                     rusqlite::params![val, id],
                 );
+            }
+        }
+    }
+    
+    pub fn zoom_out(&mut self) {
+        if self.filtered_items.is_empty() || self.visible_rows.is_empty() { return; }
+        
+        let row = self.visible_rows.get(self.cursor_pos).cloned().unwrap();
+        
+        let mut target_level = ZoomLevel::Flat;
+        let mut target_key = String::new();
+        
+        match row {
+            ListRow::Item(idx) => {
+                let item = &self.items[idx];
+                if let Some(slug) = item.slug_str() {
+                    target_level = ZoomLevel::Slug;
+                    target_key = slug.to_string();
+                    if self.global_zoom >= ZoomLevel::Slug && self.expanded_overrides.contains(slug) {
+                        self.expanded_overrides.remove(slug);
+                        self.collapsed_overrides.insert(slug.to_string());
+                    } else if self.global_zoom < ZoomLevel::Slug {
+                        self.global_zoom = ZoomLevel::Slug;
+                        self.expanded_overrides.clear();
+                        self.collapsed_overrides.clear();
+                        self.status_message = Some("Grouped by Slug. Left to group by Month.".to_string());
+                    } else {
+                        self.collapsed_overrides.insert(slug.to_string());
+                    }
+                }
+            }
+            ListRow::GroupSummary { level, start_idx, .. } => {
+                let item = &self.items[self.filtered_items[start_idx]];
+                if level == ZoomLevel::Slug {
+                    if let Some(month) = item.month_str() {
+                        target_level = ZoomLevel::Month;
+                        target_key = month.to_string();
+                        if self.global_zoom >= ZoomLevel::Month && self.expanded_overrides.contains(month) {
+                            self.expanded_overrides.remove(month);
+                            self.collapsed_overrides.insert(month.to_string());
+                        } else if self.global_zoom < ZoomLevel::Month {
+                            self.global_zoom = ZoomLevel::Month;
+                            self.expanded_overrides.clear();
+                            self.collapsed_overrides.clear();
+                            self.status_message = Some("Grouped by Month. Left to group by Year.".to_string());
+                        } else {
+                            self.collapsed_overrides.insert(month.to_string());
+                        }
+                    }
+                } else if level == ZoomLevel::Month {
+                    if let Some(year) = item.year_str() {
+                        target_level = ZoomLevel::Year;
+                        target_key = year.to_string();
+                        if self.global_zoom >= ZoomLevel::Year && self.expanded_overrides.contains(year) {
+                            self.expanded_overrides.remove(year);
+                            self.collapsed_overrides.insert(year.to_string());
+                        } else if self.global_zoom < ZoomLevel::Year {
+                            self.global_zoom = ZoomLevel::Year;
+                            self.expanded_overrides.clear();
+                            self.collapsed_overrides.clear();
+                            self.status_message = Some("Grouped by Year. Maximum zoom out.".to_string());
+                        } else {
+                            self.collapsed_overrides.insert(year.to_string());
+                        }
+                    }
+                } else if level == ZoomLevel::Year {
+                    target_level = ZoomLevel::Year;
+                    target_key = item.year_str().unwrap_or("").to_string();
+                    if self.global_zoom < ZoomLevel::Year {
+                        self.global_zoom = ZoomLevel::Year;
+                        self.expanded_overrides.clear();
+                        self.collapsed_overrides.clear();
+                        self.status_message = Some("Grouped by Year globally.".to_string());
+                    }
+                }
+            }
+        }
+        
+        self.build_visible_rows();
+        
+        if !target_key.is_empty() {
+            if let Some(pos) = self.visible_rows.iter().position(|r| match r {
+                ListRow::GroupSummary { level, key, .. } => *level == target_level && key == &target_key,
+                _ => false,
+            }) {
+                self.cursor_pos = pos;
+            }
+        }
+    }
+
+    pub fn zoom_in(&mut self) {
+        if self.filtered_items.is_empty() || self.visible_rows.is_empty() { return; }
+        
+        let row = self.visible_rows.get(self.cursor_pos).cloned().unwrap();
+        let target_idx = match row {
+            ListRow::GroupSummary { key, start_idx, .. } => {
+                // It's a collapsed group. Expand it.
+                self.expanded_overrides.insert(key.clone());
+                self.collapsed_overrides.remove(&key);
+                Some(self.filtered_items[start_idx])
+            }
+            ListRow::Item(idx) => {
+                // We are on an item. Cascading zoom in.
+                let item = &self.items[idx];
+                let current_month = item.month_str().unwrap_or("");
+                let current_year = item.year_str().unwrap_or("");
+
+                // 1. Check if any slug in current_month is collapsed
+                let mut has_collapsed_slugs = false;
+                for other_idx in &self.filtered_items {
+                    let other = &self.items[*other_idx];
+                    if other.month_str() == Some(current_month) {
+                        if let Some(slug) = other.slug_str() {
+                            if self.is_collapsed(ZoomLevel::Slug, slug) {
+                                has_collapsed_slugs = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if has_collapsed_slugs {
+                    // Expand all slugs in current month
+                    for other_idx in &self.filtered_items {
+                        let other = &self.items[*other_idx];
+                        if other.month_str() == Some(current_month) {
+                            if let Some(slug) = other.slug_str() {
+                                self.expanded_overrides.insert(slug.to_string());
+                                self.collapsed_overrides.remove(slug);
+                            }
+                        }
+                    }
+                    self.status_message = Some("Expanded all items in Month.".to_string());
+                } else {
+                    // 2. Check if any month in current_year is collapsed
+                    let mut has_collapsed_months = false;
+                    for other_idx in &self.filtered_items {
+                        let other = &self.items[*other_idx];
+                        if other.year_str() == Some(current_year) {
+                            if let Some(month) = other.month_str() {
+                                if self.is_collapsed(ZoomLevel::Month, month) {
+                                    has_collapsed_months = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if has_collapsed_months {
+                        // Expand all months in current year
+                        for other_idx in &self.filtered_items {
+                            let other = &self.items[*other_idx];
+                            if other.year_str() == Some(current_year) {
+                                if let Some(month) = other.month_str() {
+                                    self.expanded_overrides.insert(month.to_string());
+                                    self.collapsed_overrides.remove(month);
+                                }
+                            }
+                        }
+                        self.status_message = Some("Expanded all months in Year.".to_string());
+                    } else {
+                        // 3. Expand everything globally
+                        self.global_zoom = ZoomLevel::Flat;
+                        self.expanded_overrides.clear();
+                        self.collapsed_overrides.clear();
+                        self.status_message = Some("Fully expanded globally.".to_string());
+                    }
+                }
+                Some(idx)
+            }
+        };
+
+        self.build_visible_rows();
+
+        if let Some(target_idx) = target_idx {
+            if let Some(pos) = self.visible_rows.iter().position(|r| match r {
+                ListRow::Item(i) => *i == target_idx,
+                ListRow::GroupSummary { start_idx, .. } => self.filtered_items[*start_idx] == target_idx,
+            }) {
+                self.cursor_pos = pos;
             }
         }
     }

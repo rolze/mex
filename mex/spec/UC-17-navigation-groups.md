@@ -1,27 +1,24 @@
-## UC-17 · Collapsible Navigation Groups
+## UC-17 · Progressive Semantic Zoom
 
 **Actor:** User  
-**Goal:** Quickly scan and navigate past large groups of related files.
+**Goal:** Quickly scan, progressively zoom out to high-level timelines, and drill down into specific periods.
 
 **Preconditions:** `.mex.db` exists.
 
 **Main Flow:**
-1. The user navigates the file list. Items belonging to the same group key (`yyyy-MM-<slug>` or `yyyy-MM-DD`) appear contiguous in the list.
-2. `Left arrow` on a file belonging to a group collapses the entire group into a single summary row and moves the cursor to that summary row.
-3. The summary row displays the group key, a summary of its contents (e.g. `(4 images, 3 videos)`), and a `+` in the tags column to indicate hidden items.
-4. `Right arrow` on a summary row expands the group back to individual items and places the cursor on the first item.
-5. While the cursor rests on a summary row, file-specific operations (tagging, viewing) are disabled.
-6. Pressing `Left arrow` on an item that does not belong to a group has no effect.
-7. Expanding and collapsing operations preserve the overall file list filter and selection state.
+1. The user navigates the file list.
+2. `Left arrow` progressively zooms out contextually: collapsing the current Item to a Slug, then Slug to Month, then Month to Year.
+3. Expanded items display inline. Group summaries (Slug, Month, Year) are indicated with visual prefixes (e.g. `▶ 2022`).
+4. `Right arrow` progressively zooms in: on a collapsed group, it expands it (contextual zoom in); on an expanded item, it expands siblings (e.g., all slugs in month, then all months in year) up to a global flat list.
+5. The status bar provides hints on what the next action will accomplish.
+6. The user can seamlessly traverse from a single item up to a decades overview using only Left/Right arrows, preserving context.
 
 **Visual indicators:**
-- Summary row has the group key and media count in the filename column.
-- The tag column shows a dim `+` instead of tags.
-- Cursor styling applies normally to the summary row.
+- Summary rows have different indentations and colours depending on the zoom level (Year is yellow bold, Month is cyan, Slug is gray).
+- Expanded groups do not use deep hierarchical visual indentation for items, keeping horizontal space efficient.
 
 **Acceptance Criteria:**
-- Left arrow collapses a group into a summary row in under 16ms.
-- Right arrow expands a group back out.
-- Cursor is correctly positioned on collapse (to the summary row) and expand (to the first item of the group).
-- Attempting to view or tag a summary row gracefully does nothing.
-- Unrelated items remain visible and selectable.
+- Left arrow contextually zooms out to Slug, Month, and Year sequentially.
+- Right arrow expands groups contextually or cascades outward on items.
+- Cursor tracks the collapsed group on zoom out.
+- UI styling correctly discriminates between Year, Month, and Slug headers.

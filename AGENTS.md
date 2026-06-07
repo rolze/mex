@@ -280,6 +280,9 @@ No conventional-commits prefixes (`feat:`, `fix:`, `chore:`). Use the module or 
 
 ### Testing
 
+**Rule: Every bug fix must be accompanied by a regression test.**
+Whenever an agent fixes a bug, they must write a unit or integration test that explicitly covers the edge case to prevent the bug from recurring in the future.
+
 See `doc/TESTING.md` for full instructions. Summary:
 
 ```bash

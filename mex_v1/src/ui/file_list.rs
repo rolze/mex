@@ -28,34 +28,41 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     for i in start..end {
         let row = &app.visible_rows[i];
         match row {
-            crate::app::ListRow::GroupSummary { key, start_idx, end_idx } => {
+            crate::app::ListRow::GroupSummary { key, start_idx, end_idx, level } => {
                 let is_cursor = i == app.cursor_pos;
-                let mut base_style = Style::default();
+                let mut base_style = match level {
+                    crate::app::ZoomLevel::Year => Style::default().fg(ratatui::style::Color::Yellow).add_modifier(Modifier::BOLD),
+                    crate::app::ZoomLevel::Month => Style::default().fg(ratatui::style::Color::Cyan),
+                    _ => Style::default().fg(ratatui::style::Color::Gray),
+                };
                 if is_cursor {
                     base_style = base_style.bg(app.theme.cursor_bg).add_modifier(Modifier::BOLD);
                 }
                 
                 let mut num_images = 0;
                 let mut num_videos = 0;
+                let total_items = *end_idx - *start_idx;
                 for j in *start_idx..*end_idx {
                     if let Some(media) = app.items.get(app.filtered_items[j]) {
-                        match media.ext.as_str() {
+                        match media.ext.to_lowercase().as_str() {
                             ".jpg" | ".jpeg" | ".png" | ".gif" | ".webp" => num_images += 1,
-                            ".mp4" | ".mkv" | ".webm" | ".mov" => num_videos += 1,
+                            ".mp4" | ".mkv" | ".webm" | ".mov" | ".avi" | ".m4v" => num_videos += 1,
                             _ => {}
                         }
                     }
                 }
                 
-                let mut counts = Vec::new();
-                if num_images > 0 { counts.push(format!("{} images", num_images)); }
-                if num_videos > 0 { counts.push(format!("{} videos", num_videos)); }
-                let counts_str = counts.join(", ");
+                let text = generate_summary_text(*level, key, num_images, num_videos, total_items, filename_width);
                 
-                let text = format!("{:<width$} │ +", format!("{} ({})", key, counts_str), width = list_width.saturating_sub(6));
+                let spans = vec![
+                    Span::styled(text, base_style),
+                    Span::styled(
+                        format!(" │ {}", "+"),
+                        base_style.fg(app.theme.tag).add_modifier(Modifier::DIM)
+                    )
+                ];
                 
-                let span = Span::styled(text, base_style.fg(app.theme.tag).add_modifier(Modifier::DIM));
-                items.push(ListItem::new(Line::from(vec![span])).style(base_style));
+                items.push(ListItem::new(Line::from(spans)).style(base_style));
             }
             crate::app::ListRow::Item(idx) => {
                 let idx = *idx;
@@ -248,6 +255,34 @@ pub(crate) fn extract_folder_year(stem: Option<&String>) -> &str {
     }
 }
 
+pub(crate) fn generate_summary_text(level: crate::app::ZoomLevel, key: &str, num_images: usize, num_videos: usize, total_items: usize, filename_width: usize) -> String {
+    let counts_str = if num_images > 0 || num_videos > 0 {
+        let mut counts = Vec::new();
+        if num_images > 0 { counts.push(format!("{} images", num_images)); }
+        if num_videos > 0 { counts.push(format!("{} videos", num_videos)); }
+        counts.join(", ")
+    } else {
+        format!("{} items", total_items)
+    };
+    
+    let (prefix, text) = match level {
+        crate::app::ZoomLevel::Year => {
+            ("▶ ", format!("{} ({})", key, counts_str))
+        }
+        crate::app::ZoomLevel::Month => {
+            ("  ▶ ", format!("{} ({})", key, counts_str))
+        }
+        _ => {
+            ("    ▶ ", format!("{} ({})", key, counts_str))
+        }
+    };
+
+    let summary_chars: String = text.chars().take(filename_width.saturating_sub(prefix.chars().count())).collect();
+    let summary_padded = format!("{:<width$}", summary_chars, width = filename_width.saturating_sub(prefix.chars().count()));
+
+    format!("{}{}", prefix, summary_padded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -260,5 +295,21 @@ mod tests {
         );
         assert_eq!(extract_folder_year(Some(&"2023".to_string())), "2023");
         assert_eq!(extract_folder_year(None), "????");
+    }
+
+    #[test]
+    fn test_generate_summary_text_fallback_items() {
+        let result = generate_summary_text(crate::app::ZoomLevel::Month, "2000-09-21", 0, 0, 3, 40);
+        let expected_prefix = "  ▶ ";
+        let expected_summary = format!("{:<36}", "2000-09-21 (3 items)");
+        assert_eq!(result, format!("{}{}", expected_prefix, expected_summary));
+    }
+
+    #[test]
+    fn test_generate_summary_text_images_and_videos() {
+        let result = generate_summary_text(crate::app::ZoomLevel::Slug, "2023-10-slug", 4, 2, 6, 50);
+        let expected_prefix = "    ▶ ";
+        let expected_summary = format!("{:<44}", "2023-10-slug (4 images, 2 videos)");
+        assert_eq!(result, format!("{}{}", expected_prefix, expected_summary));
     }
 }
