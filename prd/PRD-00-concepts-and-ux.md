@@ -66,3 +66,4 @@ Users need a consistent, responsive, and predictable terminal-based interface to
 
 - Are there specific timeout thresholds required before an asynchronous task is considered "failed" rather than "aborted"?
 - What is the exact sequence priority for the `Esc` key step-back if multiple overlay panels are open simultaneously?
+- Wait, if an active background task is running (like Smart Import), `Esc` aborts the background task. Where does that fit in the Esc hierarchy? What is the exact precedence of the `Esc` key? (task abort > selection > preview > filter?)
