@@ -1,5 +1,9 @@
 # PRD-04 · Navigation & Semantic Zoom
 
+| Meta | Data |
+|------|------|
+| **Status** | `Implemented` |
+
 ## Problem
 
 Users with large media collections often have many files that share the same base subject or date. An un-grouped flat list becomes visually overwhelming and tedious to navigate. Grouping everything rigidly creates deep, complex trees that are hard to navigate and take up too much horizontal space. Users need a fluid, intuitive way to progressively zoom out from details to high-level temporal overviews, and contextually zoom back in on specific areas of interest without getting lost in indentation.

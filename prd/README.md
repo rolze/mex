@@ -17,7 +17,12 @@ contract between human intent and agent implementation.
 
 ## Index
 
-_No PRDs yet. The requirements engineer will populate this index as PRDs are created._
+| Document | Title | Status |
+|----------|-------|--------|
+| [PRD-00](PRD-00-concepts-and-ux.md) | Core Concepts and UX Guidelines | `Implemented` |
+| [PRD-02](PRD-02-browse.md) | Browse Media Files | `Implemented` |
+| [PRD-03](PRD-03-themes.md) | Dynamic Theme Rotation | `Implemented` |
+| [PRD-04](PRD-04-navigation-and-zoom.md) | Navigation & Semantic Zoom | `Implemented` |
 
 ## Relationship to <variant>/spec/
 

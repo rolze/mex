@@ -1,5 +1,9 @@
 # PRD-02 · Browse Media Files
 
+| Meta | Data |
+|------|------|
+| **Status** | `Implemented` |
+
 ## Problem
 
 Users need a way to quickly navigate, filter, and inspect their indexed media collection. The interface must be highly responsive to keyboard input and provide immediate feedback on file state, filtering, and selection.

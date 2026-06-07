@@ -52,12 +52,12 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                     }
                 }
                 
-                let text = generate_summary_text(*level, key, num_images, num_videos, total_items, filename_width);
+                let text = generate_summary_text(key, num_images, num_videos, total_items, filename_width);
                 
                 let spans = vec![
                     Span::styled(text, base_style),
                     Span::styled(
-                        format!(" │ {}", "+"),
+                        format!(" │ {}", "+".repeat(*level as usize)),
                         base_style.fg(app.theme.tag).add_modifier(Modifier::DIM)
                     )
                 ];
@@ -255,32 +255,32 @@ pub(crate) fn extract_folder_year(stem: Option<&String>) -> &str {
     }
 }
 
-pub(crate) fn generate_summary_text(level: crate::app::ZoomLevel, key: &str, num_images: usize, num_videos: usize, total_items: usize, filename_width: usize) -> String {
+pub(crate) fn generate_summary_text(key: &str, num_images: usize, num_videos: usize, total_items: usize, filename_width: usize) -> String {
     let counts_str = if num_images > 0 || num_videos > 0 {
         let mut counts = Vec::new();
-        if num_images > 0 { counts.push(format!("{} images", num_images)); }
-        if num_videos > 0 { counts.push(format!("{} videos", num_videos)); }
+        if num_images == 1 { counts.push("1 image".to_string()); }
+        else if num_images > 1 { counts.push(format!("{} images", num_images)); }
+        
+        if num_videos == 1 { counts.push("1 video".to_string()); }
+        else if num_videos > 1 { counts.push(format!("{} videos", num_videos)); }
+        
         counts.join(", ")
+    } else if total_items == 1 {
+        "1 item".to_string()
     } else {
         format!("{} items", total_items)
     };
     
-    let (prefix, text) = match level {
-        crate::app::ZoomLevel::Year => {
-            ("▶ ", format!("{} ({})", key, counts_str))
-        }
-        crate::app::ZoomLevel::Month => {
-            ("  ▶ ", format!("{} ({})", key, counts_str))
-        }
-        _ => {
-            ("    ▶ ", format!("{} ({})", key, counts_str))
-        }
-    };
+    let key_string = key.to_string();
+    let folder = extract_folder_year(Some(&key_string));
+    let prefix = format!("{}  / ", folder);
+    let prefix_padded = format!("{:<8}", prefix);
 
-    let summary_chars: String = text.chars().take(filename_width.saturating_sub(prefix.chars().count())).collect();
-    let summary_padded = format!("{:<width$}", summary_chars, width = filename_width.saturating_sub(prefix.chars().count()));
+    let summary_text = format!("{} ({})", key, counts_str);
+    let summary_chars: String = summary_text.chars().take(filename_width).collect();
+    let summary_padded = format!("{:<width$}", summary_chars, width = filename_width);
 
-    format!("{}{}", prefix, summary_padded)
+    format!("{}{}", prefix_padded, summary_padded)
 }
 
 #[cfg(test)]
@@ -299,17 +299,32 @@ mod tests {
 
     #[test]
     fn test_generate_summary_text_fallback_items() {
-        let result = generate_summary_text(crate::app::ZoomLevel::Month, "2000-09-21", 0, 0, 3, 40);
-        let expected_prefix = "  ▶ ";
-        let expected_summary = format!("{:<36}", "2000-09-21 (3 items)");
+        let result = generate_summary_text("2000-09-21", 0, 0, 3, 40);
+        let expected_prefix = format!("{:<8}", "2000  / ");
+        let expected_summary = format!("{:<40}", "2000-09-21 (3 items)");
         assert_eq!(result, format!("{}{}", expected_prefix, expected_summary));
     }
 
     #[test]
     fn test_generate_summary_text_images_and_videos() {
-        let result = generate_summary_text(crate::app::ZoomLevel::Slug, "2023-10-slug", 4, 2, 6, 50);
-        let expected_prefix = "    ▶ ";
-        let expected_summary = format!("{:<44}", "2023-10-slug (4 images, 2 videos)");
+        let result = generate_summary_text("2023-10-slug", 4, 2, 6, 50);
+        let expected_prefix = format!("{:<8}", "2023  / ");
+        let expected_summary = format!("{:<50}", "2023-10-slug (4 images, 2 videos)");
         assert_eq!(result, format!("{}{}", expected_prefix, expected_summary));
+    }
+
+    #[test]
+    fn test_generate_summary_text_pluralization() {
+        let result1 = generate_summary_text("2021-01-foo", 1, 0, 1, 40);
+        assert!(result1.contains("1 image"));
+        assert!(!result1.contains("images"));
+
+        let result2 = generate_summary_text("2021-01-bar", 0, 1, 1, 40);
+        assert!(result2.contains("1 video"));
+        assert!(!result2.contains("videos"));
+
+        let result3 = generate_summary_text("2021-01-baz", 0, 0, 1, 40);
+        assert!(result3.contains("1 item"));
+        assert!(!result3.contains("items"));
     }
 }

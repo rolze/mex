@@ -938,6 +938,7 @@ impl App {
         
         let mut target_level = ZoomLevel::Flat;
         let mut target_key = String::new();
+        self.status_message = None;
         
         match row {
             ListRow::Item(idx) => {
@@ -1005,6 +1006,16 @@ impl App {
             }
         }
         
+        if self.status_message.is_none() && !target_key.is_empty() {
+            let msg = match target_level {
+                ZoomLevel::Year => format!("Collapsed year: {}", target_key),
+                ZoomLevel::Month => format!("Collapsed month: {}", target_key),
+                ZoomLevel::Slug => format!("Collapsed slug/day: {}", target_key),
+                _ => format!("Collapsed {}", target_key),
+            };
+            self.status_message = Some(msg);
+        }
+
         self.build_visible_rows();
         
         if !target_key.is_empty() {
@@ -1022,10 +1033,17 @@ impl App {
         
         let row = self.visible_rows.get(self.cursor_pos).cloned().unwrap();
         let target_idx = match row {
-            ListRow::GroupSummary { key, start_idx, .. } => {
+            ListRow::GroupSummary { level, key, start_idx, .. } => {
                 // It's a collapsed group. Expand it.
                 self.expanded_overrides.insert(key.clone());
                 self.collapsed_overrides.remove(&key);
+                let msg = match level {
+                    ZoomLevel::Year => format!("Expanded year {}: showing months", key),
+                    ZoomLevel::Month => format!("Expanded month {}: showing slugs/days", key),
+                    ZoomLevel::Slug => format!("Expanded slug/day {}: showing items", key),
+                    _ => "Expanded group".to_string(),
+                };
+                self.status_message = Some(msg);
                 Some(self.filtered_items[start_idx])
             }
             ListRow::Item(idx) => {

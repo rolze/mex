@@ -496,11 +496,13 @@ mod tests {
         // Collapse (Zoom out to Slug globally)
         app.handle_key(key(KeyCode::Left));
         assert_eq!(app.global_zoom, crate::app::ZoomLevel::Slug);
+        assert!(app.status_message.as_ref().unwrap().contains("Grouped by Slug"));
         let slug_rows = app.visible_rows.len();
         
         // Zoom out to Month globally
         app.handle_key(key(KeyCode::Left));
         assert_eq!(app.global_zoom, crate::app::ZoomLevel::Month);
+        assert!(app.status_message.as_ref().unwrap().contains("Grouped by Month"));
         let month_rows = app.visible_rows.len();
         assert!(month_rows <= slug_rows);
         
@@ -508,5 +510,10 @@ mod tests {
         app.handle_key(key(KeyCode::Right));
         // It expands contextually, meaning expanded_overrides now contains the month
         assert!(!app.expanded_overrides.is_empty());
+        assert!(app.status_message.as_ref().unwrap().contains("Expanded month"));
+
+        // Zoom out (Left) to contextually collapse the expanded month
+        app.handle_key(key(KeyCode::Left));
+        assert!(app.status_message.as_ref().unwrap().contains("Collapsed month:"));
     }
 }

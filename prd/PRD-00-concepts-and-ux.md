@@ -1,5 +1,9 @@
 # PRD-00 · Core Concepts and UX Guidelines
 
+| Meta | Data |
+|------|------|
+| **Status** | `Implemented` |
+
 ## Problem
 
 Users need a consistent, responsive, and predictable terminal-based interface to manage large media collections. Without overarching UX guidelines, individual features might introduce confusing paradigms, inconsistent layouts, or blocking operations that degrade the overall experience. This foundational document establishes the core interaction model for all other features.
