@@ -107,6 +107,8 @@ AC-2: ...
   with the resolution (not the UC).
 - PRDs never contain implementation decisions — those belong in the implementation
   plan or `doc/ARCHITECTURE.md`.
+- **Metadata hygiene**: Every PRD must contain a markdown table immediately below its title documenting its `Status` (e.g. `Draft`, `Approved`, `Implemented`, `Superseded`).
+- **Index maintenance**: Whenever you create, rename, delete, or change the status of a PRD, you MUST update the central `Index` table inside `prd/README.md` so the repository always reflects reality.
 
 ### Resolving conflicts
 
