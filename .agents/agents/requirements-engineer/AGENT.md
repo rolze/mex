@@ -40,6 +40,10 @@ PRD documents in `prd/PRD-XX-<name>.md`. Each PRD:
 ```markdown
 # PRD-XX · <Title>
 
+| Meta | Data |
+|------|------|
+| **Status** | `Draft` |
+
 ## Problem
 
 What user problem does this solve? Why does it matter?
@@ -52,18 +56,18 @@ What user problem does this solve? Why does it matter?
 
 ### Functional requirements
 
-FR-1: <Testable requirement statement>
-FR-2: ...
+- **FR-1**: <Testable requirement statement>
+- **FR-2**: ...
 
 ### Non-functional requirements
 
-NFR-1: <Performance, reliability, usability constraint>
-NFR-2: ...
+- **NFR-1**: <Performance, reliability, usability constraint>
+- **NFR-2**: ...
 
 ## Acceptance criteria
 
-AC-1: Given <precondition>, when <action>, then <expected outcome>.
-AC-2: ...
+- **AC-1**: Given <precondition>, when <action>, then <expected outcome>.
+- **AC-2**: ...
 
 ## Success metrics
 
