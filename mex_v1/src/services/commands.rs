@@ -1,13 +1,13 @@
 use crate::app::App;
-use crate::domain::media::MediaItem;
 
-pub fn execute(app: &mut App, cmd: &str) {
+/// Executes a command and returns `true` if the app should exit.
+pub fn execute(app: &mut App, cmd: &str) -> bool {
     let mut parts = cmd.split_whitespace();
     let command = parts.next().unwrap_or("");
 
     match command {
         "q" | "quit" => {
-            std::process::exit(0);
+            return true;
         }
         "tag" => {
             let tag = parts.next().unwrap_or("");
@@ -42,4 +42,5 @@ pub fn execute(app: &mut App, cmd: &str) {
             app.status_message = Some(format!("Unknown command: {}", cmd));
         }
     }
+    false
 }

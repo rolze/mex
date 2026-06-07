@@ -1,0 +1,46 @@
+┌ mex — 1 / 54033 ───────────────────────────────────────────────────────────────────────────────────┐┌────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  1998   / 1998-05-family-0001-rolze.bmp                                                            ││ [ Image Preview placeholder ]                                                                      │
+│  1998   / 1998-05-family-0002-rolze.bmp                                                            ││                                                                                                    │
+│  1998   / 1998-06-family-0001-rolze.jpg                                                            ││                                                                                                    │
+│  1999   / 1999-01-uni-0001.jpg                                        Uni                          ││                                                                                                    │
+│  1999   / 1999-01-uni-0002.jpg                                        Uni                          ││                                                                                                    │
+│  1999   / 1999-04-bungee-0001-bungy-teil1.avi                                                      ││                                                                                                    │
+│  1999   / 1999-04-bungee-0002-bungy-teil2.avi                                                      ││                                                                                                    │
+│  1999   / 1999-12-family-0001-rolze.jpg                                                            ││                                                                                                    │
+│  1999   / 1999-12-fkn-0001-basar.jpg                                                               ││                                                                                                    │
+│  1999   / 1999-12-fkn-0002-bilderausstellung.jpg                                                   ││                                                                                                    │
+│  1999   / 1999-12-fkn-0003-bilderausstellung.jpg                                                   ││                                                                                                    │
+│  1999   / 1999-12-fkn-0004-kaufhaus-tafel.jpg                                                      ││                                                                                                    │
+│! 1999   / 1999-12-fkn-0005-schaufenster.jpg                                                        ││                                                                                                    │
+│! 1999   / 1999-12-fkn-0006-kaufhaus-tafel-genau.jpg                                                ││                                                                                                    │
+│  1999   / 1999-12-fkn-0007-tafel.jpg                                                               ││                                                                                                    │
+│  1999   / 1999-12-friends-0001-tamsl-nadja.jpg                                                     ││                                                                                                    │
+│  1999   / 1999-12-friends-0002-reinke-nadja.jpg                                                    ││                                                                                                    │
+│  1999   / 1999-12-friends-0003-reinke-tamsl-nadja.jpg                                              ││                                                                                                    │
+│  1999   / 1999-12-friends-0004-reinke.jpg                                                          ││                                                                                                    │
+│  1999   / 1999-12-misc-0001-brunnen.jpg                                                            ││                                                                                                    │
+│  1999   / 1999-12-misc-0002-krippe.jpg                                                             ││                                                                                                    │
+│  1999   / 1999-12-misc-0003-kuchen.jpg                                                             ││                                                                                                    │
+│  1999   / 1999-12-nature-0001-sunrise991203-full.jpg                                               ││                                                                                                    │
+│  1999   / 1999-12-nature-0002-sunrise.bmp                                                          ││                                                                                                    │
+│  1999   / 1999-12-nature-0003-sunrise.jpg                                                          ││                                                                                                    │
+│  2000   / 2000-01-paris-0001.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0002.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0003.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0004.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0005.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0006.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0007.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0008.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0009.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0010.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0011.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0012.jpg                                      Paris                        ││                                                                                                    │
+│  2000   / 2000-01-paris-0013.jpg                                      Paris                        │└────────────────────────────────────────────────────────────────────────────────────────────────────┘
+│  2000   / 2000-01-paris-0014.jpg                                      Paris                        │┌ Metadata ──────────────────────────────────────────────────────────────────────────────────────────┐
+│  2000   / 2000-01-paris-0015.jpg                                      Paris                        ││Source: /mnt/c/Users/Roland/OneDrive/Bilder/family/rolze-006.bmp                                    │
+│  2000   / 2000-01-paris-0016.jpg                                      Paris                        ││Target: /srv/data/media/year/1998/1998-05-family-0001-rolze.bmp                                     │
+│  2000   / 2000-01-paris-0017.jpg                                      Paris                        ││Tags:                                                                                               │
+│  2000   / 2000-01-paris-0018.jpg                                      Paris                        ││Mex Date: 1998-05-26 12-00-00                                                                       │
+└────────────────────────────────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────────────────┘
+ / to filter, : for command

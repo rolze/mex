@@ -37,10 +37,10 @@ pub struct MediaItem {
     pub id: String,
     pub path_stem: Option<String>,
     pub ext: String,
-    pub derived_date: String,
+    pub mex_date: String,
     pub tags_packed: String,
     pub tag_types_packed: String,
-    pub orig_os_date: Option<String>,
+    pub os_date: Option<String>,
     pub caption: Option<String>,
     pub source_path: String,
     pub status: Status,
@@ -50,9 +50,12 @@ pub struct MediaItem {
 impl MediaItem {
     // Utility for full file name when it has a target path
     pub fn file_name(&self) -> Option<String> {
-        self.path_stem.as_ref().map(|stem| format!("{}{}", stem, self.ext))
+        self.path_stem
+            .as_ref()
+            .map(|stem| format!("{}{}", stem, self.ext))
     }
 
+    #[allow(dead_code)]
     pub fn relative_path(&self) -> Option<PathBuf> {
         self.path_stem.as_ref().map(|stem| {
             let year = &stem[0..4]; // yyyy prefix

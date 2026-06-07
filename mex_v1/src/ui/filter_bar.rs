@@ -1,11 +1,12 @@
+use crate::app::{App, Mode};
+use crate::ui::theme;
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
-use crate::app::{App, Mode};
 
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let mut spans = Vec::new();
@@ -13,34 +14,53 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     match app.mode {
         Mode::Normal => {
             if app.filter.is_empty() {
-                spans.push(Span::styled(" / to filter, : for command ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(
+                    " / to filter, : for command ",
+                    Style::default().fg(theme::COLOR_DIM),
+                ));
             } else {
                 spans = build_filter_spans(app);
             }
-        },
+        }
         Mode::Filter => {
             spans = build_filter_spans(app);
-            
+
             // Add typing state
             if let Some(tag) = &app.tag_input {
-                spans.push(Span::styled(" AND ", Style::default().fg(Color::DarkGray)));
-                spans.push(Span::styled(format!("#{}", tag), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
-                spans.push(Span::styled("_", Style::default().fg(Color::White)));
+                spans.push(Span::styled(" AND ", Style::default().fg(theme::COLOR_DIM)));
+                spans.push(Span::styled(
+                    format!("#{}", tag),
+                    Style::default()
+                        .fg(theme::COLOR_SLUG)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled("_", Style::default().fg(theme::COLOR_TEXT)));
             } else if let Some(typ) = &app.type_input {
-                spans.push(Span::styled(" AND ", Style::default().fg(Color::DarkGray)));
-                spans.push(Span::styled(format!("@{}", typ), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)));
-                spans.push(Span::styled("_", Style::default().fg(Color::White)));
+                spans.push(Span::styled(" AND ", Style::default().fg(theme::COLOR_DIM)));
+                spans.push(Span::styled(
+                    format!("@{}", typ),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                spans.push(Span::styled("_", Style::default().fg(theme::COLOR_TEXT)));
             } else {
-                spans.push(Span::styled("_", Style::default().fg(Color::White)));
+                spans.push(Span::styled("_", Style::default().fg(theme::COLOR_TEXT)));
             }
-        },
+        }
         Mode::Command => {
-            spans.push(Span::styled(format!(":{}", app.command_input), Style::default().fg(Color::Yellow)));
-            spans.push(Span::styled("_", Style::default().fg(Color::White)));
+            spans.push(Span::styled(
+                format!(":{}", app.command_input),
+                Style::default().fg(theme::COLOR_CAPTION),
+            ));
+            spans.push(Span::styled("_", Style::default().fg(theme::COLOR_TEXT)));
         }
         Mode::Caption => {
-            spans.push(Span::styled(format!("Caption: {}", app.command_input), Style::default().fg(Color::Yellow)));
-            spans.push(Span::styled("_", Style::default().fg(Color::White)));
+            spans.push(Span::styled(
+                format!("Caption: {}", app.command_input),
+                Style::default().fg(theme::COLOR_CAPTION),
+            ));
+            spans.push(Span::styled("_", Style::default().fg(theme::COLOR_TEXT)));
         }
     }
 
@@ -53,44 +73,59 @@ fn build_filter_spans<'a>(app: &App) -> Vec<Span<'a>> {
     let mut needs_and = false;
 
     if !app.filter.text.is_empty() {
-        spans.push(Span::styled(format!("/{}", app.filter.text), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+        spans.push(Span::styled(
+            format!("/{}", app.filter.text),
+            Style::default()
+                .fg(theme::COLOR_TEXT)
+                .add_modifier(Modifier::BOLD),
+        ));
         needs_and = true;
     }
 
     if !app.filter.types.is_empty() {
         if needs_and {
-            spans.push(Span::styled(" AND ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(" AND ", Style::default().fg(theme::COLOR_DIM)));
         }
         if app.filter.types.len() > 1 {
-            spans.push(Span::styled("(", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled("(", Style::default().fg(theme::COLOR_DIM)));
         }
         for (i, typ) in app.filter.types.iter().enumerate() {
             if i > 0 {
-                spans.push(Span::styled(" OR ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(" OR ", Style::default().fg(theme::COLOR_DIM)));
             }
-            spans.push(Span::styled(format!("@{}", typ), Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                format!("@{}", typ),
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ));
         }
         if app.filter.types.len() > 1 {
-            spans.push(Span::styled(")", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(")", Style::default().fg(theme::COLOR_DIM)));
         }
         needs_and = true;
     }
 
     if !app.filter.tags.is_empty() {
         if needs_and {
-            spans.push(Span::styled(" AND ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(" AND ", Style::default().fg(theme::COLOR_DIM)));
         }
         if app.filter.tags.len() > 1 {
-            spans.push(Span::styled("(", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled("(", Style::default().fg(theme::COLOR_DIM)));
         }
         for (i, tag) in app.filter.tags.iter().enumerate() {
             if i > 0 {
-                spans.push(Span::styled(" OR ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(" OR ", Style::default().fg(theme::COLOR_DIM)));
             }
-            spans.push(Span::styled(format!("#{}", tag), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(
+                format!("#{}", tag),
+                Style::default()
+                    .fg(theme::COLOR_SLUG)
+                    .add_modifier(Modifier::BOLD),
+            ));
         }
         if app.filter.tags.len() > 1 {
-            spans.push(Span::styled(")", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(")", Style::default().fg(theme::COLOR_DIM)));
         }
     }
 

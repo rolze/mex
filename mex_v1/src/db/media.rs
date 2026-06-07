@@ -1,18 +1,18 @@
-use rusqlite::{Connection, Result};
 use crate::domain::media::{MediaItem, Status};
+use rusqlite::{Connection, Result};
 
 /// Loads all active files (status != 'deleted') into memory.
 /// Uses the single table scan approach described in DATABASE.md for performance.
 pub fn load_files(conn: &Connection) -> Result<Vec<MediaItem>> {
     let mut stmt = conn.prepare(
         "
-        SELECT id, path_stem, ext, derived_date,
+        SELECT id, path_stem, ext, mex_date,
                tags_packed, tag_types_packed,
-               orig_os_date, source_path, status, missing_on_disk, caption
+               os_date, source_path, status, missing_on_disk
         FROM media
         WHERE path_stem IS NOT NULL AND status != 'deleted'
         ORDER BY path_stem
-        "
+        ",
     )?;
 
     let iter = stmt.query_map([], |row| {
@@ -20,14 +20,14 @@ pub fn load_files(conn: &Connection) -> Result<Vec<MediaItem>> {
             id: row.get(0)?,
             path_stem: row.get(1)?,
             ext: row.get(2)?,
-            derived_date: row.get(3)?,
+            mex_date: row.get(3)?,
             tags_packed: row.get(4)?,
             tag_types_packed: row.get(5)?,
-            orig_os_date: row.get(6)?,
+            os_date: row.get(6)?,
             source_path: row.get(7)?,
             status: Status::from_str(&row.get::<_, String>(8)?),
             missing_on_disk: row.get::<_, i64>(9)? != 0,
-            caption: row.get(10)?,
+            caption: None,
         })
     })?;
 
@@ -39,18 +39,20 @@ pub fn load_files(conn: &Connection) -> Result<Vec<MediaItem>> {
 }
 
 pub fn update_status(conn: &Connection, ids: &[String], status: Status) -> Result<()> {
-    if ids.is_empty() { return Ok(()); }
-    
+    if ids.is_empty() {
+        return Ok(());
+    }
+
     // SQLite limits parameters, but we just use a transaction and prepare a statement
     let mut stmt = conn.prepare("UPDATE media SET status = ?1 WHERE id = ?2")?;
     let status_str = status.as_str();
-    
+
     // Begin transaction for performance
     conn.execute("BEGIN TRANSACTION", [])?;
     for id in ids {
         stmt.execute([status_str, id])?;
     }
     conn.execute("COMMIT", [])?;
-    
+
     Ok(())
 }

@@ -1,6 +1,6 @@
-use std::path::Path;
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+use std::path::Path;
 
 pub mod media;
 pub mod tags;
@@ -35,16 +35,15 @@ pub fn init_db<P: AsRef<Path>>(path: P) -> Result<Connection> {
             partial_hash     TEXT    NOT NULL,
             file_size        INTEGER NOT NULL,
             ext              TEXT    NOT NULL CHECK(ext LIKE '.%'),
-            derived_date     TEXT    NOT NULL,
-            orig_exif_date   TEXT,
-            orig_xmp_date    TEXT,
-            orig_os_date     TEXT,
+            mex_date         TEXT    NOT NULL,
+            exif_date        TEXT,
+            xmp_date         TEXT,
+            os_date          TEXT,
             status           TEXT    NOT NULL DEFAULT 'imported'
                                      CHECK(status IN ('imported','normal','duplicate','trashed','deleted')),
             missing_on_disk  INTEGER NOT NULL DEFAULT 0,
             tags_packed      TEXT    NOT NULL DEFAULT '',
-            tag_types_packed TEXT    NOT NULL DEFAULT '',
-            caption          TEXT
+            tag_types_packed TEXT    NOT NULL DEFAULT ''
         ) STRICT;
 
         CREATE TABLE IF NOT EXISTS events (

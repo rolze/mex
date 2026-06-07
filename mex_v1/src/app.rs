@@ -1,10 +1,10 @@
 use crate::config::Config;
 use crate::db;
-use crate::domain::media::MediaItem;
 use crate::domain::filter::Filter;
+use crate::domain::media::MediaItem;
 use anyhow::Result;
-use rusqlite::Connection;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use rusqlite::Connection;
 
 pub enum Mode {
     Normal,
@@ -19,6 +19,7 @@ pub enum View {
     Trash,
 }
 
+#[allow(dead_code)]
 pub struct App {
     pub config: Config,
     pub db_conn: Connection,
@@ -38,13 +39,14 @@ pub struct App {
     pub type_input: Option<String>,
     pub tags_cache: Vec<String>,
     pub types_cache: Vec<String>,
+    pub list_offset: usize,
 }
 
 impl App {
     pub fn new(config: Config, db_conn: Connection) -> Result<Self> {
         let items = db::media::load_files(&db_conn)?;
         let filtered_items = (0..items.len()).collect();
-        
+
         Ok(Self {
             config,
             db_conn,
@@ -64,6 +66,7 @@ impl App {
             type_input: None,
             tags_cache: Vec::new(),
             types_cache: Vec::new(),
+            list_offset: 0,
         })
     }
 
@@ -75,10 +78,7 @@ impl App {
                 self.handle_filter_mode(key);
                 false
             }
-            Mode::Command => {
-                self.handle_command_mode(key);
-                false
-            }
+            Mode::Command => self.handle_command_mode(key),
             Mode::Caption => {
                 self.handle_caption_mode(key);
                 false
@@ -105,51 +105,49 @@ impl App {
                 }
                 self.shift_anchor = None;
             }
-            KeyCode::Down => {
-                if self.cursor_pos + 1 < self.filtered_items.len() {
-                    let old_pos = self.cursor_pos;
-                    self.cursor_pos += 1;
-                    
-                    if is_shift {
-                        if self.shift_anchor.is_none() {
-                            self.shift_anchor = Some(old_pos);
-                            let idx = self.filtered_items[old_pos];
-                            if self.selected.contains(&idx) {
-                                self.selected.remove(&idx);
-                            } else {
-                                self.selected.insert(idx);
-                            }
-                        }
-                        let idx = self.filtered_items[self.cursor_pos];
+            KeyCode::Down if self.cursor_pos + 1 < self.filtered_items.len() => {
+                let old_pos = self.cursor_pos;
+                self.cursor_pos += 1;
+                self.check_missing_on_disk();
+
+                if is_shift {
+                    if self.shift_anchor.is_none() {
+                        self.shift_anchor = Some(old_pos);
+                        let idx = self.filtered_items[old_pos];
                         if self.selected.contains(&idx) {
                             self.selected.remove(&idx);
                         } else {
                             self.selected.insert(idx);
                         }
                     }
+                    let idx = self.filtered_items[self.cursor_pos];
+                    if self.selected.contains(&idx) {
+                        self.selected.remove(&idx);
+                    } else {
+                        self.selected.insert(idx);
+                    }
                 }
             }
-            KeyCode::Up => {
-                if self.cursor_pos > 0 {
-                    let old_pos = self.cursor_pos;
-                    self.cursor_pos -= 1;
-                    
-                    if is_shift {
-                        if self.shift_anchor.is_none() {
-                            self.shift_anchor = Some(old_pos);
-                            let idx = self.filtered_items[old_pos];
-                            if self.selected.contains(&idx) {
-                                self.selected.remove(&idx);
-                            } else {
-                                self.selected.insert(idx);
-                            }
-                        }
-                        let idx = self.filtered_items[self.cursor_pos];
+            KeyCode::Up if self.cursor_pos > 0 => {
+                let old_pos = self.cursor_pos;
+                self.cursor_pos -= 1;
+                self.check_missing_on_disk();
+
+                if is_shift {
+                    if self.shift_anchor.is_none() {
+                        self.shift_anchor = Some(old_pos);
+                        let idx = self.filtered_items[old_pos];
                         if self.selected.contains(&idx) {
                             self.selected.remove(&idx);
                         } else {
                             self.selected.insert(idx);
                         }
+                    }
+                    let idx = self.filtered_items[self.cursor_pos];
+                    if self.selected.contains(&idx) {
+                        self.selected.remove(&idx);
+                    } else {
+                        self.selected.insert(idx);
                     }
                 }
             }
@@ -168,10 +166,13 @@ impl App {
                 }
             }
             KeyCode::PageDown => {
-                self.cursor_pos = (self.cursor_pos + 10).min(self.filtered_items.len().saturating_sub(1));
+                self.cursor_pos =
+                    (self.cursor_pos + 10).min(self.filtered_items.len().saturating_sub(1));
+                self.check_missing_on_disk();
             }
             KeyCode::PageUp => {
                 self.cursor_pos = self.cursor_pos.saturating_sub(10);
+                self.check_missing_on_disk();
             }
             KeyCode::Char(':') => {
                 self.mode = Mode::Command;
@@ -199,17 +200,81 @@ impl App {
                 self.apply_filter();
             }
             KeyCode::Char('c') => {
-                self.mode = Mode::Caption;
-                // Pre-fill with current caption if only one item selected/cursor
-                let target = self.get_single_target();
-                if let Some(media) = target {
-                    self.command_input = media.caption.clone().unwrap_or_default();
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    if let Some(target) = self.get_single_target() {
+                        let path = target.source_path.clone();
+                        if let Ok(mut child) = std::process::Command::new("wl-copy")
+                            .stdin(std::process::Stdio::piped())
+                            .spawn()
+                        {
+                            use std::io::Write;
+                            if let Some(mut stdin) = child.stdin.take() {
+                                let _ = stdin.write_all(path.as_bytes());
+                            }
+                        } else if let Ok(mut child) = std::process::Command::new("xclip")
+                            .arg("-selection")
+                            .arg("clipboard")
+                            .stdin(std::process::Stdio::piped())
+                            .spawn()
+                        {
+                            use std::io::Write;
+                            if let Some(mut stdin) = child.stdin.take() {
+                                let _ = stdin.write_all(path.as_bytes());
+                            }
+                        }
+                        self.status_message = Some(format!("copied: {}", path));
+                    }
                 } else {
-                    self.command_input.clear();
+                    self.mode = Mode::Caption;
+                    // Pre-fill with current caption if only one item selected/cursor
+                    let target = self.get_single_target();
+                    if let Some(media) = target {
+                        self.command_input = media.caption.clone().unwrap_or_default();
+                    } else {
+                        self.command_input.clear();
+                    }
                 }
+            }
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                let all_selected = self
+                    .filtered_items
+                    .iter()
+                    .all(|&idx| self.selected.contains(&idx));
+                if all_selected {
+                    for idx in &self.filtered_items {
+                        self.selected.remove(idx);
+                    }
+                } else {
+                    for idx in &self.filtered_items {
+                        self.selected.insert(*idx);
+                    }
+                }
+            }
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cursor_pos =
+                    (self.cursor_pos + 10).min(self.filtered_items.len().saturating_sub(1));
+                self.check_missing_on_disk();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.cursor_pos = self.cursor_pos.saturating_sub(10);
+                self.check_missing_on_disk();
             }
             KeyCode::Enter => {
                 self.show_preview = !self.show_preview;
+                if self.show_preview {
+                    self.check_missing_on_disk();
+                }
+            }
+            KeyCode::Esc => {
+                if !self.selected.is_empty() {
+                    self.selected.clear();
+                } else if self.show_preview {
+                    self.show_preview = false;
+                } else {
+                    self.filter.clear();
+                    self.apply_filter();
+                }
+                self.status_message = None;
             }
             _ => {}
         }
@@ -278,7 +343,7 @@ impl App {
         }
     }
 
-    fn handle_command_mode(&mut self, key: KeyEvent) {
+    fn handle_command_mode(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
@@ -290,11 +355,13 @@ impl App {
                 self.command_input.pop();
             }
             KeyCode::Enter => {
-                self.execute_command();
+                let should_exit = self.execute_command();
                 self.mode = Mode::Normal;
+                return should_exit;
             }
             _ => {}
         }
+        false
     }
 
     fn handle_caption_mode(&mut self, key: KeyEvent) {
@@ -319,67 +386,86 @@ impl App {
     fn apply_filter(&mut self) {
         let text = self.filter.text.to_lowercase();
         let parts: Vec<&str> = text.split('*').collect();
-        
-        let active_tags: Vec<String> = self.filter.tags.iter().map(|s| s.to_lowercase()).collect();
-        let active_types: Vec<String> = self.filter.types.iter().map(|s| s.to_lowercase()).collect();
 
-        self.filtered_items = self.items.iter().enumerate().filter_map(|(i, item)| {
-            // Check text matches
-            let fname = item.file_name().unwrap_or_default().to_lowercase();
-            let mut matches_text = true;
-            if !text.is_empty() {
-                let mut current_idx = 0;
-                for part in &parts {
-                    if part.is_empty() { continue; }
-                    if let Some(pos) = fname[current_idx..].find(part) {
-                        current_idx += pos + part.len();
-                    } else {
-                        matches_text = false;
-                        break;
+        let active_tags: Vec<String> = self.filter.tags.iter().map(|s| s.to_lowercase()).collect();
+        let active_types: Vec<String> =
+            self.filter.types.iter().map(|s| s.to_lowercase()).collect();
+
+        self.filtered_items = self
+            .items
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| {
+                // Check text matches
+                let fname = item.file_name().unwrap_or_default().to_lowercase();
+                let mut matches_text = true;
+                if !text.is_empty() {
+                    let mut current_idx = 0;
+                    for part in &parts {
+                        if part.is_empty() {
+                            continue;
+                        }
+                        if let Some(pos) = fname[current_idx..].find(part) {
+                            current_idx += pos + part.len();
+                        } else {
+                            matches_text = false;
+                            break;
+                        }
                     }
                 }
-            }
 
-            // Check tag match (OR logic internally, AND with text)
-            let matches_tags = active_tags.is_empty() || active_tags.iter().any(|t| {
-                item.tags_packed.to_lowercase().contains(&format!("{}\x1f", t)) || 
-                item.tags_packed.to_lowercase().ends_with(t) ||
-                item.tags_packed.to_lowercase() == *t
-            });
+                // Check tag match (OR logic internally, AND with text)
+                let matches_tags = active_tags.is_empty()
+                    || active_tags.iter().any(|t| {
+                        item.tags_packed
+                            .to_lowercase()
+                            .contains(&format!("{}\x1f", t))
+                            || item.tags_packed.to_lowercase().ends_with(t)
+                            || item.tags_packed.to_lowercase() == *t
+                    });
 
-            // Check type match
-            let matches_types = active_types.is_empty() || active_types.iter().any(|t| {
-                item.tag_types_packed.to_lowercase().contains(&format!("{}\x1f", t)) ||
-                item.tag_types_packed.to_lowercase().ends_with(t) ||
-                item.tag_types_packed.to_lowercase() == *t
-            });
+                // Check type match
+                let matches_types = active_types.is_empty()
+                    || active_types.iter().any(|t| {
+                        item.tag_types_packed
+                            .to_lowercase()
+                            .contains(&format!("{}\x1f", t))
+                            || item.tag_types_packed.to_lowercase().ends_with(t)
+                            || item.tag_types_packed.to_lowercase() == *t
+                    });
 
-            // Check view match
-            let matches_view = match self.view {
-                View::All => item.status == crate::domain::media::Status::Normal || item.status == crate::domain::media::Status::Imported,
-                View::Import => item.status == crate::domain::media::Status::Imported,
-                View::Trash => item.status == crate::domain::media::Status::Trashed,
-            };
+                // Check view match
+                let matches_view = match self.view {
+                    View::All => {
+                        item.status == crate::domain::media::Status::Normal
+                            || item.status == crate::domain::media::Status::Imported
+                    }
+                    View::Import => item.status == crate::domain::media::Status::Imported,
+                    View::Trash => item.status == crate::domain::media::Status::Trashed,
+                };
 
-            if matches_text && matches_tags && matches_types && matches_view {
-                Some(i)
-            } else {
-                None
-            }
-        }).collect();
-        
+                if matches_text && matches_tags && matches_types && matches_view {
+                    Some(i)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         self.cursor_pos = 0;
     }
 
-    fn execute_command(&mut self) {
+    fn execute_command(&mut self) -> bool {
         let cmd = self.command_input.trim().to_string();
-        crate::services::commands::execute(self, &cmd);
+        crate::services::commands::execute(self, &cmd)
     }
 
     fn jump_home(&mut self) {
-        if self.filtered_items.is_empty() { return; }
+        if self.filtered_items.is_empty() {
+            return;
+        }
         let current_key = self.get_group_key(self.cursor_pos);
-        
+
         // Find start of current group
         let mut group_start = self.cursor_pos;
         while group_start > 0 && self.get_group_key(group_start - 1) == current_key {
@@ -400,11 +486,15 @@ impl App {
     }
 
     fn jump_end(&mut self) {
-        if self.filtered_items.is_empty() { return; }
+        if self.filtered_items.is_empty() {
+            return;
+        }
         let current_key = self.get_group_key(self.cursor_pos);
-        
+
         let mut next_start = self.cursor_pos;
-        while next_start < self.filtered_items.len() && self.get_group_key(next_start) == current_key {
+        while next_start < self.filtered_items.len()
+            && self.get_group_key(next_start) == current_key
+        {
             next_start += 1;
         }
 
@@ -414,9 +504,11 @@ impl App {
     }
 
     fn shift_home(&mut self) {
-        if self.filtered_items.is_empty() { return; }
+        if self.filtered_items.is_empty() {
+            return;
+        }
         let current_key = self.get_group_key(self.cursor_pos);
-        
+
         let mut group_start = self.cursor_pos;
         while group_start > 0 && self.get_group_key(group_start - 1) == current_key {
             group_start -= 1;
@@ -440,11 +532,15 @@ impl App {
     }
 
     fn shift_end(&mut self) {
-        if self.filtered_items.is_empty() { return; }
+        if self.filtered_items.is_empty() {
+            return;
+        }
         let current_key = self.get_group_key(self.cursor_pos);
-        
+
         let mut group_end = self.cursor_pos;
-        while group_end + 1 < self.filtered_items.len() && self.get_group_key(group_end + 1) == current_key {
+        while group_end + 1 < self.filtered_items.len()
+            && self.get_group_key(group_end + 1) == current_key
+        {
             group_end += 1;
         }
 
@@ -461,7 +557,8 @@ impl App {
     }
 
     fn get_group_key(&self, pos: usize) -> Option<String> {
-        self.filtered_items.get(pos)
+        self.filtered_items
+            .get(pos)
             .and_then(|&idx| self.items.get(idx))
             .and_then(|media| media.group_key())
     }
@@ -487,7 +584,9 @@ impl App {
             let idx = *self.selected.iter().next().unwrap();
             self.items.get(idx)
         } else if self.selected.is_empty() {
-            self.filtered_items.get(self.cursor_pos).and_then(|&idx| self.items.get(idx))
+            self.filtered_items
+                .get(self.cursor_pos)
+                .and_then(|&idx| self.items.get(idx))
         } else {
             None
         }
@@ -502,10 +601,15 @@ impl App {
             vec![]
         };
 
-        if targets.is_empty() { return; }
+        if targets.is_empty() {
+            return;
+        }
 
-        let ids: Vec<String> = targets.iter().filter_map(|&idx| self.items.get(idx).map(|m| m.id.clone())).collect();
-        
+        let ids: Vec<String> = targets
+            .iter()
+            .filter_map(|&idx| self.items.get(idx).map(|m| m.id.clone()))
+            .collect();
+
         // Update DB
         if let Err(e) = crate::db::media::update_status(&self.db_conn, &ids, status) {
             self.status_message = Some(format!("DB error: {}", e));
@@ -530,16 +634,64 @@ impl App {
             vec![]
         };
 
-        if targets.is_empty() { return; }
-        
-        let ids: Vec<String> = targets.iter().filter_map(|&idx| self.items.get(idx).map(|m| m.id.clone())).collect();
+        if targets.is_empty() {
+            return;
+        }
+
+        let ids: Vec<String> = targets
+            .iter()
+            .filter_map(|&idx| self.items.get(idx).map(|m| m.id.clone()))
+            .collect();
 
         // Let's implement caption DB update later. For now, we update in-memory to test.
         for idx in targets {
             if let Some(media) = self.items.get_mut(idx) {
-                media.caption = if new_caption.is_empty() { None } else { Some(new_caption.clone()) };
+                media.caption = if new_caption.is_empty() {
+                    None
+                } else {
+                    Some(new_caption.clone())
+                };
             }
         }
         self.status_message = Some(format!("Caption applied to {} items", ids.len()));
+    }
+
+    pub fn check_missing_on_disk(&mut self) {
+        if !self.show_preview {
+            return;
+        }
+        if let Some(&idx) = self.filtered_items.get(self.cursor_pos) {
+            // Need a separate block to borrow `items` mutably since we might need to modify `db_conn` later.
+            let needs_update = {
+                if let Some(media) = self.items.get(idx) {
+                    let path = if let (Some(root), Some(rel)) =
+                        (&self.config.target_root, media.relative_path())
+                    {
+                        root.join(rel)
+                    } else {
+                        std::path::PathBuf::from(&media.source_path)
+                    };
+                    let exists = path.exists();
+                    if exists == media.missing_on_disk {
+                        Some((media.id.clone(), !exists))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            };
+
+            if let Some((id, missing)) = needs_update {
+                if let Some(media) = self.items.get_mut(idx) {
+                    media.missing_on_disk = missing;
+                }
+                let val = if missing { 1 } else { 0 };
+                let _ = self.db_conn.execute(
+                    "UPDATE media SET missing_on_disk = ?1 WHERE id = ?2",
+                    rusqlite::params![val, id],
+                );
+            }
+        }
     }
 }

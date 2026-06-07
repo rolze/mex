@@ -1,9 +1,10 @@
-use std::path::{Path, PathBuf};
+use anyhow::{Context, Result};
 use std::fs;
 use std::io::{self, BufRead};
-use anyhow::{Context, Result};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Config {
     pub target_root: Option<PathBuf>,
     pub views_root: Option<PathBuf>,
@@ -39,7 +40,7 @@ impl Config {
             if let Some((key, value)) = line.split_once('=') {
                 let key = key.trim();
                 let value = value.trim();
-                
+
                 match key {
                     "target_root" => config.target_root = Some(PathBuf::from(value)),
                     "views_root" => config.views_root = Some(PathBuf::from(value)),
@@ -51,7 +52,7 @@ impl Config {
                             }
                         }
                         config.db_path = Some(p);
-                    },
+                    }
                     "image_protocol" => config.image_protocol = value.to_string(),
                     _ => {} // Ignore unknown keys
                 }
@@ -61,6 +62,7 @@ impl Config {
         Ok(config)
     }
 
+    #[allow(dead_code)]
     pub fn save(&self) -> Result<()> {
         let config_path = Self::config_file_path();
         if let Some(parent) = config_path.parent() {
@@ -88,6 +90,9 @@ impl Config {
             return PathBuf::from(env_path);
         }
         let home = std::env::var("HOME").expect("HOME environment variable not set");
-        Path::new(&home).join(".config").join("mex").join("config.toml")
+        Path::new(&home)
+            .join(".config")
+            .join("mex")
+            .join("config.toml")
     }
 }

@@ -1,6 +1,7 @@
-use rusqlite::{Connection, Result};
 use crate::domain::tag::Tag;
+use rusqlite::{Connection, Result};
 
+#[allow(dead_code)]
 pub fn load_all_tags(conn: &Connection) -> Result<Vec<Tag>> {
     let mut stmt = conn.prepare("SELECT id, name, type FROM tags ORDER BY name")?;
     let iter = stmt.query_map([], |row| {

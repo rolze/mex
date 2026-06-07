@@ -1,4 +1,4 @@
-target_root = /srv/data/playground/year
-views_root = /srv/data/playground/view
-db_path = /srv/data/playground/year/mex_v1.db
+target_root = /srv/data/media/year
+views_root = /srv/data/media/view
+db_path = /srv/data/media/year/mex_v1.db
 image_protocol = halfblocks

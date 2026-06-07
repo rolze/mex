@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -14,13 +14,16 @@ mod app;
 mod config;
 mod db;
 mod domain;
-mod ui;
 mod services;
+mod ui;
+
+#[cfg(test)]
+mod browse_tests;
 
 fn main() -> Result<()> {
     // 1. Load configuration
     let config = config::Config::load()?;
-    
+
     // Check if configuration requires prompting (UC-01 flow)
     // For now we assume they exist or use defaults, as per prototype, but we should handle DB creation.
     let db_path = config.db_path.clone().unwrap_or_else(|| {
@@ -61,7 +64,9 @@ fn main() -> Result<()> {
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut app::App) -> Result<()> {
     loop {
-        terminal.draw(|f| ui::draw(f, app)).map_err(|e| anyhow::anyhow!("Draw error: {:?}", e))?;
+        terminal
+            .draw(|f| ui::draw(f, app))
+            .map_err(|e| anyhow::anyhow!("Draw error: {:?}", e))?;
 
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
