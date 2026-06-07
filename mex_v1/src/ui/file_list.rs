@@ -15,6 +15,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     let list_width = area.width.saturating_sub(2) as usize;
     let filename_width = list_width.saturating_sub(41);
     let list_height = area.height.saturating_sub(2).max(1) as usize;
+    app.list_height = list_height;
 
     if app.cursor_pos < app.list_offset {
         app.list_offset = app.cursor_pos;
@@ -33,17 +34,20 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
             let mut base_style = Style::default();
             if media.status == Status::Trashed {
-                base_style = base_style.fg(theme::COLOR_DIM);
+                base_style = base_style.add_modifier(Modifier::DIM);
             } else if media.missing_on_disk {
                 base_style = base_style
                     .bg(theme::COLOR_MISSING_BG)
                     .fg(theme::COLOR_MISSING_FG);
             } else if is_selected_for_batch {
-                base_style = base_style.bg(theme::COLOR_HIGHLIGHT_BG);
+                base_style = base_style.bg(theme::COLOR_BATCH_BG);
             }
 
             if is_cursor {
-                base_style = base_style.add_modifier(Modifier::REVERSED);
+                base_style = Style::default()
+                    .bg(theme::COLOR_CURSOR_BG)
+                    .fg(theme::COLOR_CURSOR_FG)
+                    .add_modifier(Modifier::BOLD);
             }
 
             let marker = if media.missing_on_disk {
@@ -57,27 +61,38 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             };
 
             let folder = if let Some(stem) = &media.path_stem {
-                if stem.len() >= 4 {
-                    &stem[0..4]
-                } else {
-                    "????  "
-                }
+                stem.split('_').next().unwrap_or("????")
             } else {
-                "????  "
+                "????"
             };
-            let folder_str = format!("{:<6}", folder);
+            
+            let prefix = format!("{}{} / ", folder, marker);
+            let prefix_padded = format!("{:<8}", prefix); // Ensure alignment
 
             let filename = media.file_name().unwrap_or_else(|| String::from("unknown"));
 
             let mut spans = vec![Span::styled(
-                format!("{} {} / ", marker, folder_str),
+                prefix_padded,
                 base_style,
             )];
 
             let text_filter = app.filter.text.to_lowercase();
             let mut highlighted_spans = Vec::new();
             if text_filter.is_empty() {
-                highlighted_spans.push(Span::styled(filename.clone(), base_style));
+                if !is_selected_for_batch {
+                    if let Some(stem) = &media.path_stem {
+                        let mut stem_spans = crate::ui::semantic::colorize_stem(
+                            stem,
+                            base_style,
+                        );
+                        stem_spans.push(Span::styled(format!(".{}", media.ext), base_style));
+                        highlighted_spans.extend(stem_spans);
+                    } else {
+                        highlighted_spans.push(Span::styled(filename.clone(), base_style));
+                    }
+                } else {
+                    highlighted_spans.push(Span::styled(filename.clone(), base_style));
+                }
             } else {
                 let parts: Vec<&str> = text_filter.split('*').filter(|s| !s.is_empty()).collect();
                 let mut current_idx = 0;
@@ -151,7 +166,9 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             }
 
             let tags = media.tags_packed.replace('\x1f', " ");
-            let tags_truncated = if tags.chars().count() > 30 {
+            let tags_truncated = if tags.is_empty() {
+                format!("{:<30}", "—")
+            } else if tags.chars().count() > 30 {
                 let mut t: String = tags.chars().take(29).collect();
                 t.push('…');
                 t
@@ -160,8 +177,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             };
 
             spans.push(Span::styled(
-                format!(" {}", tags_truncated),
-                base_style.fg(theme::COLOR_DIM),
+                format!(" │ {}", tags_truncated),
+                base_style.add_modifier(Modifier::DIM),
             ));
 
             items.push(ListItem::new(Line::from(spans)).style(base_style));

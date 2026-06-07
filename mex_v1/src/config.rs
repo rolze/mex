@@ -22,6 +22,10 @@ impl Config {
             image_protocol: "halfblocks".to_string(), // Default as requested
         };
 
+        let Some(config_path) = config_path else {
+            return Ok(config);
+        };
+
         if !config_path.exists() {
             return Ok(config);
         }
@@ -64,7 +68,9 @@ impl Config {
 
     #[allow(dead_code)]
     pub fn save(&self) -> Result<()> {
-        let config_path = Self::config_file_path();
+        let Some(config_path) = Self::config_file_path() else {
+            return Ok(()); // Nowhere to save
+        };
         if let Some(parent) = config_path.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -85,14 +91,17 @@ impl Config {
         Ok(())
     }
 
-    pub fn config_file_path() -> PathBuf {
+    pub fn config_file_path() -> Option<PathBuf> {
         if let Ok(env_path) = std::env::var("MEX_CONFIG") {
-            return PathBuf::from(env_path);
+            return Some(PathBuf::from(env_path));
         }
-        let home = std::env::var("HOME").expect("HOME environment variable not set");
-        Path::new(&home)
-            .join(".config")
-            .join("mex")
-            .join("config.toml")
+        if let Ok(home) = std::env::var("HOME") {
+            Some(Path::new(&home)
+                .join(".config")
+                .join("mex")
+                .join("config.toml"))
+        } else {
+            None
+        }
     }
 }

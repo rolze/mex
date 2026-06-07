@@ -92,14 +92,14 @@ mod tests {
     }
 
     #[test]
-    fn page_down_jumps_10() {
+    fn page_down_jumps_list_height() {
         let mut app = test_app(&seed_items());
         app.handle_key(key(KeyCode::PageDown));
         assert_eq!(app.cursor_pos, 5); // clamped to last item
     }
 
     #[test]
-    fn page_up_jumps_10() {
+    fn page_up_jumps_list_height() {
         let mut app = test_app(&seed_items());
         app.cursor_pos = 5;
         app.handle_key(key(KeyCode::PageUp));

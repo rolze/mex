@@ -56,3 +56,21 @@ pub fn update_status(conn: &Connection, ids: &[String], status: Status) -> Resul
 
     Ok(())
 }
+
+pub fn update_caption(conn: &Connection, ids: &[String], caption: Option<&str>) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let query = format!(
+        "UPDATE media SET caption = ?1 WHERE id IN ({})",
+        placeholders
+    );
+    let mut stmt = conn.prepare(&query)?;
+    let mut params: Vec<&dyn rusqlite::ToSql> = vec![&caption];
+    for id in ids {
+        params.push(id);
+    }
+    stmt.execute(rusqlite::params_from_iter(params))?;
+    Ok(())
+}

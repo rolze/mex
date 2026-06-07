@@ -132,7 +132,7 @@ The `requirements-engineer` is active across all phases — see Agent Roles belo
 ## Agent Roles
 
 Seven specialized agents collaborate through the AIDLC. Each has a detailed
-skill definition in `.agents/skills/`.
+agent spec in `.agents/agents/`.
 
 ### Orchestrator
 
@@ -158,14 +158,14 @@ regardless of the technology stack used.
 
 **Invoked in**: Phase 1 (primary), Phase 2 (validate plan), Phase 3 (on-call),
 Phase 4 (verify acceptance criteria), Phase 5 (confirm test coverage).
-**Skill**: `.agents/skills/requirements-engineer/SKILL.md`
+**Agent spec**: `.agents/agents/requirements-engineer/AGENT.md`
 
 ### rust-developer
 
 Implements features and fixes. Writes clean, idiomatic, testable Rust code.
 
 **Invoked in**: Phase 3 (Implement).
-**Skill**: `.agents/skills/rust-developer/SKILL.md`
+**Agent spec**: `.agents/agents/rust-developer/AGENT.md`
 
 ### rust-architect
 
@@ -174,7 +174,7 @@ adherence to `doc/ARCHITECTURE.md` patterns. Owns the architecture guidance.
 Skeptical by default — does not rubber-stamp.
 
 **Invoked in**: Phase 4 (Review).
-**Skill**: `.agents/skills/rust-architect/SKILL.md`
+**Agent spec**: `.agents/agents/rust-architect/AGENT.md`
 
 ### database-expert
 
@@ -183,7 +183,7 @@ Challenges every table and index to earn its keep. Owns and authoritatively
 maintains the `doc/DATABASE.md` schema guidance.
 
 **Invoked in**: Phase 2 (Plan, if schema changes), Phase 4 (Review).
-**Skill**: `.agents/skills/database-expert/SKILL.md`
+**Agent spec**: `.agents/agents/database-expert/AGENT.md`
 
 ### ux-designer
 
@@ -191,7 +191,7 @@ Guards visual polish, colour harmony, layout balance, and interaction feel
 in the Ratatui TUI. Pushes for playfulness and delight over clinical defaults.
 
 **Invoked in**: Phase 4 (Review, if UI changes).
-**Skill**: `.agents/skills/ux-designer/SKILL.md`
+**Agent spec**: `.agents/agents/ux-designer/AGENT.md`
 
 ### mex-chaos-tester
 
@@ -199,7 +199,7 @@ Playful chaos monkey. Tests aggressively, explores edge cases, deliberately
 deviates from the happy path to expose bugs and performance issues.
 
 **Invoked in**: Phase 5 (Test).
-**Skill**: `.agents/skills/mex-chaos-tester/SKILL.md`
+**Agent spec**: `.agents/agents/mex-chaos-tester/AGENT.md`
 
 ### rust-quality-checker
 
@@ -207,11 +207,19 @@ Runs the full quality pipeline: rustfmt, clippy, cargo check, cargo test,
 security audit, dependency analysis.
 
 **Invoked in**: Phase 5 (Test).
-**Skill**: `.agents/skills/rust-quality-checker/SKILL.md`
+**Agent spec**: `.agents/agents/rust-quality-checker/AGENT.md`
 
 ---
 
 ## Rules
+
+### Workspace hygiene
+
+**Rule: Agents must clean up all temporary and scratch files after their tasks.**
+
+- Do not leave `.py`, `.sh`, or `.rs` throwaway scripts in the root directory or source folders.
+- Delete temporary data, isolated chaos testing scripts, and agent scratchpads once the feature is fully implemented and integrated.
+- If you must keep a temporary file around across multiple steps, place it explicitly in a `tmp/` folder and clean it up before finishing the task.
 
 ### UC document sync
 

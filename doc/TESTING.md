@@ -58,7 +58,7 @@ If the build fails, fix the errors before attempting the TUI test.
 ## Chaos testing
 
 After automated and smoke tests pass, the `mex-chaos-tester` skill stress-tests
-the feature. See [.agents/skills/mex-chaos-tester/SKILL.md](../.agents/skills/mex-chaos-tester/SKILL.md).
+the feature. See [.agents/agents/mex-chaos-tester/AGENT.md](../.agents/agents/mex-chaos-tester/AGENT.md).
 
 Focus areas:
 - Weird inputs (empty strings, unicode, extremely long text, special characters)

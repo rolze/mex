@@ -9,33 +9,13 @@ use ratatui::{
 use super::{file_list, filter_bar, preview, status};
 
 pub fn draw(f: &mut Frame, app: &mut App) {
-    let bottom_height = match app.mode {
-        Mode::Filter | Mode::Command => 3,
-        _ => 1,
-    };
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(0),                // Main area
-            Constraint::Length(bottom_height), // Filter bar / Status box
+            Constraint::Min(0),
+            Constraint::Length(3), // Filter bar and Status box are bordered, so 3 lines
         ])
         .split(f.area());
-
-    let (border, border_style) = match app.mode {
-        Mode::Filter | Mode::Command => (Borders::ALL, Style::default().fg(Color::Yellow)),
-        _ => (Borders::NONE, Style::default()),
-    };
-
-    let bottom_block = Block::default().borders(border).border_style(border_style);
-    let bottom_inner = bottom_block.inner(chunks[1]);
-    f.render_widget(bottom_block, chunks[1]);
-
-    // Split bottom area into Filter bar (left) and Status box (right)
-    let bottom_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-        .split(bottom_inner);
 
     if app.show_preview {
         let main_chunks = Layout::default()
@@ -49,10 +29,40 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         file_list::draw(f, app, chunks[0]);
     }
 
-    filter_bar::draw(f, app, bottom_chunks[0]);
+    let bottom_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
+        .split(chunks[1]);
 
-    // Status messages are not shown in command mode.
+    let (filter_border_style, status_border_style) = match app.mode {
+        Mode::Filter | Mode::Command => (Style::default().fg(Color::Yellow), Style::default()),
+        _ => (Style::default(), Style::default()),
+    };
+
+    let filter_title = match app.mode {
+        Mode::Command | Mode::Caption => " Command ",
+        _ => " Filter ",
+    };
+
+    let filter_block = Block::default()
+        .title(filter_title)
+        .borders(Borders::ALL)
+        .border_style(filter_border_style);
+
+    let status_block = Block::default()
+        .title(" Status ")
+        .borders(Borders::ALL)
+        .border_style(status_border_style);
+
+    let filter_inner = filter_block.inner(bottom_chunks[0]);
+    let status_inner = status_block.inner(bottom_chunks[1]);
+
+    f.render_widget(filter_block, bottom_chunks[0]);
+    f.render_widget(status_block, bottom_chunks[1]);
+
+    filter_bar::draw(f, app, filter_inner);
+
     if !matches!(app.mode, Mode::Command) {
-        status::draw(f, app, bottom_chunks[1]);
+        status::draw(f, app, status_inner);
     }
 }

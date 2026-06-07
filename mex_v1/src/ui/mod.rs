@@ -11,3 +11,4 @@ pub mod theme;
 pub fn draw(f: &mut Frame, app: &mut App) {
     layout::draw(f, app);
 }
+pub mod semantic;

@@ -1,6 +1,5 @@
 use crate::app::App;
-use crate::ui::theme;
-use ratatui::{
+use ratatui::{style::Modifier, 
     layout::{Alignment, Rect},
     style::Style,
     widgets::Paragraph,
@@ -8,14 +7,16 @@ use ratatui::{
 };
 
 pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
+    let playback_icon = "▶"; // Simplified: always show play icon since we aren't tracking pause state currently.
+
     let text = if let Some(msg) = &app.status_message {
-        msg.clone()
+        format!("{} {}", playback_icon, msg)
     } else {
-        String::new()
+        format!("{} Ready", playback_icon)
     };
 
     let p = Paragraph::new(text)
-        .style(Style::default().fg(theme::COLOR_DIM))
-        .alignment(Alignment::Right);
+        .style(Style::default().add_modifier(Modifier::DIM))
+        .alignment(Alignment::Left);
     f.render_widget(p, area);
 }

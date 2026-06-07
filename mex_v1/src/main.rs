@@ -26,11 +26,32 @@ fn main() -> Result<()> {
 
     // Check if configuration requires prompting (UC-01 flow)
     // For now we assume they exist or use defaults, as per prototype, but we should handle DB creation.
-    let db_path = config.db_path.clone().unwrap_or_else(|| {
-        let default = std::env::current_dir().unwrap().join(".mex.db");
-        // We should ideally prompt here, but for now we create it if it doesn't exist
-        default
-    });
+    let mut db_path = config.db_path.clone();
+    
+    loop {
+        if let Some(ref path) = db_path {
+            if path.exists() {
+                break;
+            } else {
+                println!("database file not found: {}", path.display());
+            }
+        }
+        
+        use std::io::Write;
+        print!("new path: ");
+        io::stdout().flush()?;
+        
+        let mut input = String::new();
+        io::stdin().read_line(&mut input)?;
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            println!("path cannot be empty");
+            continue;
+        }
+        
+        db_path = Some(std::path::PathBuf::from(trimmed));
+    }
+    let db_path = db_path.unwrap();
 
     // 2. Initialize database
     let conn = db::init_db(&db_path)?;
@@ -76,5 +97,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut app::App) -> Result
                 }
             }
         }
+        app.tick();
     }
 }

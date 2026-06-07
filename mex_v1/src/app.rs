@@ -40,6 +40,10 @@ pub struct App {
     pub tags_cache: Vec<String>,
     pub types_cache: Vec<String>,
     pub list_offset: usize,
+    pub list_height: usize,
+    pub mpv: crate::services::mpv::MpvContext,
+    pub image_cache: std::collections::HashMap<String, ratatui_image::protocol::StatefulProtocol>,
+    pub picker: Option<ratatui_image::picker::Picker>,
 }
 
 impl App {
@@ -67,10 +71,34 @@ impl App {
             tags_cache: Vec::new(),
             types_cache: Vec::new(),
             list_offset: 0,
+            list_height: 10,
+            mpv: crate::services::mpv::MpvContext::new(),
+            image_cache: std::collections::HashMap::new(),
+            picker: None,
         })
     }
 
+    pub fn tick(&mut self) {
+        for event in self.mpv.poll_events() {
+            match event {
+                crate::services::mpv::MpvEvent::Ended => {
+                    self.mpv_next_video();
+                }
+            }
+        }
+    }
+
     /// Handles a key event and returns true if the app should exit.
+    pub fn get_target_indices(&self) -> Vec<usize> {
+        if !self.selected.is_empty() {
+            self.selected.iter().copied().collect()
+        } else if let Some(&idx) = self.filtered_items.get(self.cursor_pos) {
+            vec![idx]
+        } else {
+            vec![]
+        }
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         match self.mode {
             Mode::Normal => self.handle_normal_mode(key),
@@ -166,12 +194,12 @@ impl App {
                 }
             }
             KeyCode::PageDown => {
-                self.cursor_pos =
-                    (self.cursor_pos + 10).min(self.filtered_items.len().saturating_sub(1));
+                self.cursor_pos = (self.cursor_pos + self.list_height)
+                    .min(self.filtered_items.len().saturating_sub(1));
                 self.check_missing_on_disk();
             }
             KeyCode::PageUp => {
-                self.cursor_pos = self.cursor_pos.saturating_sub(10);
+                self.cursor_pos = self.cursor_pos.saturating_sub(self.list_height);
                 self.check_missing_on_disk();
             }
             KeyCode::Char(':') => {
@@ -181,12 +209,7 @@ impl App {
             KeyCode::Char('/') => {
                 self.mode = Mode::Filter;
             }
-            KeyCode::Char('t') => {
-                self.set_status(crate::domain::media::Status::Trashed);
-            }
-            KeyCode::Char('k') => {
-                self.set_status(crate::domain::media::Status::Normal);
-            }
+
             KeyCode::Char('1') => {
                 self.view = View::All;
                 self.apply_filter();
@@ -251,13 +274,31 @@ impl App {
                 }
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.cursor_pos =
-                    (self.cursor_pos + 10).min(self.filtered_items.len().saturating_sub(1));
+                self.cursor_pos = (self.cursor_pos + self.list_height)
+                    .min(self.filtered_items.len().saturating_sub(1));
                 self.check_missing_on_disk();
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.cursor_pos = self.cursor_pos.saturating_sub(10);
+                self.cursor_pos = self.cursor_pos.saturating_sub(self.list_height);
                 self.check_missing_on_disk();
+            }
+            KeyCode::Delete => {
+                self.set_status(crate::domain::media::Status::Trashed);
+            }
+            KeyCode::Insert => {
+                self.set_status(crate::domain::media::Status::Normal);
+            }
+            KeyCode::Char('p') => {
+                self.mpv_play_current();
+            }
+            KeyCode::Char('s') => {
+                self.mpv.toggle_pause();
+            }
+            KeyCode::Char('j') => {
+                self.mpv_next_video();
+            }
+            KeyCode::Char('k') => {
+                self.mpv_prev_video();
             }
             KeyCode::Enter => {
                 self.show_preview = !self.show_preview;
@@ -383,7 +424,7 @@ impl App {
         }
     }
 
-    fn apply_filter(&mut self) {
+    pub fn apply_filter(&mut self) {
         let text = self.filter.text.to_lowercase();
         let parts: Vec<&str> = text.split('*').collect();
 
@@ -643,7 +684,12 @@ impl App {
             .filter_map(|&idx| self.items.get(idx).map(|m| m.id.clone()))
             .collect();
 
-        // Let's implement caption DB update later. For now, we update in-memory to test.
+        let cap_val = if new_caption.is_empty() { None } else { Some(new_caption.as_str()) };
+        if let Err(e) = crate::db::media::update_caption(&self.db_conn, &ids, cap_val) {
+            self.status_message = Some(format!("Error saving caption: {}", e));
+            return;
+        }
+
         for idx in targets {
             if let Some(media) = self.items.get_mut(idx) {
                 media.caption = if new_caption.is_empty() {
@@ -654,6 +700,51 @@ impl App {
             }
         }
         self.status_message = Some(format!("Caption applied to {} items", ids.len()));
+    }
+
+    fn mpv_play_current(&mut self) {
+        let (path, fname) = if let Some(media) = self.get_single_target() {
+            let path = if let (Some(root), Some(rel)) =
+                (&self.config.target_root, media.relative_path())
+            {
+                root.join(rel).to_string_lossy().to_string()
+            } else {
+                media.source_path.clone()
+            };
+            (path, media.file_name().unwrap_or_default())
+        } else {
+            return;
+        };
+
+        self.mpv.play(&path);
+        self.status_message = Some(format!("Playing: {}", fname));
+    }
+
+    fn mpv_next_video(&mut self) {
+        for i in self.cursor_pos + 1..self.filtered_items.len() {
+            if let Some(media) = self.items.get(self.filtered_items[i]) {
+                if media.ext == ".mp4" || media.ext == ".webm" || media.ext == ".mkv" {
+                    self.cursor_pos = i;
+                    self.mpv_play_current();
+                    return;
+                }
+            }
+        }
+    }
+
+    fn mpv_prev_video(&mut self) {
+        if self.cursor_pos == 0 {
+            return;
+        }
+        for i in (0..self.cursor_pos).rev() {
+            if let Some(media) = self.items.get(self.filtered_items[i]) {
+                if media.ext == ".mp4" || media.ext == ".webm" || media.ext == ".mkv" {
+                    self.cursor_pos = i;
+                    self.mpv_play_current();
+                    return;
+                }
+            }
+        }
     }
 
     pub fn check_missing_on_disk(&mut self) {
