@@ -1,4 +1,3 @@
-use crate::ui::theme;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use regex::Regex;
@@ -6,7 +5,11 @@ use std::sync::OnceLock;
 
 static RE_STEM: OnceLock<Regex> = OnceLock::new();
 
-pub fn colorize_stem<'a>(stem: &'a str, base_style: Style) -> Vec<Span<'a>> {
+pub fn colorize_stem<'a>(
+    stem: &'a str,
+    base_style: Style,
+    theme: &crate::ui::theme::Theme,
+) -> Vec<Span<'a>> {
     let re = RE_STEM.get_or_init(|| {
         Regex::new(r"^(?P<year>\d{4})-(?P<month>0[1-9]|1[0-2])-(?:(?P<day>0[1-9]|[12]\d|3[01])-(?:(?P<counter_day>\d{4})|(?P<caption_day>[a-z0-9-]+?)(?:-(?P<collision>\d+))?)|(?P<slug>[a-z0-9-]+?)-(?P<counter_slug>\d{4})(?:-(?P<caption_slug>[a-z0-9-]+?))?)$").unwrap()
     });
@@ -28,23 +31,17 @@ pub fn colorize_stem<'a>(stem: &'a str, base_style: Style) -> Vec<Span<'a>> {
         check("counter_day", base_style);
         check(
             "caption_day",
-            base_style
-                .fg(theme::COLOR_CAPTION)
-                .add_modifier(Modifier::BOLD),
+            base_style.fg(theme.caption).add_modifier(Modifier::BOLD),
         );
         check("collision", base_style);
         check(
             "slug",
-            base_style
-                .fg(theme::COLOR_SLUG)
-                .add_modifier(Modifier::BOLD),
+            base_style.fg(theme.slug).add_modifier(Modifier::BOLD),
         );
         check("counter_slug", base_style);
         check(
             "caption_slug",
-            base_style
-                .fg(theme::COLOR_CAPTION)
-                .add_modifier(Modifier::BOLD),
+            base_style.fg(theme.caption).add_modifier(Modifier::BOLD),
         );
 
         parts.sort_by_key(|p| p.0);

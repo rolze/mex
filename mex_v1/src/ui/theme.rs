@@ -1,16 +1,146 @@
 use ratatui::style::Color;
 
-pub const COLOR_TEXT: Color = Color::White;
-// Removed COLOR_DIM in favor of Modifier::DIM
-pub const COLOR_SLUG: Color = Color::Cyan;
-pub const COLOR_CAPTION: Color = Color::Yellow;
-pub const COLOR_BATCH_BG: Color = Color::Rgb(50, 50, 90);
-pub const COLOR_CURSOR_BG: Color = Color::Cyan;
-pub const COLOR_CURSOR_FG: Color = Color::Black;
-pub const COLOR_MISSING_FG: Color = Color::Rgb(220, 100, 100);
-pub const COLOR_MISSING_BG: Color = Color::Rgb(60, 15, 15);
-pub const COLOR_FILTER_MATCH_BG: Color = Color::Rgb(100, 100, 150);
-#[allow(dead_code)]
-pub const COLOR_SUCCESS: Color = Color::Green;
-#[allow(dead_code)]
-pub const COLOR_ERROR: Color = Color::Red;
+#[derive(Clone, Copy)]
+pub struct Theme {
+    pub name: &'static str,
+    pub text: Color,
+    pub slug: Color,
+    pub caption: Color,
+    pub tag: Color,
+    pub type_fg: Color,
+    pub batch_bg: Color,
+    pub cursor_bg: Color,
+    pub missing_fg: Color,
+    pub missing_bg: Color,
+    pub filter_match_bg: Color,
+    pub border: Color,
+    pub border_active: Color,
+    pub title: Color,
+    pub success: Color,
+    pub error: Color,
+}
+
+impl Theme {
+    pub const MEX_AMBER: Theme = Theme {
+        name: "Mex Amber",
+        text: Color::Indexed(253),
+        slug: Color::Indexed(215),
+        caption: Color::Indexed(248),
+        tag: Color::Indexed(208),
+        type_fg: Color::Indexed(178),
+        batch_bg: Color::Indexed(237),
+        cursor_bg: Color::Indexed(239),
+        missing_fg: Color::Indexed(167),
+        missing_bg: Color::Indexed(52),
+        filter_match_bg: Color::Indexed(136),
+        border: Color::Indexed(240),
+        border_active: Color::Indexed(214),
+        title: Color::Indexed(215),
+        success: Color::Indexed(106),
+        error: Color::Indexed(167),
+    };
+
+    pub const NEON_NIGHTS: Theme = Theme {
+        name: "Neon Nights",
+        text: Color::Indexed(255),
+        slug: Color::Indexed(51),
+        caption: Color::Indexed(116),
+        tag: Color::Indexed(199),
+        type_fg: Color::Indexed(123),
+        batch_bg: Color::Indexed(53),
+        cursor_bg: Color::Indexed(90),
+        missing_fg: Color::Indexed(197),
+        missing_bg: Color::Indexed(88),
+        filter_match_bg: Color::Indexed(163),
+        border: Color::Indexed(238),
+        border_active: Color::Indexed(51),
+        title: Color::Indexed(199),
+        success: Color::Indexed(82),
+        error: Color::Indexed(197),
+    };
+
+    pub const NORDIC_FERN: Theme = Theme {
+        name: "Nordic Fern",
+        text: Color::Indexed(252),
+        slug: Color::Indexed(108),
+        caption: Color::Indexed(145),
+        tag: Color::Indexed(150),
+        type_fg: Color::Indexed(109),
+        batch_bg: Color::Indexed(23),
+        cursor_bg: Color::Indexed(24),
+        missing_fg: Color::Indexed(131),
+        missing_bg: Color::Indexed(95),
+        filter_match_bg: Color::Indexed(65),
+        border: Color::Indexed(238),
+        border_active: Color::Indexed(108),
+        title: Color::Indexed(150),
+        success: Color::Indexed(108),
+        error: Color::Indexed(131),
+    };
+
+    pub const AGNOSTER: Theme = Theme {
+        name: "Agnoster",
+        text: Color::Indexed(250),
+        slug: Color::Indexed(33),
+        caption: Color::Indexed(220),
+        tag: Color::Indexed(166),
+        type_fg: Color::Indexed(37),
+        batch_bg: Color::Indexed(236),
+        cursor_bg: Color::Indexed(238),
+        missing_fg: Color::Indexed(160),
+        missing_bg: Color::Indexed(52),
+        filter_match_bg: Color::Indexed(136),
+        border: Color::Indexed(240),
+        border_active: Color::Indexed(250),
+        title: Color::Indexed(33),
+        success: Color::Indexed(70),
+        error: Color::Indexed(160),
+    };
+
+    pub const ROBBY_RUSSELL: Theme = Theme {
+        name: "RobbyRussell",
+        text: Color::Indexed(252),
+        slug: Color::Indexed(51),
+        caption: Color::Indexed(196),
+        tag: Color::Indexed(226),
+        type_fg: Color::Indexed(46),
+        batch_bg: Color::Indexed(235),
+        cursor_bg: Color::Indexed(239),
+        missing_fg: Color::Indexed(231),
+        missing_bg: Color::Indexed(124),
+        filter_match_bg: Color::Indexed(90),
+        border: Color::Indexed(240),
+        border_active: Color::Indexed(196),
+        title: Color::Indexed(51),
+        success: Color::Indexed(46),
+        error: Color::Indexed(196),
+    };
+
+    pub const DRACULA: Theme = Theme {
+        name: "Dracula",
+        text: Color::Indexed(231),
+        slug: Color::Indexed(141),
+        caption: Color::Indexed(212),
+        tag: Color::Indexed(84),
+        type_fg: Color::Indexed(117),
+        batch_bg: Color::Indexed(60),
+        cursor_bg: Color::Indexed(99),
+        missing_fg: Color::Indexed(203),
+        missing_bg: Color::Indexed(52),
+        filter_match_bg: Color::Indexed(226),
+        border: Color::Indexed(61),
+        border_active: Color::Indexed(212),
+        title: Color::Indexed(141),
+        success: Color::Indexed(84),
+        error: Color::Indexed(203),
+    };
+
+    pub const ALL: [Theme; 6] = [
+        Self::MEX_AMBER,
+        Self::NEON_NIGHTS,
+        Self::NORDIC_FERN,
+        Self::AGNOSTER,
+        Self::ROBBY_RUSSELL,
+        Self::DRACULA,
+    ];
+}

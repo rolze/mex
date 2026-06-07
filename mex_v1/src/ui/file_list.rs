@@ -1,6 +1,5 @@
 use crate::app::App;
 use crate::domain::media::Status;
-use crate::ui::theme;
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -24,11 +23,43 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let start = app.list_offset;
-    let end = (start + list_height).min(app.filtered_items.len());
+    let end = (start + list_height).min(app.visible_rows.len());
 
     for i in start..end {
-        let idx = app.filtered_items[i];
-        if let Some(media) = app.items.get(idx) {
+        let row = &app.visible_rows[i];
+        match row {
+            crate::app::ListRow::GroupSummary { key, start_idx, end_idx } => {
+                let is_cursor = i == app.cursor_pos;
+                let mut base_style = Style::default();
+                if is_cursor {
+                    base_style = base_style.bg(app.theme.cursor_bg).add_modifier(Modifier::BOLD);
+                }
+                
+                let mut num_images = 0;
+                let mut num_videos = 0;
+                for j in *start_idx..*end_idx {
+                    if let Some(media) = app.items.get(app.filtered_items[j]) {
+                        match media.ext.as_str() {
+                            ".jpg" | ".jpeg" | ".png" | ".gif" | ".webp" => num_images += 1,
+                            ".mp4" | ".mkv" | ".webm" | ".mov" => num_videos += 1,
+                            _ => {}
+                        }
+                    }
+                }
+                
+                let mut counts = Vec::new();
+                if num_images > 0 { counts.push(format!("{} images", num_images)); }
+                if num_videos > 0 { counts.push(format!("{} videos", num_videos)); }
+                let counts_str = counts.join(", ");
+                
+                let text = format!("{:<width$} │ +", format!("{} ({})", key, counts_str), width = list_width.saturating_sub(6));
+                
+                let span = Span::styled(text, base_style.fg(app.theme.tag).add_modifier(Modifier::DIM));
+                items.push(ListItem::new(Line::from(vec![span])).style(base_style));
+            }
+            crate::app::ListRow::Item(idx) => {
+                let idx = *idx;
+                if let Some(media) = app.items.get(idx) {
             let is_selected_for_batch = app.selected.contains(&idx);
             let is_cursor = i == app.cursor_pos;
 
@@ -36,17 +67,14 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             if media.status == Status::Trashed {
                 base_style = base_style.add_modifier(Modifier::DIM);
             } else if media.missing_on_disk {
-                base_style = base_style
-                    .bg(theme::COLOR_MISSING_BG)
-                    .fg(theme::COLOR_MISSING_FG);
+                base_style = base_style.bg(app.theme.missing_bg).fg(app.theme.missing_fg);
             } else if is_selected_for_batch {
-                base_style = base_style.bg(theme::COLOR_BATCH_BG);
+                base_style = base_style.bg(app.theme.batch_bg);
             }
 
             if is_cursor {
-                base_style = Style::default()
-                    .bg(theme::COLOR_CURSOR_BG)
-                    .fg(theme::COLOR_CURSOR_FG)
+                base_style = base_style
+                    .bg(app.theme.cursor_bg)
                     .add_modifier(Modifier::BOLD);
             }
 
@@ -60,32 +88,23 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                 " "
             };
 
-            let folder = if let Some(stem) = &media.path_stem {
-                stem.split('_').next().unwrap_or("????")
-            } else {
-                "????"
-            };
-            
+            let folder = extract_folder_year(media.path_stem.as_ref());
+
             let prefix = format!("{}{} / ", folder, marker);
             let prefix_padded = format!("{:<8}", prefix); // Ensure alignment
 
             let filename = media.file_name().unwrap_or_else(|| String::from("unknown"));
 
-            let mut spans = vec![Span::styled(
-                prefix_padded,
-                base_style,
-            )];
+            let mut spans = vec![Span::styled(prefix_padded, base_style)];
 
             let text_filter = app.filter.text.to_lowercase();
             let mut highlighted_spans = Vec::new();
             if text_filter.is_empty() {
                 if !is_selected_for_batch {
                     if let Some(stem) = &media.path_stem {
-                        let mut stem_spans = crate::ui::semantic::colorize_stem(
-                            stem,
-                            base_style,
-                        );
-                        stem_spans.push(Span::styled(format!(".{}", media.ext), base_style));
+                        let mut stem_spans =
+                            crate::ui::semantic::colorize_stem(stem, base_style, &app.theme);
+                        stem_spans.push(Span::styled(media.ext.clone(), base_style));
                         highlighted_spans.extend(stem_spans);
                     } else {
                         highlighted_spans.push(Span::styled(filename.clone(), base_style));
@@ -112,7 +131,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
                         highlighted_spans.push(Span::styled(
                             filename[match_start..match_end].to_string(),
-                            base_style.bg(theme::COLOR_FILTER_MATCH_BG),
+                            base_style.bg(app.theme.filter_match_bg),
                         ));
 
                         current_idx = match_end;
@@ -178,10 +197,12 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
             spans.push(Span::styled(
                 format!(" │ {}", tags_truncated),
-                base_style.add_modifier(Modifier::DIM),
+                base_style.fg(app.theme.tag).add_modifier(Modifier::DIM),
             ));
 
             items.push(ListItem::new(Line::from(spans)).style(base_style));
+                }
+            }
         }
     }
 
@@ -195,7 +216,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         format!(
             " mex — {} / {} / {} ",
             app.cursor_pos.saturating_add(1),
-            app.filtered_items.len(),
+            app.visible_rows.len(),
             app.items.len()
         )
     };
@@ -206,7 +227,10 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
         title
     };
 
-    let block = Block::default().borders(Borders::ALL).title(title);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.border))
+        .title(Span::styled(title, Style::default().fg(app.theme.title)));
 
     let list = List::new(items).block(block);
 
@@ -214,4 +238,27 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     state.select(Some(app.cursor_pos.saturating_sub(app.list_offset)));
 
     f.render_stateful_widget(list, area, &mut state);
+}
+
+pub(crate) fn extract_folder_year(stem: Option<&String>) -> &str {
+    if let Some(stem) = stem {
+        stem.split('-').next().unwrap_or("????")
+    } else {
+        "????"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_folder_year() {
+        assert_eq!(
+            extract_folder_year(Some(&"2022-01-foo-bar".to_string())),
+            "2022"
+        );
+        assert_eq!(extract_folder_year(Some(&"2023".to_string())), "2023");
+        assert_eq!(extract_folder_year(None), "????");
+    }
 }

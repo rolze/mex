@@ -27,10 +27,9 @@ impl MpvContext {
         let (event_tx, event_rx) = mpsc::channel::<MpvEvent>();
 
         thread::spawn(move || {
-            let get_sock_path = || -> String {
-                format!("/tmp/mex-mpv-{}.sock", std::process::id())
-            };
-            
+            let get_sock_path =
+                || -> String { format!("/tmp/mex-mpv-{}.sock", std::process::id()) };
+
             for cmd in cmd_rx {
                 match cmd {
                     MpvCommand::Play(path) => {
@@ -60,7 +59,7 @@ impl MpvContext {
 
     pub fn play(&mut self, path: &str) {
         let sock_path = self.get_sock_path();
-        
+
         let is_alive = if std::path::Path::new(&sock_path).exists() {
             UnixStream::connect(&sock_path).is_ok()
         } else {
@@ -75,7 +74,7 @@ impl MpvContext {
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            
+
             let pid = std::process::id();
             self.pid = Some(pid);
             let sock_path = self.get_sock_path();
@@ -91,7 +90,7 @@ impl MpvContext {
                 .spawn()
             {
                 self.process = Some(child);
-                
+
                 // Spawn a listener thread
                 let event_tx = self.event_tx.clone();
                 let sock_path_clone = sock_path.clone();
@@ -103,12 +102,14 @@ impl MpvContext {
                         }
                         thread::sleep(std::time::Duration::from_millis(100));
                     }
-                    
+
                     if let Ok(stream) = UnixStream::connect(&sock_path_clone) {
                         let reader = BufReader::new(stream);
                         for line in reader.lines() {
                             if let Ok(l) = line {
-                                if l.contains("\"event\":\"end-file\"") || l.contains("\"event\": \"end-file\"") {
+                                if l.contains("\"event\":\"end-file\"")
+                                    || l.contains("\"event\": \"end-file\"")
+                                {
                                     let _ = event_tx.send(MpvEvent::Ended);
                                 }
                             } else {
@@ -124,7 +125,7 @@ impl MpvContext {
     pub fn toggle_pause(&self) {
         let _ = self.cmd_tx.send(MpvCommand::TogglePause);
     }
-    
+
     pub fn poll_events(&self) -> Vec<MpvEvent> {
         let mut events = Vec::new();
         while let Ok(event) = self.event_rx.try_recv() {

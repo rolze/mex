@@ -1,7 +1,7 @@
 use crate::app::{App, Mode};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::{Color, Style},
+    style::Style,
     widgets::{Block, Borders},
     Frame,
 };
@@ -35,8 +35,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .split(chunks[1]);
 
     let (filter_border_style, status_border_style) = match app.mode {
-        Mode::Filter | Mode::Command => (Style::default().fg(Color::Yellow), Style::default()),
-        _ => (Style::default(), Style::default()),
+        Mode::Filter | Mode::Command => (
+            Style::default().fg(app.theme.border_active),
+            Style::default().fg(app.theme.border),
+        ),
+        _ => (
+            Style::default().fg(app.theme.border),
+            Style::default().fg(app.theme.border),
+        ),
     };
 
     let filter_title = match app.mode {
@@ -45,12 +51,18 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     };
 
     let filter_block = Block::default()
-        .title(filter_title)
+        .title(ratatui::text::Span::styled(
+            filter_title,
+            Style::default().fg(app.theme.title),
+        ))
         .borders(Borders::ALL)
         .border_style(filter_border_style);
 
     let status_block = Block::default()
-        .title(" Status ")
+        .title(ratatui::text::Span::styled(
+            " Status ",
+            Style::default().fg(app.theme.title),
+        ))
         .borders(Borders::ALL)
         .border_style(status_border_style);
 

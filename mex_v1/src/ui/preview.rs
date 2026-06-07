@@ -1,7 +1,7 @@
 use crate::app::App;
-use crate::ui::theme;
-use ratatui::{style::Modifier, 
+use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
+    style::Modifier,
     style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
@@ -41,8 +41,11 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                 let img = ratatui_image::StatefulImage::default();
                 f.render_stateful_widget(img, chunks[1], protocol);
             } else {
-                let img_placeholder = Paragraph::new(" [ Image Loading failed ] ")
-                    .block(Block::default().borders(Borders::ALL));
+                let img_placeholder = Paragraph::new(" [ Image Loading failed ] ").block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(app.theme.border)),
+                );
                 f.render_widget(img_placeholder, chunks[1]);
             }
 
@@ -52,7 +55,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                     Span::styled("Source: ", Style::default().add_modifier(Modifier::DIM)),
                     Span::styled(
                         media.source_path.clone(),
-                        Style::default().fg(theme::COLOR_TEXT),
+                        Style::default().fg(app.theme.text),
                     ),
                 ]),
                 Line::from(vec![
@@ -67,14 +70,14 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                                     .map(|p| r.join(p).to_string_lossy().into_owned())
                             })
                             .unwrap_or_else(|| "Unknown".to_string()),
-                        Style::default().fg(theme::COLOR_TEXT),
+                        Style::default().fg(app.theme.text),
                     ),
                 ]),
                 Line::from(vec![
                     Span::styled("Tags: ", Style::default().add_modifier(Modifier::DIM)),
                     Span::styled(
                         media.tags_packed.replace('\x1f', " "),
-                        Style::default().fg(theme::COLOR_SLUG),
+                        Style::default().fg(app.theme.tag),
                     ),
                 ]),
             ];
@@ -82,30 +85,42 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
             if let Some(orig) = &media.os_date {
                 meta_text.push(Line::from(vec![
                     Span::styled("OS Date: ", Style::default().add_modifier(Modifier::DIM)),
-                    Span::styled(orig.clone(), Style::default().fg(theme::COLOR_TEXT)),
+                    Span::styled(orig.clone(), Style::default().fg(app.theme.text)),
                 ]));
             } else {
                 meta_text.push(Line::from(vec![
                     Span::styled("Mex Date: ", Style::default().add_modifier(Modifier::DIM)),
-                    Span::styled(
-                        media.mex_date.clone(),
-                        Style::default().fg(theme::COLOR_TEXT),
-                    ),
+                    Span::styled(media.mex_date.clone(), Style::default().fg(app.theme.text)),
                 ]));
             }
 
-            let meta_p = Paragraph::new(meta_text)
-                .block(Block::default().title(" Metadata ").borders(Borders::ALL));
-            f.render_widget(meta_p, chunks[1]);
+            let meta_p = Paragraph::new(meta_text).block(
+                Block::default()
+                    .title(Span::styled(
+                        " Metadata ",
+                        Style::default().fg(app.theme.title),
+                    ))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(app.theme.border)),
+            );
+            f.render_widget(meta_p, chunks[0]); // changed chunks[1] to chunks[0] for metadata! It was a bug.
         } else {
             f.render_widget(
-                Paragraph::new("No item").block(Block::default().borders(Borders::ALL)),
+                Paragraph::new("No item").block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(app.theme.border)),
+                ),
                 area,
             );
         }
     } else {
         f.render_widget(
-            Paragraph::new("No item").block(Block::default().borders(Borders::ALL)),
+            Paragraph::new("No item").block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(app.theme.border)),
+            ),
             area,
         );
     }

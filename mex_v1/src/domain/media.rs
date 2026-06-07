@@ -85,3 +85,28 @@ impl MediaItem {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_file_name_includes_extension_correctly() {
+        let media = MediaItem {
+            id: "1".into(),
+            path_stem: Some("2022-01-01-0001".into()),
+            ext: ".jpg".into(), // extension inherently includes the dot
+            mex_date: "2022-01-01".into(),
+            tags_packed: "".into(),
+            tag_types_packed: "".into(),
+            os_date: None,
+            caption: None,
+            source_path: "/path".into(),
+            status: Status::Normal,
+            missing_on_disk: false,
+        };
+        // The regression caused a double dot: "2022-01-01-0001..jpg"
+        // Ensure this method simply concatenates the stem and the ext
+        assert_eq!(media.file_name(), Some("2022-01-01-0001.jpg".into()));
+    }
+}

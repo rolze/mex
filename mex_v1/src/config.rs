@@ -96,10 +96,12 @@ impl Config {
             return Some(PathBuf::from(env_path));
         }
         if let Ok(home) = std::env::var("HOME") {
-            Some(Path::new(&home)
-                .join(".config")
-                .join("mex")
-                .join("config.toml"))
+            Some(
+                Path::new(&home)
+                    .join(".config")
+                    .join("mex")
+                    .join("config.toml"),
+            )
         } else {
             None
         }

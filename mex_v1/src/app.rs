@@ -20,30 +20,44 @@ pub enum View {
 }
 
 #[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub enum ListRow {
+    Item(usize),
+    GroupSummary {
+        key: String,
+        start_idx: usize,
+        end_idx: usize,
+    },
+}
+
 pub struct App {
     pub config: Config,
     pub db_conn: Connection,
     pub items: Vec<MediaItem>,
     pub filtered_items: Vec<usize>, // Indices into items
+    pub visible_rows: Vec<ListRow>,
+    pub collapsed_groups: std::collections::HashSet<String>,
     pub selected: std::collections::HashSet<usize>,
     pub cursor_pos: usize,
     pub mode: Mode,
     pub view: View,
     pub filter: Filter,
     pub command_input: String,
-    pub filter_input: String,
+    #[allow(dead_code)] pub filter_input: String,
     pub status_message: Option<String>,
     pub show_preview: bool,
     pub shift_anchor: Option<usize>,
     pub tag_input: Option<String>,
     pub type_input: Option<String>,
-    pub tags_cache: Vec<String>,
-    pub types_cache: Vec<String>,
+    #[allow(dead_code)] pub tags_cache: Vec<String>,
+    #[allow(dead_code)] pub types_cache: Vec<String>,
     pub list_offset: usize,
     pub list_height: usize,
     pub mpv: crate::services::mpv::MpvContext,
     pub image_cache: std::collections::HashMap<String, ratatui_image::protocol::StatefulProtocol>,
     pub picker: Option<ratatui_image::picker::Picker>,
+    pub theme_index: usize,
+    pub theme: crate::ui::theme::Theme,
 }
 
 impl App {
@@ -51,11 +65,13 @@ impl App {
         let items = db::media::load_files(&db_conn)?;
         let filtered_items = (0..items.len()).collect();
 
-        Ok(Self {
+        let mut app = Self {
             config,
             db_conn,
             items,
             filtered_items,
+            visible_rows: Vec::new(),
+            collapsed_groups: std::collections::HashSet::new(),
             selected: std::collections::HashSet::new(),
             cursor_pos: 0,
             mode: Mode::Normal,
@@ -75,7 +91,44 @@ impl App {
             mpv: crate::services::mpv::MpvContext::new(),
             image_cache: std::collections::HashMap::new(),
             picker: None,
-        })
+            theme_index: 0,
+            theme: crate::ui::theme::Theme::ALL[0],
+        };
+        app.build_visible_rows();
+        Ok(app)
+    }
+
+    pub fn build_visible_rows(&mut self) {
+        self.visible_rows.clear();
+        let mut i = 0;
+        while i < self.filtered_items.len() {
+            let idx = self.filtered_items[i];
+            let item = &self.items[idx];
+            if let Some(key) = item.group_key() {
+                if self.collapsed_groups.contains(&key) {
+                    let start_i = i;
+                    let mut j = i + 1;
+                    while j < self.filtered_items.len() {
+                        let next_idx = self.filtered_items[j];
+                        let next_item = &self.items[next_idx];
+                        if next_item.group_key() == Some(key.clone()) {
+                            j += 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    self.visible_rows.push(ListRow::GroupSummary {
+                        key,
+                        start_idx: start_i,
+                        end_idx: j,
+                    });
+                    i = j;
+                    continue;
+                }
+            }
+            self.visible_rows.push(ListRow::Item(idx));
+            i += 1;
+        }
     }
 
     pub fn tick(&mut self) {
@@ -89,11 +142,19 @@ impl App {
     }
 
     /// Handles a key event and returns true if the app should exit.
+    pub fn get_item_idx(&self, pos: usize) -> Option<usize> {
+        if let Some(ListRow::Item(idx)) = self.visible_rows.get(pos) {
+            Some(*idx)
+        } else {
+            None
+        }
+    }
+
     pub fn get_target_indices(&self) -> Vec<usize> {
         if !self.selected.is_empty() {
             self.selected.iter().copied().collect()
-        } else if let Some(&idx) = self.filtered_items.get(self.cursor_pos) {
-            vec![idx]
+        } else if let Some(ListRow::Item(idx)) = self.visible_rows.get(self.cursor_pos) {
+            vec![*idx]
         } else {
             vec![]
         }
@@ -122,9 +183,13 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') | KeyCode::Char('Q') => return true,
+            KeyCode::Char('t') => {
+                self.theme_index = (self.theme_index + 1) % crate::ui::theme::Theme::ALL.len();
+                self.theme = crate::ui::theme::Theme::ALL[self.theme_index];
+                self.status_message = Some(format!("Theme: {}", self.theme.name));
+            }
             KeyCode::Char(' ') => {
-                if self.cursor_pos < self.filtered_items.len() {
-                    let idx = self.filtered_items[self.cursor_pos];
+                if let Some(idx) = self.get_item_idx(self.cursor_pos) {
                     if self.selected.contains(&idx) {
                         self.selected.remove(&idx);
                     } else {
@@ -133,7 +198,7 @@ impl App {
                 }
                 self.shift_anchor = None;
             }
-            KeyCode::Down if self.cursor_pos + 1 < self.filtered_items.len() => {
+            KeyCode::Down if self.cursor_pos + 1 < self.visible_rows.len() => {
                 let old_pos = self.cursor_pos;
                 self.cursor_pos += 1;
                 self.check_missing_on_disk();
@@ -141,18 +206,20 @@ impl App {
                 if is_shift {
                     if self.shift_anchor.is_none() {
                         self.shift_anchor = Some(old_pos);
-                        let idx = self.filtered_items[old_pos];
+                        if let Some(idx) = self.get_item_idx(old_pos) {
+                            if self.selected.contains(&idx) {
+                                self.selected.remove(&idx);
+                            } else {
+                                self.selected.insert(idx);
+                            }
+                        }
+                    }
+                    if let Some(idx) = self.get_item_idx(self.cursor_pos) {
                         if self.selected.contains(&idx) {
                             self.selected.remove(&idx);
                         } else {
                             self.selected.insert(idx);
                         }
-                    }
-                    let idx = self.filtered_items[self.cursor_pos];
-                    if self.selected.contains(&idx) {
-                        self.selected.remove(&idx);
-                    } else {
-                        self.selected.insert(idx);
                     }
                 }
             }
@@ -164,18 +231,47 @@ impl App {
                 if is_shift {
                     if self.shift_anchor.is_none() {
                         self.shift_anchor = Some(old_pos);
-                        let idx = self.filtered_items[old_pos];
+                        if let Some(idx) = self.get_item_idx(old_pos) {
+                            if self.selected.contains(&idx) {
+                                self.selected.remove(&idx);
+                            } else {
+                                self.selected.insert(idx);
+                            }
+                        }
+                    }
+                    if let Some(idx) = self.get_item_idx(self.cursor_pos) {
                         if self.selected.contains(&idx) {
                             self.selected.remove(&idx);
                         } else {
                             self.selected.insert(idx);
                         }
                     }
-                    let idx = self.filtered_items[self.cursor_pos];
-                    if self.selected.contains(&idx) {
-                        self.selected.remove(&idx);
-                    } else {
-                        self.selected.insert(idx);
+                }
+            }
+            KeyCode::Left => {
+                if let Some(ListRow::Item(idx)) = self.visible_rows.get(self.cursor_pos) {
+                    if let Some(key) = self.items[*idx].group_key() {
+                        self.collapsed_groups.insert(key.clone());
+                        self.build_visible_rows();
+                        if let Some(pos) = self.visible_rows.iter().position(|r| match r {
+                            ListRow::GroupSummary { key: k, .. } => k == &key,
+                            _ => false,
+                        }) {
+                            self.cursor_pos = pos;
+                        }
+                    }
+                }
+            }
+            KeyCode::Right => {
+                if let Some(ListRow::GroupSummary { key, .. }) = self.visible_rows.get(self.cursor_pos) {
+                    let key_clone = key.clone();
+                    self.collapsed_groups.remove(&key_clone);
+                    self.build_visible_rows();
+                    if let Some(pos) = self.visible_rows.iter().position(|r| match r {
+                        ListRow::Item(idx) => self.items[*idx].group_key() == Some(key_clone.clone()),
+                        _ => false,
+                    }) {
+                        self.cursor_pos = pos;
                     }
                 }
             }
@@ -195,7 +291,7 @@ impl App {
             }
             KeyCode::PageDown => {
                 self.cursor_pos = (self.cursor_pos + self.list_height)
-                    .min(self.filtered_items.len().saturating_sub(1));
+                    .min(self.visible_rows.len().saturating_sub(1));
                 self.check_missing_on_disk();
             }
             KeyCode::PageUp => {
@@ -275,7 +371,7 @@ impl App {
             }
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.cursor_pos = (self.cursor_pos + self.list_height)
-                    .min(self.filtered_items.len().saturating_sub(1));
+                    .min(self.visible_rows.len().saturating_sub(1));
                 self.check_missing_on_disk();
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -493,6 +589,7 @@ impl App {
             })
             .collect();
 
+        self.build_visible_rows();
         self.cursor_pos = 0;
     }
 
@@ -533,13 +630,13 @@ impl App {
         let current_key = self.get_group_key(self.cursor_pos);
 
         let mut next_start = self.cursor_pos;
-        while next_start < self.filtered_items.len()
+        while next_start < self.visible_rows.len()
             && self.get_group_key(next_start) == current_key
         {
             next_start += 1;
         }
 
-        if next_start < self.filtered_items.len() {
+        if next_start < self.visible_rows.len() {
             self.cursor_pos = next_start;
         }
     }
@@ -579,7 +676,7 @@ impl App {
         let current_key = self.get_group_key(self.cursor_pos);
 
         let mut group_end = self.cursor_pos;
-        while group_end + 1 < self.filtered_items.len()
+        while group_end + 1 < self.visible_rows.len()
             && self.get_group_key(group_end + 1) == current_key
         {
             group_end += 1;
@@ -588,7 +685,7 @@ impl App {
         let old_pos = self.cursor_pos;
         let range = old_pos..=group_end;
 
-        if group_end + 1 < self.filtered_items.len() {
+        if group_end + 1 < self.visible_rows.len() {
             self.cursor_pos = group_end + 1;
         } else {
             self.cursor_pos = group_end;
@@ -606,16 +703,20 @@ impl App {
 
     fn toggle_range(&mut self, range: std::ops::RangeInclusive<usize>) {
         let all_selected = range.clone().all(|pos| {
-            let idx = self.filtered_items[pos];
-            self.selected.contains(&idx)
+            if let Some(idx) = self.get_item_idx(pos) {
+                self.selected.contains(&idx)
+            } else {
+                true // if it's a group summary, pretend it matches to not break all_selected
+            }
         });
 
         for pos in range {
-            let idx = self.filtered_items[pos];
-            if all_selected {
-                self.selected.remove(&idx);
-            } else {
-                self.selected.insert(idx);
+            if let Some(idx) = self.get_item_idx(pos) {
+                if all_selected {
+                    self.selected.remove(&idx);
+                } else {
+                    self.selected.insert(idx);
+                }
             }
         }
     }
@@ -636,7 +737,7 @@ impl App {
     fn set_status(&mut self, status: crate::domain::media::Status) {
         let targets = if !self.selected.is_empty() {
             self.selected.iter().copied().collect::<Vec<_>>()
-        } else if let Some(&idx) = self.filtered_items.get(self.cursor_pos) {
+        } else if let Some(idx) = self.get_item_idx(self.cursor_pos) {
             vec![idx]
         } else {
             vec![]
@@ -669,7 +770,7 @@ impl App {
         // Find targets (for caption, similar rules)
         let targets = if !self.selected.is_empty() {
             self.selected.iter().copied().collect::<Vec<_>>()
-        } else if let Some(&idx) = self.filtered_items.get(self.cursor_pos) {
+        } else if let Some(idx) = self.get_item_idx(self.cursor_pos) {
             vec![idx]
         } else {
             vec![]
@@ -684,7 +785,11 @@ impl App {
             .filter_map(|&idx| self.items.get(idx).map(|m| m.id.clone()))
             .collect();
 
-        let cap_val = if new_caption.is_empty() { None } else { Some(new_caption.as_str()) };
+        let cap_val = if new_caption.is_empty() {
+            None
+        } else {
+            Some(new_caption.as_str())
+        };
         if let Err(e) = crate::db::media::update_caption(&self.db_conn, &ids, cap_val) {
             self.status_message = Some(format!("Error saving caption: {}", e));
             return;
@@ -721,12 +826,14 @@ impl App {
     }
 
     fn mpv_next_video(&mut self) {
-        for i in self.cursor_pos + 1..self.filtered_items.len() {
-            if let Some(media) = self.items.get(self.filtered_items[i]) {
-                if media.ext == ".mp4" || media.ext == ".webm" || media.ext == ".mkv" {
-                    self.cursor_pos = i;
-                    self.mpv_play_current();
-                    return;
+        for i in self.cursor_pos + 1..self.visible_rows.len() {
+            if let Some(idx) = self.get_item_idx(i) {
+                if let Some(media) = self.items.get(idx) {
+                    if media.ext == ".mp4" || media.ext == ".webm" || media.ext == ".mkv" {
+                        self.cursor_pos = i;
+                        self.mpv_play_current();
+                        return;
+                    }
                 }
             }
         }
@@ -737,11 +844,13 @@ impl App {
             return;
         }
         for i in (0..self.cursor_pos).rev() {
-            if let Some(media) = self.items.get(self.filtered_items[i]) {
-                if media.ext == ".mp4" || media.ext == ".webm" || media.ext == ".mkv" {
-                    self.cursor_pos = i;
-                    self.mpv_play_current();
-                    return;
+            if let Some(idx) = self.get_item_idx(i) {
+                if let Some(media) = self.items.get(idx) {
+                    if media.ext == ".mp4" || media.ext == ".webm" || media.ext == ".mkv" {
+                        self.cursor_pos = i;
+                        self.mpv_play_current();
+                        return;
+                    }
                 }
             }
         }
@@ -751,7 +860,7 @@ impl App {
         if !self.show_preview {
             return;
         }
-        if let Some(&idx) = self.filtered_items.get(self.cursor_pos) {
+        if let Some(idx) = self.get_item_idx(self.cursor_pos) {
             // Need a separate block to borrow `items` mutably since we might need to modify `db_conn` later.
             let needs_update = {
                 if let Some(media) = self.items.get(idx) {

@@ -27,7 +27,7 @@ fn main() -> Result<()> {
     // Check if configuration requires prompting (UC-01 flow)
     // For now we assume they exist or use defaults, as per prototype, but we should handle DB creation.
     let mut db_path = config.db_path.clone();
-    
+
     loop {
         if let Some(ref path) = db_path {
             if path.exists() {
@@ -36,11 +36,11 @@ fn main() -> Result<()> {
                 println!("database file not found: {}", path.display());
             }
         }
-        
+
         use std::io::Write;
         print!("new path: ");
         io::stdout().flush()?;
-        
+
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         let trimmed = input.trim();
@@ -48,7 +48,7 @@ fn main() -> Result<()> {
             println!("path cannot be empty");
             continue;
         }
-        
+
         db_path = Some(std::path::PathBuf::from(trimmed));
     }
     let db_path = db_path.unwrap();

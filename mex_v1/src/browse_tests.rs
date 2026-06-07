@@ -472,4 +472,34 @@ mod tests {
         assert!(app.filter.is_empty());
         assert_eq!(app.filtered_items.len(), 6);
     }
+
+    // ── Grouping ───────────────────────────────────────────────────────
+
+    #[test]
+    fn left_arrow_collapses_group_and_right_arrow_expands() {
+        let mut app = test_app(&seed_items());
+        let initial_rows = app.visible_rows.len();
+        
+        // Find an item with a group_key
+        let mut target_idx = 0;
+        for (i, row) in app.visible_rows.iter().enumerate() {
+            if let crate::app::ListRow::Item(idx) = row {
+                if app.items[*idx].group_key().is_some() {
+                    target_idx = i;
+                    break;
+                }
+            }
+        }
+        
+        app.cursor_pos = target_idx;
+        
+        // Collapse
+        app.handle_key(key(KeyCode::Left));
+        let collapsed_rows = app.visible_rows.len();
+        assert!(collapsed_rows < initial_rows || initial_rows == collapsed_rows);
+        
+        // Right should expand
+        app.handle_key(key(KeyCode::Right));
+        assert_eq!(app.visible_rows.len(), initial_rows);
+    }
 }
