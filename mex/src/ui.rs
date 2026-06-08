@@ -1027,8 +1027,15 @@ fn draw_filter(frame: &mut Frame, app: &App, area: Rect) {
         .border_style(border_style);
     let inner = block.inner(area);
 
+    let line_width = line.width() as u16;
+    let scroll_offset = if line_width > inner.width && inner.width > 0 {
+        line_width - inner.width
+    } else {
+        0
+    };
+
     frame.render_widget(block, area);
-    frame.render_widget(Paragraph::new(line), inner);
+    frame.render_widget(Paragraph::new(line).scroll((0, scroll_offset)), inner);
 }
 
 fn draw_status_box(frame: &mut Frame, app: &App, area: Rect) {

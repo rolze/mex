@@ -45,7 +45,7 @@ Users organise their media with tags (e.g. "travel", "alice") and tag types (e.g
 ### Functional requirements — Mode switching and clearing
 
 - **FR-15**: Pressing Backspace while the tag/type input is empty must exit the respective typing mode without removing any confirmed tags or types.
-- **FR-16**: Pressing Backspace when no text is present and no typing mode is active must remove the most recently confirmed tag or type.
+- **FR-16**: Pressing Backspace when no text is present and no typing mode is active must remove the visually right-most filter component (i.e., all tags are removed one by one before any tag-types are removed).
 - **FR-17**: Pressing Esc must reset the entire filter state: all text, all confirmed tags, all confirmed types, and any active typing mode.
 - **FR-18**: Typing `#` while in `@` typing mode (or `@` while in `#` typing mode) must exit the current mode, discarding any partial input, and enter the other mode.
 
@@ -59,6 +59,7 @@ Users organise their media with tags (e.g. "travel", "alice") and tag types (e.g
   - Tag-name tokens (`#tag`) must use a distinct colour that differentiates them from types and text.
 - **FR-21**: When more than one tag or more than one type is confirmed, the respective group must be visually wrapped in parenthesised OR expressions (e.g. `(@person OR @camera)`).
 - **FR-22**: While the user is typing in tag or type mode, a dimmed autocompletion suffix must be shown after the current input.
+- **FR-23**: When the filter bar expression exceeds the available terminal width, the input area must support horizontal scrolling to ensure the cursor remains visible.
 
 ### Non-functional requirements
 
@@ -75,7 +76,7 @@ Users organise their media with tags (e.g. "travel", "alice") and tag types (e.g
 - **AC-6**: Given a collection with existing tags, when the user types `#tra`, then an autocompletion suggestion of "travel" (or similar matching tag) appears as dimmed inline text.
 - **AC-7**: Given a visible autocompletion suggestion, when the user presses Tab, then the suggestion text fills the input.
 - **AC-8**: Given the user is in tag-typing mode with an empty input, when the user presses Backspace, then tag-typing mode is exited but no confirmed tags are removed.
-- **AC-9**: Given no typing mode is active and no text is present, when the user presses Backspace, then the most recently confirmed tag or type is removed.
+- **AC-09**: Given no typing mode is active and no text is present, when the user presses Backspace, then the visually right-most filter component (a tag if any exist, otherwise a type) is removed.
 - **AC-10**: Given an already-confirmed tag "travel", when the user confirms "travel" again (case-insensitive), then no duplicate is added.
 - **AC-11**: Given a collection, when the user types `@person` and confirms, then only files that carry a tag of type "person" are shown.
 - **AC-12**: Given confirmed types `@person` and `@camera`, then files carrying a tag of *either* type are shown (OR logic).
@@ -104,7 +105,4 @@ Users organise their media with tags (e.g. "travel", "alice") and tag types (e.g
 | UC-05  | mex/spec/UC-05-tag-filtering.md |
 | PRD-02 | prd/PRD-02-browse.md (FR-5, FR-6 — filter mode baseline) |
 
-## Open questions
 
-- Should the system support removing a *specific* confirmed tag/type (e.g. via a dedicated keystroke), or is sequential Backspace removal sufficient?
-- When the filter bar expression exceeds the available width, how should overflow be handled — truncation with an indicator, or horizontal scrolling?

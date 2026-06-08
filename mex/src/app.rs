@@ -2276,7 +2276,7 @@ impl App {
             _ => return,
         };
 
-        match crate::db::trash_files(&mut self.conn, &[id.clone()]) {
+        match crate::db::trash_files(&mut self.conn, std::slice::from_ref(&id)) {
             Err(e) => {
                 self.cmd.status_message = Some(format!("trash: {e}"));
             }
