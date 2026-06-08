@@ -36,6 +36,7 @@ Enable the user to attach short, descriptive text to media files. Captions are e
 | R-16-09 | The system must rename the file on the filesystem and update its record in the database. |
 | R-16-10 | If the newly generated filename conflicts with an existing file, the system must automatically append or increment a numerical counter to resolve the collision safely. |
 | R-16-11 | If the user confirms an empty caption input, the system must remove the caption segment entirely from the filename. |
+| R-16-12 | When a caption is added or removed, the file's existing 4-digit sequential counter must be preserved. The system must not attempt to condense or recalculate counters to fill gaps. |
 
 ## 3. Acceptance Criteria
 
@@ -54,6 +55,4 @@ Enable the user to attach short, descriptive text to media files. Captions are e
 - **When** the user opens the caption editor, clears the input, and confirms
 - **Then** the caption segment is removed from the file's name on disk.
 
-## Open questions
 
-- When a caption is added or removed, does the system need to recalculate and condense the 4-digit sequential counters for that date/slug group (like Slugify does), or are counter gaps acceptable?

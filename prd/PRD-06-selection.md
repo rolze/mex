@@ -58,6 +58,14 @@ Users managing large media collections need to select one or many files quickly 
 | ID | Requirement |
 |----|-------------|
 | R-06-13 | A "select all" action must select every file in the current result set (i.e., the filtered list, not the entire collection). |
+
+### 2.6 Persistence & Scope
+
+| ID | Requirement |
+|----|-------------|
+| R-06-14 | The selection state must persist across text filter changes, allowing users to build a selection across multiple searches. |
+| R-06-15 | Bulk operations must apply to all currently selected files, including those temporarily hidden by an active filter. |
+| R-06-16 | The visual marker denoting selected rows must be configurable via the application theme. |
 | R-06-14 | If every file in the current result set is already selected, the same action must deselect all. |
 
 ### 2.6 Escape Hierarchy
@@ -182,7 +190,8 @@ Users managing large media collections need to select one or many files quickly 
 ## Constraints
 
 - Group boundaries are determined solely by the application's filename convention; no user-configurable grouping is required for this feature.
-- The selection model operates on the current filtered result set. Files hidden by an active filter are not part of the selection.
+- The selection model operates on the entire selection set. Files hidden by an active filter remain part of the selection and are affected by bulk actions.
+- Selection size is unbounded, but bulk operations must perform safety pre-checks (e.g., batch limits) before execution.
 
 ## Traceability
 
@@ -190,10 +199,3 @@ Users managing large media collections need to select one or many files quickly 
 |--------|-----------|
 | UC-04  | Selection |
 | PRD-00 | FR-4 (multi-selection fallback), FR-6 (escape hierarchy) |
-
-## Open questions
-
-- Should the selection persist when the user changes the active filter, or should it be cleared whenever the result set changes?
-- Should there be a maximum selection size, or is the selection always unbounded within the result set?
-- Should the visual marker for selected rows be configurable through themes, or is a single fixed marker sufficient?
-- If hidden selected files exist (due to filter changes), do bulk operations (e.g., `:tag`) apply to them, or only to currently visible selected rows?

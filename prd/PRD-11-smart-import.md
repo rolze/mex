@@ -34,7 +34,7 @@ Provide a robust, idempotent mechanism to import new media files from external s
 
 | ID | Requirement |
 |----|-------------|
-| R-11-10 | Following the scan, the system must display a full-screen preview (dry run) of the proposed import. |
+| R-11-10 | Following the scan, the system must display a preview (dry run) of the proposed import inside the Multipurpose Context-Aware Panel. |
 | R-11-11 | The preview must summarize total files found, pending imports, duplicates, skipped items, and items with unknown dates. |
 | R-11-12 | The preview must list each file with its source path, proposed target path, date source, slug source, and status. |
 | R-11-13 | The user must be able to scroll through the preview list and explicitly confirm or cancel the import execution. |
@@ -45,9 +45,9 @@ Provide a robust, idempotent mechanism to import new media files from external s
 |----|-------------|
 | R-11-14 | Upon confirmation, the system must execute the import in the background without blocking the user interface. |
 | R-11-15 | The system must assign collision-free filenames by querying existing files and assigning sequential counters for duplicates of the same date/slug. |
-| R-11-16 | The system must perform deduplication by computing a partial content hash and comparing it against all known files (including previously deleted/trashed files). |
+| R-11-16 | The system must perform deduplication by computing a partial content hash and comparing it against all known files. Files in the trash are treated identically to permanently deleted files for deduplication purposes; the system must silently skip them without notifying the user. |
 | R-11-17 | If a file is not a duplicate, the system must copy it to the target directory while simultaneously computing its full content hash. |
-| R-11-18 | A full-screen progress overlay must be displayed, showing overall progress, current file, and providing an option to abort. |
+| R-11-18 | A progress view must be displayed inside the Multipurpose Context-Aware Panel, showing overall progress, current file, and providing an option to abort. Full-screen overlays must not be used. |
 | R-11-19 | If the user aborts during execution, the current file must finish copying, but no further files are processed. Completed imports must remain valid. |
 
 ### 2.5 Metadata Preservation & Tagging
@@ -90,6 +90,4 @@ Provide a robust, idempotent mechanism to import new media files from external s
 - **When** the user aborts after 10 files
 - **Then** the current file completes, files 1-10 are fully registered and tagged, and files 11-100 are untouched.
 
-## Open questions
 
-- Import deduplication skips files that exist in the trash. Should the system notify the user that skipped duplicates were found in the trash so they know they can restore them?

@@ -27,14 +27,15 @@ Media files in the library carry a date prefix that determines their chronologic
   - Tab accepts the current suggestion and appends a trailing space.
   - After a space has been typed (argument phase), Tab must be a no-op.
 - **FR-4**: The command must operate on all currently selected files. If no files are selected, it must operate on the file under the cursor.
-- **FR-5**: Date prefix replacement must respect the file's naming format:
-  - **Day format** filenames (those containing a full year-month-day prefix): the entire date prefix is replaced with the new year, month, and day.
-  - **Slug format** filenames (those containing only a year-month prefix followed by a topic slug): only the year and month portions are replaced; the day component of the argument is not applied to the filename.
-- **FR-6**: When a date change causes a file's year to differ from its current folder, the file must be moved to the correct year folder. The year folder must be created automatically if it does not already exist.
+- **FR-5**: Date prefix replacement requires the full `yyyy-mm-dd` format from the user (as it must be reflected in the internal `mex_date` field). For filesystem renaming, it applies as follows:
+  - **Day format** filenames: the entire date prefix is replaced with the new year, month, and day.
+  - **Slug format** filenames: only the year and month portions are replaced in the filename; the day component is stored in the database but omitted from the filename.
+- **FR-6**: When a date change causes a file's year to differ from its current folder, the file must be moved to the correct year folder. The year folder must be created automatically if it does not already exist. If moving or renaming causes a collision in the destination folder, an auto-incrementing collision suffix must be appended.
 - **FR-7**: The file's operating-system modification timestamp must be updated to reflect the new date while preserving the original time-of-day component (hours, minutes, seconds). The time-of-day is determined by, in order of priority:
   1. The file's current modification timestamp on disk.
   2. The previously stored date-time value in the application's data store.
   3. Midnight (00:00:00) as a last resort.
+- **FR-8**: If the underlying filesystem rejects the modification timestamp update, the operation must fail entirely to prevent an inconsistent state between the filename and the filesystem metadata.
 - **FR-8**: All derived data stored by the application (date fields, file path references) must be updated to reflect the new filename, location, and date.
 - **FR-9**: After the operation completes, the file list must reload and any active filter must be re-applied.
 - **FR-10**: The date argument must be validated before execution:
@@ -85,8 +86,4 @@ Media files in the library carry a date prefix that determines their chronologic
 |--------|-----------|
 | UC-07  | mex/spec/UC-07-fix-date.md |
 
-## Open questions
 
-- If the target date causes a filename collision with an existing file in the destination folder, should the operation fail for that file, auto-increment a collision suffix, or prompt the user?
-- Should the command support partial date arguments (e.g., only year-month) for slug-format files, or is the full `yyyy-mm-dd` always required even when the day is not applied?
-- Should the system gracefully ignore filesystem errors when attempting to preserve the original time-of-day (similar to Smart Import's fallback), or should the operation fail entirely?

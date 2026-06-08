@@ -21,8 +21,8 @@ Users need a way to materialize their current working set — whether an explici
 
 - **FR-1**: The application must provide a command that accepts a single argument — the view name — and materializes the current working set as a named directory of file links.
 - **FR-2**: The target files for the view must be determined as follows: the explicit selection if non-empty, otherwise the entire currently filtered list.
-- **FR-3**: The view directory must be created at `<views_root>/<name>/`, where `views_root` is a user-configured directory path.
-- **FR-4**: If the view directory already exists, it must be deleted and recreated fresh — the command is fully idempotent.
+- **FR-3**: The view directory must be created at `<views_root>/<name>/`, where `views_root` is a user-configured directory path. The view `<name>` is constrained to a maximum of 42 characters.
+- **FR-4**: If the view directory already exists, the application must prompt the user for confirmation before deleting and recreating it.
 - **FR-5**: Each target file must be linked into the view directory using its original basename. The view directory must have a flat layout with no subdirectories.
 - **FR-6**: File linking must not duplicate file data on disk. The operation must complete in constant time regardless of individual file sizes.
 - **FR-7**: When the command is typed but the name argument has not yet been entered, the command input area must display a dim placeholder (e.g., `<name>`) to indicate that a name is expected.
@@ -44,7 +44,7 @@ Users need a way to materialize their current working set — whether an explici
 
 - **AC-09-01**: Given a non-empty selection and a valid view name, when the user executes the create-view command, then a directory at `<views_root>/<name>/` is created containing one linked file per selected item, and a status message reports the count and path.
 - **AC-09-02**: Given no explicit selection and a non-empty filtered list, when the user executes the create-view command with a valid name, then the entire filtered list is used as the source and all items are linked into the view directory.
-- **AC-09-03**: Given a view directory that already exists with the same name, when the user executes the create-view command, then the old directory is fully removed and a fresh view is created from the current working set.
+- **AC-09-03**: Given a view directory that already exists with the same name, when the user executes the create-view command, then a prompt requests confirmation, and upon confirmation, the old directory is fully removed and a fresh view is created.
 - **AC-09-04**: Given the create-view command has been typed but no name argument entered yet, when the user looks at the command input area, then a dim placeholder indicating the expected argument is visible.
 - **AC-09-05**: Given the user executes the create-view command without providing a name, when the command is submitted, then an error message is displayed and no directory is created or modified.
 - **AC-09-06**: Given the filtered list is empty and no selection exists, when the user executes the create-view command with a valid name, then an error message is displayed and no directory is created.
@@ -69,9 +69,8 @@ Users need a way to materialize their current working set — whether an explici
 |--------|-----------|
 | UC-06  | mex/spec/UC-06-create-view.md |
 
-## Open questions
 
-- Should there be a maximum allowed length or character restrictions for view names beyond what the filesystem permits?
-- Should the application warn or prompt the user before deleting an existing view directory, or is silent replacement always acceptable?
-- Should the status message differentiate between "created new view" and "replaced existing view"?
+
 - How should views handle trashed files? Since views use hard links, trashing a file (moving to a trash directory) will not break the view's link. Is this intended?
+
+answer> yes, trashing does not really delete the file on filesystem, so we are fine. Emptying the trash is also ok, the the view still hold the deleted file. only if the view is gone, the file will be gone too. That is ok.

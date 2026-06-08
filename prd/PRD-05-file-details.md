@@ -22,8 +22,10 @@ When browsing a large media collection, the file list alone shows only the filen
 
 | ID | Requirement |
 |----|-------------|
-| R-05-01 | The user must be able to toggle the details panel open and closed using `Enter` or `Space`. |
-| R-05-02 | When open, the details panel must appear as a right-side pane alongside the file list. |
+| R-05-01 | The user must be able to toggle the details panel open and closed using the `Enter` key. (`Space` is reserved for selection). |
+| R-05-02 | When open, the details panel must appear as a right-side pane alongside the file list. The panel must always start closed when the application launches. |
+| R-05-02b | If a background task is actively running, pressing `Enter` must be a no-op, as the right pane is occupied by the task. |
+| R-05-02c | The application must refuse to open the details panel if the total terminal width is less than 100 columns, to avoid an unusably narrow file list. |
 | R-05-03 | When closed, the full width must be returned to the file list. |
 
 ### Functional requirements — Metadata header
@@ -58,7 +60,7 @@ When browsing a large media collection, the file list alone shows only the filen
 
 | ID | Requirement |
 |----|-------------|
-| R-05-17 | Below the metadata header, the remaining height of the details pane must be used to display an inline image preview of the selected file, if the terminal supports inline graphics. |
+| R-05-17 | Below the metadata header, the remaining height of the details pane must be used to display an inline image preview of the selected file. If the terminal does not support inline graphics, the preview must degrade gracefully and show a placeholder message. |
 | R-05-18 | The image preview must scale to fit the available pane area without cropping. |
 
 ### Functional requirements — List title
@@ -78,13 +80,13 @@ When browsing a large media collection, the file list alone shows only the filen
 ## Acceptance criteria
 
 ### AC-05-01: Toggle details panel open
-- **Given** the details panel is closed
-- **When** the user presses `Enter` or `Space`
+- **Given** the details panel is closed and no background task is running
+- **When** the user presses `Enter`
 - **Then** a right-side details pane opens showing the metadata header and image preview for the selected file
 
 ### AC-05-02: Toggle details panel closed
 - **Given** the details panel is open
-- **When** the user presses `Enter` or `Space` again
+- **When** the user presses `Enter` again
 - **Then** the details pane closes and the file list reclaims the full width
 
 ### AC-05-03: Metadata header layout
@@ -153,9 +155,3 @@ When browsing a large media collection, the file list alone shows only the filen
 | Source | Reference |
 |--------|-----------|
 | UC-03  | mex/spec/UC-03-file-details.md |
-
-## Open questions
-
-- Should the details panel remember its open/closed state across sessions, or always start closed?
-- What is the minimum terminal width at which the details panel should refuse to open (to avoid an unusably narrow file list)?
-- Should the image preview degrade gracefully (e.g., show a placeholder message) when the terminal does not support inline graphics?

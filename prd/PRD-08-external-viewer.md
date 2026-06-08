@@ -19,7 +19,7 @@ Users need to open media files in their preferred external application (image vi
 
 ### Functional requirements
 
-- **FR-1**: The application must provide a key binding that opens the file under the cursor in the operating system's default application for that file type.
+- **FR-1**: The application must provide a single key binding that opens the file under the cursor in the appropriate application based on its file extension (e.g., dedicated integrated viewers like `mpv` for video or `sem` for images, falling back to the OS default application for other types).
 - **FR-2**: The external application must run in a separate process. The application must remain fully interactive — navigation, filtering, and all other functions must continue to work while the viewer is open.
 - **FR-3**: When multiple files are selected, the launch action must always open the single file under the cursor, ignoring the multi-selection.
 - **FR-4**: If the file does not exist on disk, the application must display a status error message instead of attempting to launch.
@@ -44,6 +44,4 @@ Users need to open media files in their preferred external application (image vi
 |--------|-----------|
 | UC-12  | mex/spec/UC-12-open-external-viewer.md |
 
-## Open questions
 
-- How does the generic external viewer action interact or coexist with the dedicated video (mpv) and image (sem) viewer integrations? Do they have separate keybindings, or do they override the external viewer for specific formats?

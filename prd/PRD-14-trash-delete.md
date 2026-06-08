@@ -16,7 +16,7 @@ Provide a safe, two-step deletion process to remove unwanted media. Files are fi
 | ID | Requirement |
 |----|-------------|
 | R-14-01 | The system must allow the user to mark a file as trashed using a dedicated keybinding. |
-| R-14-02 | Trashing a file must operate strictly on the cursor item, ignoring any active multi-selection. |
+| R-14-02 | Trashing a file must operate strictly on the cursor item, deliberately ignoring any active multi-selection to protect the user from accidental bulk trashing. |
 | R-14-03 | Trashing must be a logical operation (updating status) without moving or deleting the physical file on disk. |
 | R-14-04 | The system must automatically assign a dedicated system tag to trashed files to allow easy filtering. |
 | R-14-05 | Trashed files must remain visible in the file list but must be styled distinctly (e.g., dimmed, with an icon) and cannot be selected for bulk operations. |
@@ -33,7 +33,7 @@ Provide a safe, two-step deletion process to remove unwanted media. Files are fi
 | ID | Requirement |
 |----|-------------|
 | R-14-08 | The system must provide a command to permanently delete trashed files. |
-| R-14-09 | Before permanent deletion, the system must display a full-screen preview listing the files to be destroyed and require explicit user confirmation. |
+| R-14-09 | Before permanent deletion, the system must list the files to be destroyed and require explicit user confirmation within the Multipurpose Context-Aware Panel. Full-screen overlays must not be used. |
 | R-14-10 | Permanent deletion must process files in guarded batches (e.g., maximum 100 files per invocation) to prevent accidental mass data loss. |
 | R-14-11 | Upon confirmation, files must be permanently deleted from the filesystem. |
 | R-14-12 | The system must retain a permanent record of the deleted file's content hash to prevent the file from being re-imported in the future (deduplication guard). |
@@ -66,6 +66,4 @@ Provide a safe, two-step deletion process to remove unwanted media. Files are fi
 - **When** the user attempts to re-import the exact same file
 - **Then** the import process recognizes it as a duplicate (via retained hash) and skips importing it.
 
-## Open questions
 
-- Contradiction with PRD-06 bulk dispatch model: Why does soft-delete operate strictly on the cursor item and ignore multi-selection, when other bulk operations (tagging, slugify) respect it? Should soft-delete support bulk selection?
