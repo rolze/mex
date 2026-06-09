@@ -102,7 +102,7 @@ impl Filter {
         let re = self.text_regex.as_ref()?;
         let caps = re.captures(filename)?;
         let full_match = caps.get(0)?.range();
-        
+
         let mut literals = Vec::new();
         for i in 1..caps.len() {
             if let Some(m) = caps.get(i) {

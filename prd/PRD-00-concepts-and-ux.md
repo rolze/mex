@@ -36,7 +36,7 @@ Users need a consistent, responsive, and predictable terminal-based interface to
 
 - **FR-10**: The system must proactively sanitize user input in real-time using a strict allow-list and auto-conversion approach. Invalid keystrokes must be rejected with a brief status hint as they are typed.
 - **FR-11**: **Metadata Tokens**: When typing tags, types, or slugs, the system allows alphanumerics (`a-z`, `0-9`), hyphens (`-`), underscores (`_`), and single spaces (` `). Spaces are forbidden in slugs (auto-converted to hyphens).
-- **FR-12**: **Plain Text Filters**: When typing a plain text filter (which matches filenames), the system allows `a-z`, `0-9`, `-`, `.` (for extensions), and `*` (for wildcard matching).
+- **FR-12**: **Plain Text Filters**: When typing a plain text filter (which matches filenames), the system allows `a-z`, `0-9`, `-`, `.` (for extensions), and `*` (for wildcard matching). A single `*` acts as a normal wildcard (matching the next sequence as early as possible). A double `**` acts as a greedy wildcard (matching the next sequence as late as possible). A maximum of two consecutive wildcards is allowed; attempting to type `***` must be rejected with a status hint.
 - **FR-13**: **Auto-Conversion**: Across all inputs, the system must automatically:
   - Downcase uppercase letters.
   - Convert spaces (` `) and underscores (`_`) into hyphens (`-`) for text filters and slugs.

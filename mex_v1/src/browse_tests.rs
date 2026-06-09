@@ -181,6 +181,31 @@ mod tests {
     }
 
     #[test]
+    fn greedy_wildcard_filter_matches() {
+        let mut app = test_app(&seed_items());
+        app.handle_key(key(KeyCode::Char('/')));
+        // We will directly inject the text to avoid the keystroke-by-keystroke complexity if it's fine,
+        // but let's use keystrokes.
+        for c in "20**j".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        // This will find "20", then use a greedy wildcard to find the LAST "j" in the filename.
+        // As long as the filename contains "20" and then a "j", it matches.
+        // It should match the 3 jpgs from 2024.
+        assert_eq!(app.filtered_items.len(), 3);
+    }
+
+    #[test]
+    fn greedy_wildcard_bug_reproduction() {
+        let mut app = test_app(&[("1", "2005-07-lni-meeting-0007", ".jpg", "")]);
+        app.handle_key(key(KeyCode::Char('/')));
+        for c in "2005**07".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        assert_eq!(app.filtered_items.len(), 1);
+    }
+
+    #[test]
     fn filter_resets_cursor_to_zero() {
         let mut app = test_app(&seed_items());
         app.cursor_pos = 4;

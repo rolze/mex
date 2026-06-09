@@ -48,8 +48,14 @@ pub fn sanitize_char(ctx: InputContext, text_so_far: &str, c: char) -> InputActi
             }
         }
         InputContext::FilterText => {
-            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '*' {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' {
                 InputAction::Append(c.to_string())
+            } else if c == '*' {
+                if text_so_far.ends_with("**") {
+                    InputAction::Reject("Maximum 2 wildcards (**) allowed")
+                } else {
+                    InputAction::Append(c.to_string())
+                }
             } else if c == ' ' || c == '_' {
                 if text_so_far.is_empty() || text_so_far.ends_with('-') {
                     InputAction::Reject("Duplicate or leading separators not allowed")

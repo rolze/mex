@@ -138,7 +138,8 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
                             if match_result.full_match.start > current_idx {
                                 highlighted_spans.push(Span::styled(
-                                    filename[current_idx..match_result.full_match.start].to_string(),
+                                    filename[current_idx..match_result.full_match.start]
+                                        .to_string(),
                                     base_style,
                                 ));
                                 current_idx = match_result.full_match.start;
