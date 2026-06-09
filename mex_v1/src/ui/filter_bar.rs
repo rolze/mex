@@ -106,6 +106,15 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                     spans.push(Span::styled("_", Style::default().fg(app.theme.text)));
                 }
             } else {
+                if app.filter.text().is_empty() {
+                    let prefix = if spans.is_empty() { "/" } else { " AND /" };
+                    spans.push(Span::styled(
+                        prefix,
+                        Style::default()
+                            .fg(app.theme.text)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
                 spans.push(Span::styled("_", Style::default().fg(app.theme.text)));
             }
         }
@@ -184,13 +193,56 @@ fn build_filter_spans<'a>(app: &App) -> Vec<Span<'a>> {
     let mut spans = Vec::new();
     let mut needs_and = false;
 
-    if !app.filter.text.is_empty() {
+    if !app.filter.text().is_empty() {
         spans.push(Span::styled(
-            format!("/{}", app.filter.text),
+            "/",
             Style::default()
                 .fg(app.theme.text)
                 .add_modifier(Modifier::BOLD),
         ));
+
+        let text = app.filter.text();
+        let mut last_idx = 0;
+        let mut chars = text.char_indices().peekable();
+        while let Some((idx, c)) = chars.next() {
+            if c == '*' {
+                if idx > last_idx {
+                    spans.push(Span::styled(
+                        text[last_idx..idx].to_string(),
+                        Style::default()
+                            .fg(app.theme.text)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                if let Some(&(next_idx, '*')) = chars.peek() {
+                    spans.push(Span::styled(
+                        "**",
+                        Style::default()
+                            .fg(app.theme.tag)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    chars.next();
+                    last_idx = next_idx + 1;
+                } else {
+                    spans.push(Span::styled(
+                        "*",
+                        Style::default()
+                            .fg(app.theme.tag)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                    last_idx = idx + 1;
+                }
+            }
+        }
+        if last_idx < text.len() {
+            spans.push(Span::styled(
+                text[last_idx..].to_string(),
+                Style::default()
+                    .fg(app.theme.text)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+
         needs_and = true;
     }
 

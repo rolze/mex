@@ -581,10 +581,23 @@ impl App {
                         InputAction::Reject(hint) => self.status_message = Some(hint.to_string()),
                     }
                 } else {
-                    match sanitize_char(InputContext::FilterText, &self.filter.text, c) {
+                    match sanitize_char(InputContext::FilterText, self.filter.text(), c) {
                         InputAction::Append(s) => {
-                            self.filter.text.push_str(&s);
+                            self.filter.push_text_str(&s);
                             self.apply_filter();
+                            if self.filter.text().ends_with("**") {
+                                self.status_message = Some(
+                                    "Search mode: Greedy Wildcard (matches last occurrence)"
+                                        .to_string(),
+                                );
+                            } else if self.filter.text().ends_with("*") {
+                                self.status_message = Some(
+                                    "Search mode: Normal Wildcard (matches first occurrence)"
+                                        .to_string(),
+                                );
+                            } else {
+                                self.status_message = None;
+                            }
                         }
                         InputAction::Reject(hint) => self.status_message = Some(hint.to_string()),
                     }
@@ -607,9 +620,20 @@ impl App {
                         self.completion_idx = 0;
                     }
                     self.update_completions();
-                } else if !self.filter.text.is_empty() {
-                    self.filter.text.pop();
+                } else if !self.filter.text().is_empty() {
+                    self.filter.pop_text();
                     self.apply_filter();
+                    if self.filter.text().ends_with("**") {
+                        self.status_message = Some(
+                            "Search mode: Greedy Wildcard (matches last occurrence)".to_string(),
+                        );
+                    } else if self.filter.text().ends_with("*") {
+                        self.status_message = Some(
+                            "Search mode: Normal Wildcard (matches first occurrence)".to_string(),
+                        );
+                    } else {
+                        self.status_message = None; // clear hint if no wildcard
+                    }
                 } else if !self.filter.tags.is_empty() {
                     self.filter.tags.pop();
                     self.apply_filter();
@@ -708,9 +732,6 @@ impl App {
     }
 
     pub fn apply_filter(&mut self) {
-        let text = self.filter.text.to_lowercase();
-        let parts: Vec<&str> = text.split('*').collect();
-
         let active_tags: Vec<String> = self.filter.tags.iter().map(|s| s.to_lowercase()).collect();
         let active_types: Vec<String> =
             self.filter.types.iter().map(|s| s.to_lowercase()).collect();
@@ -721,22 +742,8 @@ impl App {
             .enumerate()
             .filter_map(|(i, item)| {
                 // Check text matches
-                let mut matches_text = true;
-                if !text.is_empty() {
-                    let fname = item.file_name().unwrap_or_default().to_lowercase();
-                    let mut current_idx = 0;
-                    for part in &parts {
-                        if part.is_empty() {
-                            continue;
-                        }
-                        if let Some(pos) = fname[current_idx..].find(part) {
-                            current_idx += pos + part.len();
-                        } else {
-                            matches_text = false;
-                            break;
-                        }
-                    }
-                }
+                let fname = item.file_name().unwrap_or_default();
+                let matches_text = self.filter.match_text(&fname).is_some();
 
                 // Check tag match (OR logic internally, AND with text)
                 let matches_tags = active_tags.is_empty()

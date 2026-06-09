@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables, mismatched_lifetime_syntaxes)]
 use regex::Regex;
 use std::sync::OnceLock;
 

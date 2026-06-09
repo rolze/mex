@@ -116,7 +116,7 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
                     let mut spans = vec![Span::styled(prefix_padded, base_style)];
 
-                    let text_filter = app.filter.text.to_lowercase();
+                    let text_filter = app.filter.text().to_lowercase();
                     let mut highlighted_spans = Vec::new();
                     if text_filter.is_empty() {
                         if !is_selected_for_batch {
@@ -133,36 +133,48 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                             highlighted_spans.push(Span::styled(filename.clone(), base_style));
                         }
                     } else {
-                        let parts: Vec<&str> =
-                            text_filter.split('*').filter(|s| !s.is_empty()).collect();
-                        let mut current_idx = 0;
-                        let fname_lower = filename.to_lowercase();
+                        if let Some(match_result) = app.filter.match_text(&filename) {
+                            let mut current_idx = 0;
 
-                        for part in parts {
-                            if let Some(pos) = fname_lower[current_idx..].find(part) {
-                                let match_start = current_idx + pos;
-                                let match_end = match_start + part.len();
+                            if match_result.full_match.start > current_idx {
+                                highlighted_spans.push(Span::styled(
+                                    filename[current_idx..match_result.full_match.start].to_string(),
+                                    base_style,
+                                ));
+                                current_idx = match_result.full_match.start;
+                            }
 
-                                if match_start > current_idx {
+                            for lit in match_result.literals {
+                                if lit.start > current_idx {
                                     highlighted_spans.push(Span::styled(
-                                        filename[current_idx..match_start].to_string(),
-                                        base_style,
+                                        filename[current_idx..lit.start].to_string(),
+                                        base_style.add_modifier(ratatui::style::Modifier::DIM),
                                     ));
                                 }
 
                                 highlighted_spans.push(Span::styled(
-                                    filename[match_start..match_end].to_string(),
+                                    filename[lit.start..lit.end].to_string(),
                                     base_style.bg(app.theme.filter_match_bg),
                                 ));
-
-                                current_idx = match_end;
+                                current_idx = lit.end;
                             }
-                        }
-                        if current_idx < filename.len() {
-                            highlighted_spans.push(Span::styled(
-                                filename[current_idx..].to_string(),
-                                base_style,
-                            ));
+
+                            if match_result.full_match.end > current_idx {
+                                highlighted_spans.push(Span::styled(
+                                    filename[current_idx..match_result.full_match.end].to_string(),
+                                    base_style.add_modifier(ratatui::style::Modifier::DIM),
+                                ));
+                                current_idx = match_result.full_match.end;
+                            }
+
+                            if current_idx < filename.len() {
+                                highlighted_spans.push(Span::styled(
+                                    filename[current_idx..].to_string(),
+                                    base_style,
+                                ));
+                            }
+                        } else {
+                            highlighted_spans.push(Span::styled(filename.clone(), base_style));
                         }
                     }
 
