@@ -63,7 +63,6 @@ impl MediaItem {
         })
     }
 
-
     pub fn year_str(&self) -> Option<&str> {
         let stem = self.path_stem.as_ref()?;
         stem.split('-').next()

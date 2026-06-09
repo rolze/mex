@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::db;
 use crate::domain::filter::Filter;
+use crate::domain::input::{sanitize_char, InputAction, InputContext};
 use crate::domain::media::MediaItem;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -411,6 +412,20 @@ impl App {
             KeyCode::Char('/') => {
                 self.mode = Mode::Filter;
             }
+            KeyCode::Char('#') => {
+                self.mode = Mode::Filter;
+                self.tag_input = Some(String::new());
+                self.type_input = None;
+                self.completion_idx = 0;
+                self.update_completions();
+            }
+            KeyCode::Char('@') => {
+                self.mode = Mode::Filter;
+                self.type_input = Some(String::new());
+                self.tag_input = None;
+                self.completion_idx = 0;
+                self.update_completions();
+            }
 
             KeyCode::Char('1') => {
                 self.view = View::All;
@@ -548,16 +563,31 @@ impl App {
             }
             KeyCode::Char(c) => {
                 if let Some(t) = &mut self.tag_input {
-                    t.push(c);
-                    self.completion_idx = 0;
-                    self.update_completions();
+                    match sanitize_char(InputContext::FilterTag, t, c) {
+                        InputAction::Append(s) => {
+                            t.push_str(&s);
+                            self.completion_idx = 0;
+                            self.update_completions();
+                        }
+                        InputAction::Reject(hint) => self.status_message = Some(hint.to_string()),
+                    }
                 } else if let Some(t) = &mut self.type_input {
-                    t.push(c);
-                    self.completion_idx = 0;
-                    self.update_completions();
+                    match sanitize_char(InputContext::FilterType, t, c) {
+                        InputAction::Append(s) => {
+                            t.push_str(&s);
+                            self.completion_idx = 0;
+                            self.update_completions();
+                        }
+                        InputAction::Reject(hint) => self.status_message = Some(hint.to_string()),
+                    }
                 } else {
-                    self.filter.text.push(c);
-                    self.apply_filter();
+                    match sanitize_char(InputContext::FilterText, &self.filter.text, c) {
+                        InputAction::Append(s) => {
+                            self.filter.text.push_str(&s);
+                            self.apply_filter();
+                        }
+                        InputAction::Reject(hint) => self.status_message = Some(hint.to_string()),
+                    }
                 }
             }
             KeyCode::Backspace => {

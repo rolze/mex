@@ -1,10 +1,10 @@
-## UC-05 · Tag and tag-type filtering with # and @ prefixes in filter bar
+## UC-05 · Tag and tag-type filtering with # and @ prefixes in filter bar (or normal mode)
 
 **Actor:** User  
 **Goal:** Filter by tag name (`#`) and/or tag type (`@`)
 
 **Main Flow — tag filter (`#`):**
-1. User can filter by tags if he starts with hashtag #
+1. User can filter by tags if he starts with hashtag # (either while in the filter bar, or by typing `#` directly from normal mode to jump into filter mode)
 2. Tool responds with auto suggestions of available tags (inline dim text after current input)
 3. User can cycle through suggestions with Up/Down
 4. Tab completes the current suggestion into the input
@@ -16,7 +16,7 @@
 10. Esc resets the entire filter (all text, all confirmed tags/types, tag-typing mode)
 
 **Main Flow — tag-type filter (`@`):**
-1. User types `@` to enter tag-type-typing mode (mirrors `#` flow)
+1. User types `@` to enter tag-type-typing mode (mirrors `#` flow; can also be triggered directly from normal mode)
 2. Tool responds with auto suggestions of available tag types (inline dim text)
 3. User can cycle through suggestions with Up/Down; Tab to complete; Enter to confirm
 4. User can add multiple types, get ORed

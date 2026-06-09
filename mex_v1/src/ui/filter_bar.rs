@@ -38,14 +38,32 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                         .fg(app.theme.tag)
                         .add_modifier(Modifier::BOLD),
                 ));
-                spans.push(Span::styled("_", Style::default().fg(app.theme.text)));
+
+                let mut has_completion = false;
                 if let Some(comp) = app.get_current_completion() {
                     if comp.len() > tag.len() {
-                        spans.push(Span::styled(
-                            comp[tag.len()..].to_string(),
-                            Style::default().add_modifier(Modifier::DIM),
-                        ));
+                        has_completion = true;
+                        let suffix = &comp[tag.len()..];
+                        let mut chars = suffix.chars();
+                        if let Some(first) = chars.next() {
+                            spans.push(Span::styled(
+                                first.to_string(),
+                                Style::default()
+                                    .add_modifier(Modifier::DIM)
+                                    .add_modifier(Modifier::UNDERLINED),
+                            ));
+                            let rest: String = chars.collect();
+                            if !rest.is_empty() {
+                                spans.push(Span::styled(
+                                    rest,
+                                    Style::default().add_modifier(Modifier::DIM),
+                                ));
+                            }
+                        }
                     }
+                }
+                if !has_completion {
+                    spans.push(Span::styled("_", Style::default().fg(app.theme.text)));
                 }
             } else if let Some(typ) = &app.type_input {
                 if !spans.is_empty() {
@@ -60,14 +78,32 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                         .fg(app.theme.type_fg)
                         .add_modifier(Modifier::BOLD),
                 ));
-                spans.push(Span::styled("_", Style::default().fg(app.theme.text)));
+
+                let mut has_completion = false;
                 if let Some(comp) = app.get_current_completion() {
                     if comp.len() > typ.len() {
-                        spans.push(Span::styled(
-                            comp[typ.len()..].to_string(),
-                            Style::default().add_modifier(Modifier::DIM),
-                        ));
+                        has_completion = true;
+                        let suffix = &comp[typ.len()..];
+                        let mut chars = suffix.chars();
+                        if let Some(first) = chars.next() {
+                            spans.push(Span::styled(
+                                first.to_string(),
+                                Style::default()
+                                    .add_modifier(Modifier::DIM)
+                                    .add_modifier(Modifier::UNDERLINED),
+                            ));
+                            let rest: String = chars.collect();
+                            if !rest.is_empty() {
+                                spans.push(Span::styled(
+                                    rest,
+                                    Style::default().add_modifier(Modifier::DIM),
+                                ));
+                            }
+                        }
                     }
+                }
+                if !has_completion {
+                    spans.push(Span::styled("_", Style::default().fg(app.theme.text)));
                 }
             } else {
                 spans.push(Span::styled("_", Style::default().fg(app.theme.text)));

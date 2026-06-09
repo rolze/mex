@@ -820,4 +820,22 @@ mod tests {
         assert_eq!(app.type_input, None);
         assert_eq!(app.filtered_items.len(), 4);
     }
+
+    #[test]
+    fn hash_enters_tag_mode_from_normal() {
+        let mut app = test_app(&seed_items());
+        app.handle_key(key(KeyCode::Char('#')));
+        assert!(matches!(app.mode, Mode::Filter));
+        assert_eq!(app.tag_input, Some(String::new()));
+        assert_eq!(app.type_input, None);
+    }
+
+    #[test]
+    fn at_enters_type_mode_from_normal() {
+        let mut app = test_app(&seed_items());
+        app.handle_key(key(KeyCode::Char('@')));
+        assert!(matches!(app.mode, Mode::Filter));
+        assert_eq!(app.type_input, Some(String::new()));
+        assert_eq!(app.tag_input, None);
+    }
 }

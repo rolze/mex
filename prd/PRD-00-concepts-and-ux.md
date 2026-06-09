@@ -32,6 +32,19 @@ Users need a consistent, responsive, and predictable terminal-based interface to
 - **FR-8**: The currently focused pane must be visually distinct, primarily indicated by a change in its border color.
 - **FR-9**: The UI provides explicit context and discoverability via inline auto-suggestions, tab-completion (when in input modes), and dedicated status reporting areas.
 
+### User Input Sanitization Policy
+
+- **FR-10**: The system must proactively sanitize user input in real-time using a strict allow-list and auto-conversion approach. Invalid keystrokes must be rejected with a brief status hint as they are typed.
+- **FR-11**: **Metadata Tokens**: When typing tags, types, or slugs, the system allows alphanumerics (`a-z`, `0-9`), hyphens (`-`), underscores (`_`), and single spaces (` `). Spaces are forbidden in slugs (auto-converted to hyphens).
+- **FR-12**: **Plain Text Filters**: When typing a plain text filter (which matches filenames), the system allows `a-z`, `0-9`, `-`, `.` (for extensions), and `*` (for wildcard matching).
+- **FR-13**: **Auto-Conversion**: Across all inputs, the system must automatically:
+  - Downcase uppercase letters.
+  - Convert spaces (` `) and underscores (`_`) into hyphens (`-`) for text filters and slugs.
+  - Transliterate diacritics/umlauts (e.g., `ä` -> `ae`, `ß` -> `ss`).
+- **FR-14**: **Control Prefixes**: Prefixes such as `#` (tags), `@` (types), and `:` (commands) are only valid as mode triggers. They are rejected if typed mid-string or duplicated.
+- **FR-15**: **Separators**: Consecutive separators (e.g., `--` or `  `) and leading/trailing separators must be proactively rejected.
+- **FR-16**: **Forbidden Characters**: Any character not explicitly allowed (e.g., `/`, `\`, `!`, `?`, `<`, `>`, `"`, `'`, `%`, `&`, `|`, `(`, `)`) must be rejected with a status hint.
+
 ### Non-functional requirements
 
 - **NFR-1**: All user interface navigation and filtering interactions must be perceptually instant and non-blocking.

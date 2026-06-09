@@ -21,7 +21,7 @@ Users organise their media with tags (e.g. "travel", "alice") and tag types (e.g
 
 ### Functional requirements — Tag filter mode
 
-- **FR-1**: The user must be able to enter tag filter mode by typing the `#` prefix character while in the filter bar.
+- **FR-1**: The user must be able to enter tag filter mode by typing the `#` prefix character while in the filter bar, or directly from normal mode (which enters filter mode and tag typing simultaneously).
 - **FR-2**: While in tag filter mode, the system must display inline autocompletion suggestions drawn from the set of existing tags in the collection.
 - **FR-3**: The user must be able to cycle through autocompletion suggestions using Up/Down navigation.
 - **FR-4**: The user must be able to accept the current autocompletion suggestion into the input using Tab.
@@ -31,7 +31,7 @@ Users organise their media with tags (e.g. "travel", "alice") and tag types (e.g
 
 ### Functional requirements — Tag-type filter mode
 
-- **FR-8**: The user must be able to enter tag-type filter mode by typing the `@` prefix character while in the filter bar. The interaction mirrors tag filter mode (autocompletion, cycling, Tab-complete, Enter-confirm).
+- **FR-8**: The user must be able to enter tag-type filter mode by typing the `@` prefix character while in the filter bar, or directly from normal mode. The interaction mirrors tag filter mode (autocompletion, cycling, Tab-complete, Enter-confirm).
 - **FR-9**: While in tag-type filter mode, the system must display inline autocompletion suggestions drawn from the set of existing tag types in the collection.
 - **FR-10**: Confirming a type that is already active (case-insensitive match) must be a no-op.
 - **FR-11**: Multiple confirmed types must be combined using OR logic: a file matches if it carries a tag belonging to *any* of the confirmed types.
