@@ -26,22 +26,34 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
 
             // Add typing state
             if let Some(tag) = &app.tag_input {
-                spans.push(Span::styled(
-                    " AND ",
-                    Style::default().add_modifier(Modifier::DIM),
-                ));
+                if !spans.is_empty() {
+                    spans.push(Span::styled(
+                        " AND ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ));
+                }
                 spans.push(Span::styled(
                     format!("#{}", tag),
                     Style::default()
-                        .fg(app.theme.slug)
+                        .fg(app.theme.tag)
                         .add_modifier(Modifier::BOLD),
                 ));
                 spans.push(Span::styled("_", Style::default().fg(app.theme.text)));
+                if let Some(comp) = app.get_current_completion() {
+                    if comp.len() > tag.len() {
+                        spans.push(Span::styled(
+                            comp[tag.len()..].to_string(),
+                            Style::default().add_modifier(Modifier::DIM),
+                        ));
+                    }
+                }
             } else if let Some(typ) = &app.type_input {
-                spans.push(Span::styled(
-                    " AND ",
-                    Style::default().add_modifier(Modifier::DIM),
-                ));
+                if !spans.is_empty() {
+                    spans.push(Span::styled(
+                        " AND ",
+                        Style::default().add_modifier(Modifier::DIM),
+                    ));
+                }
                 spans.push(Span::styled(
                     format!("@{}", typ),
                     Style::default()
@@ -49,6 +61,14 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                         .add_modifier(Modifier::BOLD),
                 ));
                 spans.push(Span::styled("_", Style::default().fg(app.theme.text)));
+                if let Some(comp) = app.get_current_completion() {
+                    if comp.len() > typ.len() {
+                        spans.push(Span::styled(
+                            comp[typ.len()..].to_string(),
+                            Style::default().add_modifier(Modifier::DIM),
+                        ));
+                    }
+                }
             } else {
                 spans.push(Span::styled("_", Style::default().fg(app.theme.text)));
             }
@@ -197,7 +217,7 @@ fn build_filter_spans<'a>(app: &App) -> Vec<Span<'a>> {
             spans.push(Span::styled(
                 format!("#{}", tag),
                 Style::default()
-                    .fg(app.theme.slug)
+                    .fg(app.theme.tag)
                     .add_modifier(Modifier::BOLD),
             ));
         }

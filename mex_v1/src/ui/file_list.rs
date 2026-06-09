@@ -28,17 +28,28 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
     for i in start..end {
         let row = &app.visible_rows[i];
         match row {
-            crate::app::ListRow::GroupSummary { key, start_idx, end_idx, level } => {
+            crate::app::ListRow::GroupSummary {
+                key,
+                start_idx,
+                end_idx,
+                level,
+            } => {
                 let is_cursor = i == app.cursor_pos;
                 let mut base_style = match level {
-                    crate::app::ZoomLevel::Year => Style::default().fg(ratatui::style::Color::Yellow).add_modifier(Modifier::BOLD),
-                    crate::app::ZoomLevel::Month => Style::default().fg(ratatui::style::Color::Cyan),
+                    crate::app::ZoomLevel::Year => Style::default()
+                        .fg(ratatui::style::Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                    crate::app::ZoomLevel::Month => {
+                        Style::default().fg(ratatui::style::Color::Cyan)
+                    }
                     _ => Style::default().fg(ratatui::style::Color::Gray),
                 };
                 if is_cursor {
-                    base_style = base_style.bg(app.theme.cursor_bg).add_modifier(Modifier::BOLD);
+                    base_style = base_style
+                        .bg(app.theme.cursor_bg)
+                        .add_modifier(Modifier::BOLD);
                 }
-                
+
                 let mut num_images = 0;
                 let mut num_videos = 0;
                 let total_items = *end_idx - *start_idx;
@@ -51,163 +62,166 @@ pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
                         }
                     }
                 }
-                
-                let text = generate_summary_text(key, num_images, num_videos, total_items, filename_width);
-                
+
+                let text =
+                    generate_summary_text(key, num_images, num_videos, total_items, filename_width);
+
                 let spans = vec![
                     Span::styled(text, base_style),
                     Span::styled(
                         format!(" │ {}", "+".repeat(*level as usize)),
-                        base_style.fg(app.theme.tag).add_modifier(Modifier::DIM)
-                    )
+                        base_style.fg(app.theme.tag).add_modifier(Modifier::DIM),
+                    ),
                 ];
-                
+
                 items.push(ListItem::new(Line::from(spans)).style(base_style));
             }
             crate::app::ListRow::Item(idx) => {
                 let idx = *idx;
                 if let Some(media) = app.items.get(idx) {
-            let is_selected_for_batch = app.selected.contains(&idx);
-            let is_cursor = i == app.cursor_pos;
+                    let is_selected_for_batch = app.selected.contains(&idx);
+                    let is_cursor = i == app.cursor_pos;
 
-            let mut base_style = Style::default();
-            if media.status == Status::Trashed {
-                base_style = base_style.add_modifier(Modifier::DIM);
-            } else if media.missing_on_disk {
-                base_style = base_style.bg(app.theme.missing_bg).fg(app.theme.missing_fg);
-            } else if is_selected_for_batch {
-                base_style = base_style.bg(app.theme.batch_bg);
-            }
-
-            if is_cursor {
-                base_style = base_style
-                    .bg(app.theme.cursor_bg)
-                    .add_modifier(Modifier::BOLD);
-            }
-
-            let marker = if media.missing_on_disk {
-                "!"
-            } else if media.status == Status::Trashed {
-                "🗑"
-            } else if is_selected_for_batch {
-                "•"
-            } else {
-                " "
-            };
-
-            let folder = extract_folder_year(media.path_stem.as_ref());
-
-            let prefix = format!("{}{} / ", folder, marker);
-            let prefix_padded = format!("{:<8}", prefix); // Ensure alignment
-
-            let filename = media.file_name().unwrap_or_else(|| String::from("unknown"));
-
-            let mut spans = vec![Span::styled(prefix_padded, base_style)];
-
-            let text_filter = app.filter.text.to_lowercase();
-            let mut highlighted_spans = Vec::new();
-            if text_filter.is_empty() {
-                if !is_selected_for_batch {
-                    if let Some(stem) = &media.path_stem {
-                        let mut stem_spans =
-                            crate::ui::semantic::colorize_stem(stem, base_style, &app.theme);
-                        stem_spans.push(Span::styled(media.ext.clone(), base_style));
-                        highlighted_spans.extend(stem_spans);
-                    } else {
-                        highlighted_spans.push(Span::styled(filename.clone(), base_style));
+                    let mut base_style = Style::default();
+                    if media.status == Status::Trashed {
+                        base_style = base_style.add_modifier(Modifier::DIM);
+                    } else if media.missing_on_disk {
+                        base_style = base_style.bg(app.theme.missing_bg).fg(app.theme.missing_fg);
+                    } else if is_selected_for_batch {
+                        base_style = base_style.bg(app.theme.batch_bg);
                     }
-                } else {
-                    highlighted_spans.push(Span::styled(filename.clone(), base_style));
-                }
-            } else {
-                let parts: Vec<&str> = text_filter.split('*').filter(|s| !s.is_empty()).collect();
-                let mut current_idx = 0;
-                let fname_lower = filename.to_lowercase();
 
-                for part in parts {
-                    if let Some(pos) = fname_lower[current_idx..].find(part) {
-                        let match_start = current_idx + pos;
-                        let match_end = match_start + part.len();
+                    if is_cursor {
+                        base_style = base_style
+                            .bg(app.theme.cursor_bg)
+                            .add_modifier(Modifier::BOLD);
+                    }
 
-                        if match_start > current_idx {
+                    let marker = if media.missing_on_disk {
+                        "!"
+                    } else if media.status == Status::Trashed {
+                        "🗑"
+                    } else if is_selected_for_batch {
+                        "•"
+                    } else {
+                        " "
+                    };
+
+                    let folder = extract_folder_year(media.path_stem.as_ref());
+
+                    let prefix = format!("{}{} / ", folder, marker);
+                    let prefix_padded = format!("{:<8}", prefix); // Ensure alignment
+
+                    let filename = media.file_name().unwrap_or_else(|| String::from("unknown"));
+
+                    let mut spans = vec![Span::styled(prefix_padded, base_style)];
+
+                    let text_filter = app.filter.text.to_lowercase();
+                    let mut highlighted_spans = Vec::new();
+                    if text_filter.is_empty() {
+                        if !is_selected_for_batch {
+                            if let Some(stem) = &media.path_stem {
+                                let mut stem_spans = crate::ui::semantic::colorize_stem(
+                                    stem, base_style, &app.theme,
+                                );
+                                stem_spans.push(Span::styled(media.ext.clone(), base_style));
+                                highlighted_spans.extend(stem_spans);
+                            } else {
+                                highlighted_spans.push(Span::styled(filename.clone(), base_style));
+                            }
+                        } else {
+                            highlighted_spans.push(Span::styled(filename.clone(), base_style));
+                        }
+                    } else {
+                        let parts: Vec<&str> =
+                            text_filter.split('*').filter(|s| !s.is_empty()).collect();
+                        let mut current_idx = 0;
+                        let fname_lower = filename.to_lowercase();
+
+                        for part in parts {
+                            if let Some(pos) = fname_lower[current_idx..].find(part) {
+                                let match_start = current_idx + pos;
+                                let match_end = match_start + part.len();
+
+                                if match_start > current_idx {
+                                    highlighted_spans.push(Span::styled(
+                                        filename[current_idx..match_start].to_string(),
+                                        base_style,
+                                    ));
+                                }
+
+                                highlighted_spans.push(Span::styled(
+                                    filename[match_start..match_end].to_string(),
+                                    base_style.bg(app.theme.filter_match_bg),
+                                ));
+
+                                current_idx = match_end;
+                            }
+                        }
+                        if current_idx < filename.len() {
                             highlighted_spans.push(Span::styled(
-                                filename[current_idx..match_start].to_string(),
+                                filename[current_idx..].to_string(),
                                 base_style,
                             ));
                         }
-
-                        highlighted_spans.push(Span::styled(
-                            filename[match_start..match_end].to_string(),
-                            base_style.bg(app.theme.filter_match_bg),
-                        ));
-
-                        current_idx = match_end;
                     }
-                }
-                if current_idx < filename.len() {
-                    highlighted_spans.push(Span::styled(
-                        filename[current_idx..].to_string(),
-                        base_style,
+
+                    let total_len: usize = highlighted_spans
+                        .iter()
+                        .map(|s| s.content.chars().count())
+                        .sum();
+                    if total_len > filename_width {
+                        let remove_count = total_len.saturating_sub(filename_width) + 1;
+                        let mut removed = 0;
+                        let mut new_spans = Vec::new();
+                        let mut prepended_ellipsis = false;
+
+                        for span in highlighted_spans {
+                            let chars_count = span.content.chars().count();
+                            if removed + chars_count <= remove_count {
+                                removed += chars_count;
+                                continue;
+                            }
+
+                            let mut s = span.content.clone();
+                            if removed < remove_count {
+                                let to_remove = remove_count - removed;
+                                s = s.chars().skip(to_remove).collect();
+                                removed += to_remove;
+                            }
+
+                            if !prepended_ellipsis {
+                                new_spans.push(Span::styled("…", base_style));
+                                prepended_ellipsis = true;
+                            }
+                            new_spans.push(Span::styled(s, span.style));
+                        }
+                        spans.extend(new_spans);
+                    } else {
+                        let padding = filename_width.saturating_sub(total_len);
+                        spans.extend(highlighted_spans);
+                        if padding > 0 {
+                            spans.push(Span::styled(" ".repeat(padding), base_style));
+                        }
+                    }
+
+                    let tags = media.tags_packed.replace('\x1f', " ");
+                    let tags_truncated = if tags.is_empty() {
+                        format!("{:<30}", "—")
+                    } else if tags.chars().count() > 30 {
+                        let mut t: String = tags.chars().take(29).collect();
+                        t.push('…');
+                        t
+                    } else {
+                        format!("{:<30}", tags)
+                    };
+
+                    spans.push(Span::styled(
+                        format!(" │ {}", tags_truncated),
+                        base_style.fg(app.theme.tag).add_modifier(Modifier::DIM),
                     ));
-                }
-            }
 
-            let total_len: usize = highlighted_spans
-                .iter()
-                .map(|s| s.content.chars().count())
-                .sum();
-            if total_len > filename_width {
-                let remove_count = total_len.saturating_sub(filename_width) + 1;
-                let mut removed = 0;
-                let mut new_spans = Vec::new();
-                let mut prepended_ellipsis = false;
-
-                for span in highlighted_spans {
-                    let chars_count = span.content.chars().count();
-                    if removed + chars_count <= remove_count {
-                        removed += chars_count;
-                        continue;
-                    }
-
-                    let mut s = span.content.clone();
-                    if removed < remove_count {
-                        let to_remove = remove_count - removed;
-                        s = s.chars().skip(to_remove).collect();
-                        removed += to_remove;
-                    }
-
-                    if !prepended_ellipsis {
-                        new_spans.push(Span::styled("…", base_style));
-                        prepended_ellipsis = true;
-                    }
-                    new_spans.push(Span::styled(s, span.style));
-                }
-                spans.extend(new_spans);
-            } else {
-                let padding = filename_width.saturating_sub(total_len);
-                spans.extend(highlighted_spans);
-                if padding > 0 {
-                    spans.push(Span::styled(" ".repeat(padding), base_style));
-                }
-            }
-
-            let tags = media.tags_packed.replace('\x1f', " ");
-            let tags_truncated = if tags.is_empty() {
-                format!("{:<30}", "—")
-            } else if tags.chars().count() > 30 {
-                let mut t: String = tags.chars().take(29).collect();
-                t.push('…');
-                t
-            } else {
-                format!("{:<30}", tags)
-            };
-
-            spans.push(Span::styled(
-                format!(" │ {}", tags_truncated),
-                base_style.fg(app.theme.tag).add_modifier(Modifier::DIM),
-            ));
-
-            items.push(ListItem::new(Line::from(spans)).style(base_style));
+                    items.push(ListItem::new(Line::from(spans)).style(base_style));
                 }
             }
         }
@@ -255,22 +269,34 @@ pub(crate) fn extract_folder_year(stem: Option<&String>) -> &str {
     }
 }
 
-pub(crate) fn generate_summary_text(key: &str, num_images: usize, num_videos: usize, total_items: usize, filename_width: usize) -> String {
+pub(crate) fn generate_summary_text(
+    key: &str,
+    num_images: usize,
+    num_videos: usize,
+    total_items: usize,
+    filename_width: usize,
+) -> String {
     let counts_str = if num_images > 0 || num_videos > 0 {
         let mut counts = Vec::new();
-        if num_images == 1 { counts.push("1 image".to_string()); }
-        else if num_images > 1 { counts.push(format!("{} images", num_images)); }
-        
-        if num_videos == 1 { counts.push("1 video".to_string()); }
-        else if num_videos > 1 { counts.push(format!("{} videos", num_videos)); }
-        
+        if num_images == 1 {
+            counts.push("1 image".to_string());
+        } else if num_images > 1 {
+            counts.push(format!("{} images", num_images));
+        }
+
+        if num_videos == 1 {
+            counts.push("1 video".to_string());
+        } else if num_videos > 1 {
+            counts.push(format!("{} videos", num_videos));
+        }
+
         counts.join(", ")
     } else if total_items == 1 {
         "1 item".to_string()
     } else {
         format!("{} items", total_items)
     };
-    
+
     let key_string = key.to_string();
     let folder = extract_folder_year(Some(&key_string));
     let prefix = format!("{}  / ", folder);

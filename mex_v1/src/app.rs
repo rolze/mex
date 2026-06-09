@@ -19,7 +19,6 @@ pub enum View {
     Trash,
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ZoomLevel {
     Flat = 0,
@@ -55,14 +54,17 @@ pub struct App {
     pub view: View,
     pub filter: Filter,
     pub command_input: String,
-    #[allow(dead_code)] pub filter_input: String,
+    #[allow(dead_code)]
+    pub filter_input: String,
     pub status_message: Option<String>,
     pub show_preview: bool,
     pub shift_anchor: Option<usize>,
     pub tag_input: Option<String>,
     pub type_input: Option<String>,
-    #[allow(dead_code)] pub tags_cache: Vec<String>,
-    #[allow(dead_code)] pub types_cache: Vec<String>,
+    pub tags_cache: Vec<String>,
+    pub types_cache: Vec<String>,
+    pub active_completions: Vec<String>,
+    pub completion_idx: usize,
     pub list_offset: usize,
     pub list_height: usize,
     pub mpv: crate::services::mpv::MpvContext,
@@ -100,6 +102,8 @@ impl App {
             type_input: None,
             tags_cache: Vec::new(),
             types_cache: Vec::new(),
+            active_completions: Vec::new(),
+            completion_idx: 0,
             list_offset: 0,
             list_height: 10,
             mpv: crate::services::mpv::MpvContext::new(),
@@ -108,10 +112,70 @@ impl App {
             theme_index: 0,
             theme: crate::ui::theme::Theme::ALL[0],
         };
+        app.update_caches();
         app.build_visible_rows();
         Ok(app)
     }
 
+    pub fn update_caches(&mut self) {
+        if let Ok(tags) = crate::db::tags::load_all_tags(&self.db_conn) {
+            let mut all_tags = Vec::new();
+            let mut all_types = std::collections::HashSet::new();
+            for tag in tags {
+                all_tags.push(tag.name);
+                if !tag.type_.is_empty() {
+                    all_types.insert(tag.type_);
+                }
+            }
+            self.tags_cache = all_tags; // already sorted by DB
+            let mut types_vec: Vec<String> = all_types.into_iter().collect();
+            types_vec.sort();
+            self.types_cache = types_vec;
+        }
+    }
+
+    pub fn update_completions(&mut self) {
+        self.active_completions = if let Some(tag) = &self.tag_input {
+            if tag.is_empty() {
+                Vec::new()
+            } else {
+                let prefix = tag.to_lowercase();
+                self.tags_cache
+                    .iter()
+                    .filter(|t| t.to_lowercase().starts_with(&prefix))
+                    .cloned()
+                    .collect()
+            }
+        } else if let Some(typ) = &self.type_input {
+            if typ.is_empty() {
+                Vec::new()
+            } else {
+                let prefix = typ.to_lowercase();
+                self.types_cache
+                    .iter()
+                    .filter(|t| t.to_lowercase().starts_with(&prefix))
+                    .cloned()
+                    .collect()
+            }
+        } else {
+            Vec::new()
+        };
+    }
+
+    pub fn get_current_completions(&self) -> &[String] {
+        &self.active_completions
+    }
+
+    pub fn get_current_completion(&self) -> Option<String> {
+        if self.active_completions.is_empty() {
+            None
+        } else {
+            Some(
+                self.active_completions[self.completion_idx % self.active_completions.len()]
+                    .clone(),
+            )
+        }
+    }
 
     pub fn is_collapsed(&self, level: ZoomLevel, key: &str) -> bool {
         let default_collapsed = (level as u8) <= (self.global_zoom as u8);
@@ -133,7 +197,9 @@ impl App {
                 if self.is_collapsed(ZoomLevel::Year, year) {
                     let start_i = i;
                     let mut j = i + 1;
-                    while j < self.filtered_items.len() && self.items[self.filtered_items[j]].year_str() == Some(year) {
+                    while j < self.filtered_items.len()
+                        && self.items[self.filtered_items[j]].year_str() == Some(year)
+                    {
                         j += 1;
                     }
                     self.visible_rows.push(ListRow::GroupSummary {
@@ -151,7 +217,9 @@ impl App {
                 if self.is_collapsed(ZoomLevel::Month, month) {
                     let start_i = i;
                     let mut j = i + 1;
-                    while j < self.filtered_items.len() && self.items[self.filtered_items[j]].month_str() == Some(month) {
+                    while j < self.filtered_items.len()
+                        && self.items[self.filtered_items[j]].month_str() == Some(month)
+                    {
                         j += 1;
                     }
                     self.visible_rows.push(ListRow::GroupSummary {
@@ -169,7 +237,9 @@ impl App {
                 if self.is_collapsed(ZoomLevel::Slug, slug) {
                     let start_i = i;
                     let mut j = i + 1;
-                    while j < self.filtered_items.len() && self.items[self.filtered_items[j]].slug_str() == Some(slug) {
+                    while j < self.filtered_items.len()
+                        && self.items[self.filtered_items[j]].slug_str() == Some(slug)
+                    {
                         j += 1;
                     }
                     self.visible_rows.push(ListRow::GroupSummary {
@@ -458,25 +528,37 @@ impl App {
         match key.code {
             KeyCode::Esc => {
                 self.mode = Mode::Normal;
-                // keep filter
+                self.filter.clear();
+                self.tag_input = None;
+                self.type_input = None;
+                self.completion_idx = 0;
+                self.apply_filter();
             }
-            KeyCode::Char('#') if self.tag_input.is_none() && self.type_input.is_none() => {
+            KeyCode::Char('#') if self.type_input.is_some() || self.tag_input.is_none() => {
                 self.tag_input = Some(String::new());
                 self.type_input = None;
+                self.completion_idx = 0;
+                self.update_completions();
             }
-            KeyCode::Char('@') if self.type_input.is_none() && self.tag_input.is_none() => {
+            KeyCode::Char('@') if self.tag_input.is_some() || self.type_input.is_none() => {
                 self.type_input = Some(String::new());
                 self.tag_input = None;
+                self.completion_idx = 0;
+                self.update_completions();
             }
             KeyCode::Char(c) => {
                 if let Some(t) = &mut self.tag_input {
                     t.push(c);
+                    self.completion_idx = 0;
+                    self.update_completions();
                 } else if let Some(t) = &mut self.type_input {
                     t.push(c);
+                    self.completion_idx = 0;
+                    self.update_completions();
                 } else {
                     self.filter.text.push(c);
+                    self.apply_filter();
                 }
-                self.apply_filter();
             }
             KeyCode::Backspace => {
                 if let Some(t) = &mut self.tag_input {
@@ -484,31 +566,70 @@ impl App {
                         self.tag_input = None;
                     } else {
                         t.pop();
+                        self.completion_idx = 0;
                     }
+                    self.update_completions();
                 } else if let Some(t) = &mut self.type_input {
                     if t.is_empty() {
                         self.type_input = None;
                     } else {
                         t.pop();
+                        self.completion_idx = 0;
                     }
+                    self.update_completions();
                 } else if !self.filter.text.is_empty() {
                     self.filter.text.pop();
+                    self.apply_filter();
                 } else if !self.filter.tags.is_empty() {
                     self.filter.tags.pop();
+                    self.apply_filter();
                 } else if !self.filter.types.is_empty() {
                     self.filter.types.pop();
+                    self.apply_filter();
                 }
-                self.apply_filter();
+            }
+            KeyCode::Up => {
+                if self.completion_idx > 0 {
+                    self.completion_idx -= 1;
+                } else {
+                    let comps = self.get_current_completions();
+                    if !comps.is_empty() {
+                        self.completion_idx = comps.len() - 1;
+                    }
+                }
+            }
+            KeyCode::Down => {
+                let comps = self.get_current_completions();
+                if !comps.is_empty() {
+                    self.completion_idx = (self.completion_idx + 1) % comps.len();
+                }
+            }
+            KeyCode::Tab => {
+                if let Some(comp) = self.get_current_completion() {
+                    if self.tag_input.is_some() {
+                        self.tag_input = Some(comp);
+                        self.update_completions();
+                    } else if self.type_input.is_some() {
+                        self.type_input = Some(comp);
+                        self.update_completions();
+                    }
+                    self.completion_idx = 0;
+                }
             }
             KeyCode::Enter => {
                 if let Some(t) = self.tag_input.take() {
-                    if !t.is_empty() && !self.filter.tags.contains(&t) {
+                    if !t.is_empty() && !self.filter.tags.iter().any(|x| x.eq_ignore_ascii_case(&t))
+                    {
                         self.filter.tags.push(t);
                     }
                 } else if let Some(t) = self.type_input.take() {
-                    if !t.is_empty() && !self.filter.types.contains(&t) {
+                    if !t.is_empty()
+                        && !self.filter.types.iter().any(|x| x.eq_ignore_ascii_case(&t))
+                    {
                         self.filter.types.push(t);
                     }
+                } else {
+                    self.mode = Mode::Normal;
                 }
                 self.apply_filter();
             }
@@ -570,9 +691,9 @@ impl App {
             .enumerate()
             .filter_map(|(i, item)| {
                 // Check text matches
-                let fname = item.file_name().unwrap_or_default().to_lowercase();
                 let mut matches_text = true;
                 if !text.is_empty() {
+                    let fname = item.file_name().unwrap_or_default().to_lowercase();
                     let mut current_idx = 0;
                     for part in &parts {
                         if part.is_empty() {
@@ -591,20 +712,16 @@ impl App {
                 let matches_tags = active_tags.is_empty()
                     || active_tags.iter().any(|t| {
                         item.tags_packed
-                            .to_lowercase()
-                            .contains(&format!("{}\x1f", t))
-                            || item.tags_packed.to_lowercase().ends_with(t)
-                            || item.tags_packed.to_lowercase() == *t
+                            .split('\x1f')
+                            .any(|tag| tag.eq_ignore_ascii_case(t))
                     });
 
                 // Check type match
                 let matches_types = active_types.is_empty()
                     || active_types.iter().any(|t| {
                         item.tag_types_packed
-                            .to_lowercase()
-                            .contains(&format!("{}\x1f", t))
-                            || item.tag_types_packed.to_lowercase().ends_with(t)
-                            || item.tag_types_packed.to_lowercase() == *t
+                            .split('\x1f')
+                            .any(|typ| typ.eq_ignore_ascii_case(t))
                     });
 
                 // Check view match
@@ -666,8 +783,7 @@ impl App {
         let current_key = self.get_group_key(self.cursor_pos);
 
         let mut next_start = self.cursor_pos;
-        while next_start < self.visible_rows.len()
-            && self.get_group_key(next_start) == current_key
+        while next_start < self.visible_rows.len() && self.get_group_key(next_start) == current_key
         {
             next_start += 1;
         }
@@ -930,49 +1046,58 @@ impl App {
             }
         }
     }
-    
+
     pub fn zoom_out(&mut self) {
-        if self.filtered_items.is_empty() || self.visible_rows.is_empty() { return; }
-        
+        if self.filtered_items.is_empty() || self.visible_rows.is_empty() {
+            return;
+        }
+
         let row = self.visible_rows.get(self.cursor_pos).cloned().unwrap();
-        
+
         let mut target_level = ZoomLevel::Flat;
         let mut target_key = String::new();
         self.status_message = None;
-        
+
         match row {
             ListRow::Item(idx) => {
                 let item = &self.items[idx];
                 if let Some(slug) = item.slug_str() {
                     target_level = ZoomLevel::Slug;
                     target_key = slug.to_string();
-                    if self.global_zoom >= ZoomLevel::Slug && self.expanded_overrides.contains(slug) {
+                    if self.global_zoom >= ZoomLevel::Slug && self.expanded_overrides.contains(slug)
+                    {
                         self.expanded_overrides.remove(slug);
                         self.collapsed_overrides.insert(slug.to_string());
                     } else if self.global_zoom < ZoomLevel::Slug {
                         self.global_zoom = ZoomLevel::Slug;
                         self.expanded_overrides.clear();
                         self.collapsed_overrides.clear();
-                        self.status_message = Some("Grouped by Slug. Left to group by Month.".to_string());
+                        self.status_message =
+                            Some("Grouped by Slug. Left to group by Month.".to_string());
                     } else {
                         self.collapsed_overrides.insert(slug.to_string());
                     }
                 }
             }
-            ListRow::GroupSummary { level, start_idx, .. } => {
+            ListRow::GroupSummary {
+                level, start_idx, ..
+            } => {
                 let item = &self.items[self.filtered_items[start_idx]];
                 if level == ZoomLevel::Slug {
                     if let Some(month) = item.month_str() {
                         target_level = ZoomLevel::Month;
                         target_key = month.to_string();
-                        if self.global_zoom >= ZoomLevel::Month && self.expanded_overrides.contains(month) {
+                        if self.global_zoom >= ZoomLevel::Month
+                            && self.expanded_overrides.contains(month)
+                        {
                             self.expanded_overrides.remove(month);
                             self.collapsed_overrides.insert(month.to_string());
                         } else if self.global_zoom < ZoomLevel::Month {
                             self.global_zoom = ZoomLevel::Month;
                             self.expanded_overrides.clear();
                             self.collapsed_overrides.clear();
-                            self.status_message = Some("Grouped by Month. Left to group by Year.".to_string());
+                            self.status_message =
+                                Some("Grouped by Month. Left to group by Year.".to_string());
                         } else {
                             self.collapsed_overrides.insert(month.to_string());
                         }
@@ -981,14 +1106,17 @@ impl App {
                     if let Some(year) = item.year_str() {
                         target_level = ZoomLevel::Year;
                         target_key = year.to_string();
-                        if self.global_zoom >= ZoomLevel::Year && self.expanded_overrides.contains(year) {
+                        if self.global_zoom >= ZoomLevel::Year
+                            && self.expanded_overrides.contains(year)
+                        {
                             self.expanded_overrides.remove(year);
                             self.collapsed_overrides.insert(year.to_string());
                         } else if self.global_zoom < ZoomLevel::Year {
                             self.global_zoom = ZoomLevel::Year;
                             self.expanded_overrides.clear();
                             self.collapsed_overrides.clear();
-                            self.status_message = Some("Grouped by Year. Maximum zoom out.".to_string());
+                            self.status_message =
+                                Some("Grouped by Year. Maximum zoom out.".to_string());
                         } else {
                             self.collapsed_overrides.insert(year.to_string());
                         }
@@ -1005,7 +1133,7 @@ impl App {
                 }
             }
         }
-        
+
         if self.status_message.is_none() && !target_key.is_empty() {
             let msg = match target_level {
                 ZoomLevel::Year => format!("Collapsed year: {}", target_key),
@@ -1017,10 +1145,12 @@ impl App {
         }
 
         self.build_visible_rows();
-        
+
         if !target_key.is_empty() {
             if let Some(pos) = self.visible_rows.iter().position(|r| match r {
-                ListRow::GroupSummary { level, key, .. } => *level == target_level && key == &target_key,
+                ListRow::GroupSummary { level, key, .. } => {
+                    *level == target_level && key == &target_key
+                }
                 _ => false,
             }) {
                 self.cursor_pos = pos;
@@ -1029,11 +1159,18 @@ impl App {
     }
 
     pub fn zoom_in(&mut self) {
-        if self.filtered_items.is_empty() || self.visible_rows.is_empty() { return; }
-        
+        if self.filtered_items.is_empty() || self.visible_rows.is_empty() {
+            return;
+        }
+
         let row = self.visible_rows.get(self.cursor_pos).cloned().unwrap();
         let target_idx = match row {
-            ListRow::GroupSummary { level, key, start_idx, .. } => {
+            ListRow::GroupSummary {
+                level,
+                key,
+                start_idx,
+                ..
+            } => {
                 // It's a collapsed group. Expand it.
                 self.expanded_overrides.insert(key.clone());
                 self.collapsed_overrides.remove(&key);
@@ -1122,7 +1259,9 @@ impl App {
         if let Some(target_idx) = target_idx {
             if let Some(pos) = self.visible_rows.iter().position(|r| match r {
                 ListRow::Item(i) => *i == target_idx,
-                ListRow::GroupSummary { start_idx, .. } => self.filtered_items[*start_idx] == target_idx,
+                ListRow::GroupSummary { start_idx, .. } => {
+                    self.filtered_items[*start_idx] == target_idx
+                }
             }) {
                 self.cursor_pos = pos;
             }

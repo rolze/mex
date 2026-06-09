@@ -190,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_keeps_filter_esc_again_clears() {
+    fn esc_clears_filter_and_returns_to_normal() {
         let mut app = test_app(&seed_items());
         // Enter filter, type text
         app.handle_key(key(KeyCode::Char('/')));
@@ -199,14 +199,10 @@ mod tests {
         let filtered_count = app.filtered_items.len();
         assert!(filtered_count < 6);
 
-        // First Esc: leave filter mode, keep filter
         app.handle_key(key(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal));
-        assert_eq!(app.filtered_items.len(), filtered_count);
-
-        // Second Esc: clear filter (via the Esc cascade in normal mode)
-        app.handle_key(key(KeyCode::Esc));
         assert_eq!(app.filtered_items.len(), 6);
+        assert!(app.filter.is_empty());
     }
 
     #[test]
@@ -450,7 +446,7 @@ mod tests {
         // Set up: filter active, preview open, items selected
         app.handle_key(key(KeyCode::Char('/')));
         app.handle_key(key(KeyCode::Char('s')));
-        app.handle_key(key(KeyCode::Esc)); // leave filter mode
+        app.handle_key(key(KeyCode::Enter)); // leave filter mode without clearing
         app.handle_key(key(KeyCode::Enter)); // open preview
         app.handle_key(key(KeyCode::Char(' '))); // select item
 
@@ -479,7 +475,7 @@ mod tests {
     fn semantic_zoom_out_and_in() {
         let mut app = test_app(&seed_items());
         assert_eq!(app.global_zoom, crate::app::ZoomLevel::Flat);
-        
+
         // Find an item with a group_key
         let mut target_idx = 0;
         for (i, row) in app.visible_rows.iter().enumerate() {
@@ -490,30 +486,338 @@ mod tests {
                 }
             }
         }
-        
+
         app.cursor_pos = target_idx;
-        
+
         // Collapse (Zoom out to Slug globally)
         app.handle_key(key(KeyCode::Left));
         assert_eq!(app.global_zoom, crate::app::ZoomLevel::Slug);
-        assert!(app.status_message.as_ref().unwrap().contains("Grouped by Slug"));
+        assert!(app
+            .status_message
+            .as_ref()
+            .unwrap()
+            .contains("Grouped by Slug"));
         let slug_rows = app.visible_rows.len();
-        
+
         // Zoom out to Month globally
         app.handle_key(key(KeyCode::Left));
         assert_eq!(app.global_zoom, crate::app::ZoomLevel::Month);
-        assert!(app.status_message.as_ref().unwrap().contains("Grouped by Month"));
+        assert!(app
+            .status_message
+            .as_ref()
+            .unwrap()
+            .contains("Grouped by Month"));
         let month_rows = app.visible_rows.len();
         assert!(month_rows <= slug_rows);
-        
+
         // Zoom in (Right) on Month
         app.handle_key(key(KeyCode::Right));
         // It expands contextually, meaning expanded_overrides now contains the month
         assert!(!app.expanded_overrides.is_empty());
-        assert!(app.status_message.as_ref().unwrap().contains("Expanded month"));
+        assert!(app
+            .status_message
+            .as_ref()
+            .unwrap()
+            .contains("Expanded month"));
 
         // Zoom out (Left) to contextually collapse the expanded month
         app.handle_key(key(KeyCode::Left));
-        assert!(app.status_message.as_ref().unwrap().contains("Collapsed month:"));
+        assert!(app
+            .status_message
+            .as_ref()
+            .unwrap()
+            .contains("Collapsed month:"));
+    }
+
+    fn test_app_full(items: &[(&str, &str, &str, &str, &str)]) -> App {
+        let config = Config {
+            target_root: None,
+            views_root: None,
+            db_path: None,
+            image_protocol: "halfblocks".to_string(),
+        };
+        let conn = db::init_db(":memory:").expect("in-memory db");
+        for (id, path_stem, ext, tags, types) in items {
+            conn.execute(
+                "INSERT INTO media (id, source_path, path_stem, partial_hash, file_size, ext, mex_date, status, tags_packed, tag_types_packed)
+                 VALUES (?1, ?2, ?3, 'hash', 1000, ?4, '2024-01-01', 'imported', ?5, ?6)",
+                rusqlite::params![id, format!("/src/{}{}", path_stem, ext), path_stem, ext, tags, types],
+            ).unwrap();
+            for (tag, typ) in tags
+                .split('\x1f')
+                .zip(types.split('\x1f').chain(std::iter::repeat("")))
+            {
+                if !tag.is_empty() {
+                    conn.execute(
+                        "INSERT OR IGNORE INTO tags (name, type) VALUES (?1, ?2)",
+                        rusqlite::params![tag, typ],
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        App::new(config, conn).expect("app init")
+    }
+
+    fn seed_items_full() -> Vec<(
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+    )> {
+        vec![
+            (
+                "1",
+                "london_bridge",
+                ".jpg",
+                "travel\x1falice",
+                "event\x1fperson",
+            ),
+            (
+                "2",
+                "paris_tower",
+                ".jpg",
+                "travel\x1fbob",
+                "event\x1fperson",
+            ),
+            ("3", "home_cat", ".jpg", "pet", "animal"),
+            (
+                "4",
+                "studio_shoot",
+                ".jpg",
+                "alice\x1fcamera",
+                "person\x1fgear",
+            ),
+        ]
+    }
+
+    #[test]
+    fn ac1_tag_matching_narrows_list() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('#')));
+        for c in "travel".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.filtered_items.len(), 2);
+    }
+
+    #[test]
+    fn ac2_multiple_tags_are_or_logic() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('#')));
+        for c in "travel".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('#')));
+        for c in "pet".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.filtered_items.len(), 3);
+    }
+
+    #[test]
+    fn ac3_tag_matching_is_case_insensitive() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('#')));
+        for c in "TRAVEL".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.filtered_items.len(), 2);
+    }
+
+    #[test]
+    fn ac10_duplicate_tags_not_added() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('#')));
+        for c in "travel".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('#')));
+        for c in "TRAVEL".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.filter.tags.len(), 1);
+    }
+
+    #[test]
+    fn ac11_type_matching_narrows_list() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('@')));
+        for c in "person".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.filtered_items.len(), 3);
+    }
+
+    #[test]
+    fn ac12_multiple_types_are_or_logic() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('@')));
+        for c in "animal".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('@')));
+        for c in "gear".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.filtered_items.len(), 2);
+    }
+
+    #[test]
+    fn ac13_type_matching_is_case_insensitive() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('@')));
+        for c in "PERSON".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.filtered_items.len(), 3);
+    }
+
+    #[test]
+    fn ac4_text_search_filenames_only() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        for c in "alice".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        // "alice" is a tag in item 1 and 4, but not in filename. So 0 results.
+        assert_eq!(app.filtered_items.len(), 0);
+    }
+
+    #[test]
+    fn ac5_text_and_tag_combined_is_and_logic() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        for c in "london".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Char('#')));
+        for c in "alice".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.filtered_items.len(), 1);
+    }
+
+    #[test]
+    fn ac14_type_and_tag_combined_is_and_logic() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('@')));
+        for c in "person".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('#')));
+        for c in "travel".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.filtered_items.len(), 2);
+    }
+
+    #[test]
+    fn ac6_ac7_ac15_autocompletion_and_tab() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+
+        // Tag autocompletion
+        app.handle_key(key(KeyCode::Char('#')));
+        app.handle_key(key(KeyCode::Char('t')));
+        app.handle_key(key(KeyCode::Char('r')));
+        // should suggest travel
+        assert_eq!(app.get_current_completion(), Some("travel".to_string()));
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.tag_input, Some("travel".to_string()));
+        app.handle_key(key(KeyCode::Enter));
+
+        // Type autocompletion
+        app.handle_key(key(KeyCode::Char('@')));
+        app.handle_key(key(KeyCode::Char('p')));
+        app.handle_key(key(KeyCode::Char('e')));
+        // should suggest person
+        assert_eq!(app.get_current_completion(), Some("person".to_string()));
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.type_input, Some("person".to_string()));
+    }
+
+    #[test]
+    fn ac8_ac9_backspace_behavior() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('#')));
+        for c in "pet".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+
+        // now in mode without input, enter #
+        app.handle_key(key(KeyCode::Char('#')));
+        assert_eq!(app.tag_input, Some("".to_string()));
+        // AC-8 backspace exits mode but keeps confirmed tags
+        app.handle_key(key(KeyCode::Backspace));
+        assert_eq!(app.tag_input, None);
+        assert_eq!(app.filter.tags.len(), 1);
+
+        // AC-9 backspace when no mode active removes right-most filter component
+        app.handle_key(key(KeyCode::Backspace));
+        assert_eq!(app.filter.tags.len(), 0);
+    }
+
+    #[test]
+    fn ac16_mode_switching() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('#')));
+        app.handle_key(key(KeyCode::Char('a')));
+        // Switch to @ mode
+        app.handle_key(key(KeyCode::Char('@')));
+        assert_eq!(app.tag_input, None);
+        assert_eq!(app.type_input, Some("".to_string()));
+    }
+
+    #[test]
+    fn ac17_esc_clears_all_filter_state() {
+        let mut app = test_app_full(&seed_items_full());
+        app.handle_key(key(KeyCode::Char('/')));
+        for c in "text".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Char('#')));
+        for c in "tag".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('@')));
+        for c in "type".chars() {
+            app.handle_key(key(KeyCode::Char(c)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+
+        app.handle_key(key(KeyCode::Char('#'))); // Enter tag typing mode
+
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.filter.is_empty());
+        assert_eq!(app.tag_input, None);
+        assert_eq!(app.type_input, None);
+        assert_eq!(app.filtered_items.len(), 4);
     }
 }
